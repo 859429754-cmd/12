@@ -142,6 +142,9 @@ class BacktestRequest(BaseModel):
     initial_equity: float = Field(default=200.0, gt=0)
     fee_rate: float = Field(default=0.0006, ge=0, le=0.01)
     slippage_bps: float = Field(default=2.0, ge=0, le=100)
+    funding_rate_per_8h: float = Field(default=0.0, ge=0, le=0.01)
+    min_order_qty: float = Field(default=0.0, ge=0)
+    max_volume_participation: float = Field(default=1.0, gt=0, le=1.0)
     leverage: float = Field(default=4.0, gt=0, le=4.0)
     ai_proxy: bool = False
 
@@ -970,6 +973,9 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
             fee_rate=body.fee_rate,
             slippage_bps=body.slippage_bps,
             leverage=body.leverage,
+            funding_rate_per_8h=body.funding_rate_per_8h,
+            min_order_qty=body.min_order_qty,
+            max_volume_participation=body.max_volume_participation,
         )
         result["market_data_source"] = candles.attrs.get("data_source", "unknown")
         result["market_data_warning"] = candles.attrs.get("data_warning", "")
@@ -1620,6 +1626,9 @@ async def _run_trend_backtest_job(app: FastAPI, job_id: str, body: BacktestReque
             fee_rate=body.fee_rate,
             slippage_bps=body.slippage_bps,
             leverage=body.leverage,
+            funding_rate_per_8h=body.funding_rate_per_8h,
+            min_order_qty=body.min_order_qty,
+            max_volume_participation=body.max_volume_participation,
         )
         result["market_data_source"] = candles.attrs.get("data_source", "unknown")
         result["market_data_warning"] = candles.attrs.get("data_warning", "")

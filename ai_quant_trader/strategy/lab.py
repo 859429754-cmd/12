@@ -66,6 +66,11 @@ class BacktestTrade:
     max_adverse_excursion: float = 0.0
     max_adverse_excursion_pct: float = 0.0
     intrabar_path: str = ""
+    requested_qty: float | None = None
+    filled_qty: float | None = None
+    fill_ratio: float = 1.0
+    funding_paid: float = 0.0
+    holding_bars: int = 0
 
 
 @dataclass(frozen=True)
@@ -75,12 +80,26 @@ class BacktestCostModel:
     volatility_slippage_factor: float = 0.08
     low_liquidity_slippage_bps: float = 4.0
     max_dynamic_slippage_bps: float = 35.0
+    funding_rate_per_8h: float = 0.0
+    min_order_qty: float = 0.0
+    max_volume_participation: float = 1.0
 
     @classmethod
-    def from_inputs(cls, fee_rate: float, slippage_bps: float) -> "BacktestCostModel":
+    def from_inputs(
+        cls,
+        fee_rate: float,
+        slippage_bps: float,
+        *,
+        funding_rate_per_8h: float = 0.0,
+        min_order_qty: float = 0.0,
+        max_volume_participation: float = 1.0,
+    ) -> "BacktestCostModel":
         return cls(
             taker_fee_rate=max(float(fee_rate), 0.0),
             base_slippage_bps=max(float(slippage_bps), 0.0),
+            funding_rate_per_8h=max(float(funding_rate_per_8h), 0.0),
+            min_order_qty=max(float(min_order_qty), 0.0),
+            max_volume_participation=min(max(float(max_volume_participation), 0.0), 1.0),
         )
 
     def slippage(self, price: float, row: pd.Series) -> tuple[float, float]:
@@ -96,6 +115,38 @@ class BacktestCostModel:
             dynamic_bps += self.low_liquidity_slippage_bps
         total_bps = min(self.base_slippage_bps + dynamic_bps, self.max_dynamic_slippage_bps)
         return price * total_bps / 10_000, total_bps
+
+    def fill_qty(self, requested_qty: float, row: pd.Series) -> tuple[float, float, str | None]:
+        requested = max(float(requested_qty), 0.0)
+        if requested <= 0:
+            return 0.0, 0.0, "zero_requested_qty"
+        volume = max(float(row.get("volume") or 0.0), 0.0)
+        volume_cap = requested if self.max_volume_participation >= 1.0 or volume <= 0 else volume * self.max_volume_participation
+        filled = min(requested, volume_cap)
+        if self.min_order_qty > 0 and filled < self.min_order_qty:
+            return 0.0, filled / requested, "below_min_order_qty"
+        return filled, filled / requested, None
+
+    def funding_cost(self, entry_price: float, qty: float, holding_bars: int, timeframe: str) -> float:
+        if self.funding_rate_per_8h <= 0 or qty <= 0 or holding_bars <= 0:
+            return 0.0
+        hours = holding_bars * timeframe_hours(timeframe)
+        intervals = hours / 8.0
+        return abs(entry_price * qty) * self.funding_rate_per_8h * intervals
+
+
+def timeframe_hours(timeframe: str) -> float:
+    value = str(timeframe or "").strip().lower()
+    try:
+        if value.endswith("m"):
+            return max(float(value[:-1]) / 60.0, 1 / 60)
+        if value.endswith("h"):
+            return max(float(value[:-1]), 1 / 60)
+        if value.endswith("d"):
+            return max(float(value[:-1]) * 24.0, 1 / 60)
+    except ValueError:
+        return 1.0
+    return 1.0
 
 
 @dataclass(frozen=True)
@@ -364,13 +415,22 @@ def backtest_trend_strategy(
     fee_rate: float = 0.0006,
     slippage_bps: float = 2.0,
     leverage: float = 4.0,
+    funding_rate_per_8h: float = 0.0,
+    min_order_qty: float = 0.0,
+    max_volume_participation: float = 1.0,
 ) -> dict[str, Any]:
     """趋势策略深度回测。
 
     固定趋势策略的指标可以一次性向量化计算，不能像自定义策略那样每根K线
     都复制全量窗口重算指标；否则 2022-2026 的 1h 回测会变成分钟级等待。
     """
-    cost_model = BacktestCostModel.from_inputs(fee_rate, slippage_bps)
+    cost_model = BacktestCostModel.from_inputs(
+        fee_rate,
+        slippage_bps,
+        funding_rate_per_8h=funding_rate_per_8h,
+        min_order_qty=min_order_qty,
+        max_volume_participation=max_volume_participation,
+    )
     strategy = TrendStrategy(config)
     df = strategy.add_indicators(candles)
     warmup = strategy.warmup_candles()
@@ -392,9 +452,13 @@ def backtest_trend_strategy(
     max_adverse_excursion_pct = 0.0
     entry_fee_paid = 0.0
     entry_slippage_paid = 0.0
+    requested_qty = 0.0
+    fill_ratio = 1.0
+    holding_bars = 0
     pending_action: SignalAction | None = None
     pending_stop_atr = 0.0
     trades: list[BacktestTrade] = []
+    skipped_orders: list[dict[str, Any]] = []
     equity_curve = [equity]
 
     for idx in range(max(1, warmup), len(df)):
@@ -412,12 +476,13 @@ def backtest_trend_strategy(
                 or side == "short" and pending_action in {SignalAction.EXIT_SHORT, SignalAction.LONG}
             )
             if side and should_close_existing:
+                funding_paid = cost_model.funding_cost(entry_price, qty, holding_bars, timeframe)
                 exit_price = open_price - open_slip if side == "long" else open_price + open_slip
                 gross = (exit_price - entry_price) * qty if side == "long" else (entry_price - exit_price) * qty
                 exit_fee_paid = abs(exit_price * qty) * cost_model.taker_fee_rate
                 fee = entry_fee_paid + exit_fee_paid
                 slippage_paid = entry_slippage_paid + open_slip * qty
-                pnl = gross - fee
+                pnl = gross - fee - funding_paid
                 equity += pnl
                 trades.append(
                     BacktestTrade(
@@ -436,6 +501,11 @@ def backtest_trend_strategy(
                         max_adverse_excursion=max_adverse_excursion,
                         max_adverse_excursion_pct=max_adverse_excursion_pct * 100,
                         intrabar_path="next_open",
+                        requested_qty=requested_qty,
+                        filled_qty=qty,
+                        fill_ratio=fill_ratio,
+                        funding_paid=funding_paid,
+                        holding_bars=holding_bars,
                     )
                 )
                 side = None
@@ -447,6 +517,9 @@ def backtest_trend_strategy(
                 max_adverse_excursion_pct = 0.0
                 entry_fee_paid = 0.0
                 entry_slippage_paid = 0.0
+                requested_qty = 0.0
+                fill_ratio = 1.0
+                holding_bars = 0
                 position = PositionSnapshot(symbol=symbol, qty=0.0, mark_price=close_price)
 
             if side is None and reversal_entry:
@@ -462,28 +535,55 @@ def backtest_trend_strategy(
                 else:
                     stop_loss_price = None
                 notional = equity * config.position_fraction * leverage
-                qty = notional / max(entry_price, 1e-9)
+                requested_qty = notional / max(entry_price, 1e-9)
+                qty, fill_ratio, skip_reason = cost_model.fill_qty(requested_qty, last)
+                if skip_reason:
+                    skipped_orders.append(
+                        {
+                            "timestamp": timestamp,
+                            "side": side,
+                            "reason": skip_reason,
+                            "requested_qty": requested_qty,
+                            "fillable_qty": qty,
+                            "min_order_qty": cost_model.min_order_qty,
+                            "max_volume_participation": cost_model.max_volume_participation,
+                        }
+                    )
+                    side = None
+                    entry_price = 0.0
+                    entry_time = ""
+                    qty = 0.0
+                    requested_qty = 0.0
+                    fill_ratio = 1.0
+                    stop_loss_price = None
+                    pending_action = None
+                    pending_stop_atr = 0.0
+                    continue
+                notional = qty * entry_price
                 position.side = side
                 position.qty = qty if side == "long" else -qty
                 entry_fee_paid = notional * cost_model.taker_fee_rate
                 entry_slippage_paid = open_slip * qty
+                holding_bars = 0
             pending_action = None
             pending_stop_atr = 0.0
 
         intrabar_exit = pessimistic_intrabar_exit(side or "", last, stop_loss_price)
         if side:
+            holding_bars += 1
             adverse, adverse_pct = adverse_excursion(side, last, entry_price, qty)
             max_adverse_excursion = min(max_adverse_excursion, adverse)
             max_adverse_excursion_pct = min(max_adverse_excursion_pct, adverse_pct)
 
         if side and intrabar_exit is not None:
+            funding_paid = cost_model.funding_cost(entry_price, qty, holding_bars, timeframe)
             exit_slip, _exit_slip_bps = cost_model.slippage(intrabar_exit.price, last)
             exit_price = intrabar_exit.price - exit_slip if side == "long" else intrabar_exit.price + exit_slip
             gross = (exit_price - entry_price) * qty if side == "long" else (entry_price - exit_price) * qty
             exit_fee_paid = abs(exit_price * qty) * cost_model.taker_fee_rate
             fee = entry_fee_paid + exit_fee_paid
             slippage_paid = entry_slippage_paid + exit_slip * qty
-            pnl = gross - fee
+            pnl = gross - fee - funding_paid
             equity += pnl
             trades.append(
                 BacktestTrade(
@@ -502,6 +602,11 @@ def backtest_trend_strategy(
                     max_adverse_excursion=max_adverse_excursion,
                     max_adverse_excursion_pct=max_adverse_excursion_pct * 100,
                     intrabar_path="->".join(intrabar_path_labels(last)),
+                    requested_qty=requested_qty,
+                    filled_qty=qty,
+                    fill_ratio=fill_ratio,
+                    funding_paid=funding_paid,
+                    holding_bars=holding_bars,
                 )
             )
             side = None
@@ -513,6 +618,9 @@ def backtest_trend_strategy(
             max_adverse_excursion_pct = 0.0
             entry_fee_paid = 0.0
             entry_slippage_paid = 0.0
+            requested_qty = 0.0
+            fill_ratio = 1.0
+            holding_bars = 0
             position = PositionSnapshot(symbol=symbol, qty=0.0, mark_price=close_price)
 
         action = action_at(idx, position)
@@ -526,6 +634,7 @@ def backtest_trend_strategy(
         equity_curve.append(equity)
 
     if side:
+        funding_paid = cost_model.funding_cost(entry_price, qty, max(holding_bars, 1), timeframe)
         last = df.iloc[-1]
         price = float(last["close"])
         timestamp = str(last.get("timestamp", len(df) - 1))
@@ -535,7 +644,7 @@ def backtest_trend_strategy(
         exit_fee_paid = abs(exit_price * qty) * cost_model.taker_fee_rate
         fee = entry_fee_paid + exit_fee_paid
         slippage_paid = entry_slippage_paid + slip * qty
-        pnl = gross - fee
+        pnl = gross - fee - funding_paid
         equity += pnl
         trades.append(
             BacktestTrade(
@@ -554,6 +663,11 @@ def backtest_trend_strategy(
                 max_adverse_excursion=max_adverse_excursion,
                 max_adverse_excursion_pct=max_adverse_excursion_pct * 100,
                 intrabar_path="end",
+                requested_qty=requested_qty,
+                filled_qty=qty,
+                fill_ratio=fill_ratio,
+                funding_paid=funding_paid,
+                holding_bars=max(holding_bars, 1),
             )
         )
         equity_curve.append(equity)
@@ -568,6 +682,10 @@ def backtest_trend_strategy(
         fee_rate=cost_model.taker_fee_rate,
         slippage_bps=cost_model.base_slippage_bps,
         leverage=leverage,
+        funding_rate_per_8h=cost_model.funding_rate_per_8h,
+        min_order_qty=cost_model.min_order_qty,
+        max_volume_participation=cost_model.max_volume_participation,
+        skipped_orders=skipped_orders,
         note="趋势策略毒打回测：强制计入Gate级别taker手续费、基础滑点、波动滑点和低流动性滑点惩罚。",
     )
 
@@ -581,6 +699,9 @@ def backtest_trend_strategy_ai_proxy(
     fee_rate: float = 0.0006,
     slippage_bps: float = 2.0,
     leverage: float = 4.0,
+    funding_rate_per_8h: float = 0.0,
+    min_order_qty: float = 0.0,
+    max_volume_participation: float = 1.0,
 ) -> dict[str, Any]:
     """低成本 AI 代理回测。
 
@@ -588,7 +709,13 @@ def backtest_trend_strategy_ai_proxy(
     的过滤：弱突破阻断、极端波动降仓、放量强突破加权。用途是评估“AI 作为
     风控/仓位层”是否改善固定趋势策略，而不是替代真实 AI 实盘判断。
     """
-    cost_model = BacktestCostModel.from_inputs(fee_rate, slippage_bps)
+    cost_model = BacktestCostModel.from_inputs(
+        fee_rate,
+        slippage_bps,
+        funding_rate_per_8h=funding_rate_per_8h,
+        min_order_qty=min_order_qty,
+        max_volume_participation=max_volume_participation,
+    )
     baseline = backtest_trend_strategy(
         candles,
         symbol=symbol,
@@ -598,6 +725,9 @@ def backtest_trend_strategy_ai_proxy(
         fee_rate=cost_model.taker_fee_rate,
         slippage_bps=cost_model.base_slippage_bps,
         leverage=leverage,
+        funding_rate_per_8h=cost_model.funding_rate_per_8h,
+        min_order_qty=cost_model.min_order_qty,
+        max_volume_participation=cost_model.max_volume_participation,
     )
     strategy = TrendStrategy(config)
     df = strategy.add_indicators(candles)
@@ -1367,6 +1497,10 @@ def _summarize_backtest(
     slippage_bps: float,
     leverage: float,
     note: str,
+    funding_rate_per_8h: float = 0.0,
+    min_order_qty: float = 0.0,
+    max_volume_participation: float = 1.0,
+    skipped_orders: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     total_return = (equity - initial_equity) / max(initial_equity, 1e-9)
     wins = [trade for trade in trades if trade.pnl > 0]
@@ -1379,7 +1513,8 @@ def _summarize_backtest(
     profit_factor = sum(t.pnl for t in wins) / abs(sum(t.pnl for t in losses)) if losses else (999.0 if wins else 0.0)
     total_fee_paid = sum(t.fee_paid for t in trades)
     total_slippage_paid = sum(t.slippage_paid for t in trades)
-    total_cost_paid = total_fee_paid + total_slippage_paid
+    total_funding_paid = sum(t.funding_paid for t in trades)
+    total_cost_paid = total_fee_paid + total_slippage_paid + total_funding_paid
     return {
         "symbol": symbol,
         "timeframe": timeframe,
@@ -1400,11 +1535,16 @@ def _summarize_backtest(
             "mode": "taker_fee_dynamic_slippage",
             "taker_fee_rate": fee_rate,
             "base_slippage_bps": slippage_bps,
+            "funding_rate_per_8h": funding_rate_per_8h,
+            "min_order_qty": min_order_qty,
+            "max_volume_participation": max_volume_participation,
             "total_fee_paid": total_fee_paid,
             "total_slippage_paid": total_slippage_paid,
+            "total_funding_paid": total_funding_paid,
             "total_cost_paid": total_cost_paid,
             "cost_pct_of_initial_equity": total_cost_paid / max(initial_equity, 1e-9) * 100,
         },
+        "skipped_orders": skipped_orders or [],
         "trade_ledger": [trade.__dict__ for trade in trades],
         "trades": [trade.__dict__ for trade in trades],
         "equity_curve_tail": equity_curve[-300:],

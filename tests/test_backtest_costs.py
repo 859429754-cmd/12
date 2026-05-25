@@ -10,6 +10,7 @@ from ai_quant_trader.strategy.lab import (
     intrabar_path_labels,
     pessimistic_intrabar_exit,
 )
+from tests.test_strategy_trend import _candles_with_breakout
 
 
 def test_cost_model_allows_zero_cost_tv_alignment_mode() -> None:
@@ -65,6 +66,68 @@ def test_same_candle_short_take_profit_and_stop_chooses_stop() -> None:
     assert exit_event.price == 105.0
 
 
+def test_backtest_skips_entries_below_min_order_qty() -> None:
+    candles = _cost_breakout_candles("long")
+
+    result = backtest_trend_strategy(
+        candles,
+        symbol="ETH/USDT:USDT",
+        timeframe="1h",
+        config=TrendStrategyConfig(),
+        initial_equity=100.0,
+        leverage=1.0,
+        fee_rate=0.0,
+        slippage_bps=0.0,
+        min_order_qty=10.0,
+    )
+
+    assert result["trade_count"] == 0
+    assert result["skipped_orders"][0]["reason"] == "below_min_order_qty"
+
+
+def test_backtest_partial_fill_caps_qty_by_bar_volume() -> None:
+    candles = _cost_breakout_candles("long", next_volume=1.0)
+
+    result = backtest_trend_strategy(
+        candles,
+        symbol="ETH/USDT:USDT",
+        timeframe="1h",
+        config=TrendStrategyConfig(),
+        initial_equity=10_000.0,
+        leverage=4.0,
+        fee_rate=0.0,
+        slippage_bps=0.0,
+        max_volume_participation=0.25,
+    )
+
+    assert result["trade_count"] == 1
+    trade = result["trade_ledger"][0]
+    assert trade["requested_qty"] > trade["qty"]
+    assert trade["filled_qty"] == trade["qty"] == 0.25
+    assert 0 < trade["fill_ratio"] < 1
+
+
+def test_backtest_charges_pessimistic_funding_cost() -> None:
+    candles = _cost_breakout_candles("long")
+
+    result = backtest_trend_strategy(
+        candles,
+        symbol="ETH/USDT:USDT",
+        timeframe="1h",
+        config=TrendStrategyConfig(),
+        initial_equity=10_000.0,
+        leverage=1.0,
+        fee_rate=0.0,
+        slippage_bps=0.0,
+        funding_rate_per_8h=0.0008,
+    )
+
+    trade = result["trade_ledger"][0]
+    assert trade["funding_paid"] > 0
+    assert result["cost_model"]["total_funding_paid"] == trade["funding_paid"]
+    assert result["cost_model"]["total_cost_paid"] == trade["funding_paid"]
+
+
 def test_ai_overlay_guard_rejects_score_regression_even_when_return_improves() -> None:
     baseline = {
         "total_return_pct": -1.08,
@@ -78,3 +141,21 @@ def test_ai_overlay_guard_rejects_score_regression_even_when_return_improves() -
     }
 
     assert _is_negative_ai_overlay(result, baseline) is True
+
+
+def _cost_breakout_candles(direction: str, next_volume: float = 1000.0) -> pd.DataFrame:
+    candles = _candles_with_breakout(direction)
+    next_open = float(candles.iloc[-1]["close"])
+    next_row = pd.DataFrame(
+        [
+            {
+                "timestamp": len(candles),
+                "open": next_open,
+                "high": next_open * 1.01,
+                "low": next_open * 0.995,
+                "close": next_open * 1.002,
+                "volume": next_volume,
+            }
+        ]
+    )
+    return pd.concat([candles, next_row], ignore_index=True)

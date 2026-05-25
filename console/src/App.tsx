@@ -1444,6 +1444,9 @@ function BacktestPanel({
   const [feeRate, setFeeRate] = useState("0.0004");
   const [slippageBps, setSlippageBps] = useState("0");
   const [leverage, setLeverage] = useState("4");
+  const [fundingRate, setFundingRate] = useState("0");
+  const [minOrderQty, setMinOrderQty] = useState("0");
+  const [maxParticipation, setMaxParticipation] = useState("1");
   const [aiProxy, setAiProxy] = useState(false);
   const [job, setJob] = useState<BacktestJob | null>(null);
   const [result, setResult] = useState<BacktestResult | null>(null);
@@ -1471,6 +1474,9 @@ function BacktestPanel({
     setFeeRate(String(defaults.fee_rate ?? "0.0004"));
     setSlippageBps(String(defaults.slippage_bps ?? "0"));
     setLeverage(String(defaults.leverage ?? "4"));
+    setFundingRate(String(defaults.funding_rate_per_8h ?? "0"));
+    setMinOrderQty(String(defaults.min_order_qty ?? "0"));
+    setMaxParticipation(String(defaults.max_volume_participation ?? "1"));
   }, [profile?.symbol]);
 
   useEffect(() => {
@@ -1500,6 +1506,9 @@ function BacktestPanel({
     fee_rate: Number(feeRate) || 0,
     slippage_bps: Number(slippageBps) || 0,
     leverage: Number(leverage) || 1,
+    funding_rate_per_8h: Number(fundingRate) || 0,
+    min_order_qty: Number(minOrderQty) || 0,
+    max_volume_participation: Math.max(0.01, Math.min(1, Number(maxParticipation) || 1)),
   });
 
   const runBacktest = async () => {
@@ -1574,6 +1583,9 @@ function BacktestPanel({
     if (request.fee_rate !== undefined) setFeeRate(String(request.fee_rate));
     if (request.slippage_bps !== undefined) setSlippageBps(String(request.slippage_bps));
     if (request.leverage !== undefined) setLeverage(String(request.leverage));
+    if (request.funding_rate_per_8h !== undefined) setFundingRate(String(request.funding_rate_per_8h));
+    if (request.min_order_qty !== undefined) setMinOrderQty(String(request.min_order_qty));
+    if (request.max_volume_participation !== undefined) setMaxParticipation(String(request.max_volume_participation));
     setAiProxy(Boolean(request.ai_proxy));
     if (runType === "parameter_optimization") {
       setOptimization(payload.result as OptimizationResult);
@@ -1633,6 +1645,15 @@ function BacktestPanel({
             <BacktestField label="杠杆">
               <input className={`${input} ${mono} w-full`} value={leverage} onChange={(event) => setLeverage(event.target.value)} />
             </BacktestField>
+            <BacktestField label="资金费/8h">
+              <input className={`${input} ${mono} w-full`} value={fundingRate} onChange={(event) => setFundingRate(event.target.value)} />
+            </BacktestField>
+            <BacktestField label="最小数量">
+              <input className={`${input} ${mono} w-full`} value={minOrderQty} onChange={(event) => setMinOrderQty(event.target.value)} />
+            </BacktestField>
+            <BacktestField label="成交参与">
+              <input className={`${input} ${mono} w-full`} value={maxParticipation} onChange={(event) => setMaxParticipation(event.target.value)} />
+            </BacktestField>
             <BacktestField label="AI代理过滤">
               <label className="flex h-9 items-center gap-2 rounded-lg border border-[#d8e1ee] bg-white px-2 text-xs text-[#53627a]">
                 <input type="checkbox" checked={aiProxy} onChange={(event) => setAiProxy(event.target.checked)} />
@@ -1648,6 +1669,8 @@ function BacktestPanel({
             <BoundaryLine label="名义仓位" value={`${num(profile?.backtest_defaults?.notional_multiple, 2)}x`} />
             <BoundaryLine label="手续费" value={`${num(Number(feeRate) * 100, 4)}% / side`} />
             <BoundaryLine label="滑点" value={`${num(slippageBps, 2)} bps`} />
+            <BoundaryLine label="资金费" value={`${num(Number(fundingRate) * 100, 4)}% / 8h`} />
+            <BoundaryLine label="成交参与" value={`${num(Number(maxParticipation) * 100, 2)}% volume`} />
           </div>
           <div className="mt-3 grid grid-cols-2 gap-2">
             <button className={button} disabled={running} onClick={runBacktest}>{running ? "运行中" : "开始回测"}</button>
@@ -1692,6 +1715,8 @@ function BacktestMetrics({ result }: { result: BacktestResult }) {
         <Metric label="胜率" value={pct(result.win_rate_pct)} />
         <Metric label="盈利因子" value={num(result.profit_factor, 3)} tone={Number(result.profit_factor) >= 1 ? "good" : "bad"} />
         <Metric label="成本占比" value={pct(result.cost_model?.cost_pct_of_initial_equity)} />
+        <Metric label="资金费" value={num(result.cost_model?.total_funding_paid, 4)} />
+        <Metric label="跳过订单" value={num(result.skipped_orders?.length, 0)} />
       </div>
       {aiApplied ? (
         <div className="rounded-2xl border border-[#ffdca8] bg-[#fff8ed] p-3">
@@ -1721,7 +1746,7 @@ function TradeLedgerTable({ trades }: { trades: BacktestTrade[] }) {
         <span className="text-[11px] text-[#7b8798]">显示前 {Math.min(trades.length, 160)} / {trades.length} 笔</span>
       </div>
       <div className="max-h-72 overflow-auto">
-        <table className="w-full min-w-[980px] text-left text-[10px]">
+        <table className="w-full min-w-[1180px] text-left text-[10px]">
           <thead className="sticky top-0 bg-[#f8fbff] text-[#53627a]">
             <tr>
               <th className="px-2 py-2">开仓时间</th>
@@ -1736,6 +1761,8 @@ function TradeLedgerTable({ trades }: { trades: BacktestTrade[] }) {
               <th className="px-2 py-2">收益</th>
               <th className="px-2 py-2">费用</th>
               <th className="px-2 py-2">滑点</th>
+              <th className="px-2 py-2">资金费</th>
+              <th className="px-2 py-2">成交率</th>
               <th className="px-2 py-2">MAE</th>
             </tr>
           </thead>
@@ -1754,6 +1781,8 @@ function TradeLedgerTable({ trades }: { trades: BacktestTrade[] }) {
                 <td className={`${mono} px-2 py-2`}>{pct(trade.return_pct)}</td>
                 <td className={`${mono} px-2 py-2`}>{num(trade.fee_paid, 4)}</td>
                 <td className={`${mono} px-2 py-2`}>{num(trade.slippage_paid, 4)}</td>
+                <td className={`${mono} px-2 py-2`}>{num(trade.funding_paid, 4)}</td>
+                <td className={`${mono} px-2 py-2`}>{pct((trade.fill_ratio ?? 1) * 100)}</td>
                 <td className={`${mono} px-2 py-2 text-[#e11d48]`}>{pct(trade.max_adverse_excursion_pct)}</td>
               </tr>
             ))}
@@ -1785,6 +1814,12 @@ function exportTradesCsv(trades: BacktestTrade[], filename: string) {
     "return_pct",
     "fee_paid",
     "slippage_paid",
+    "funding_paid",
+    "requested_qty",
+    "filled_qty",
+    "fill_ratio",
+    "holding_bars",
+    "intrabar_path",
     "max_adverse_excursion_pct",
   ];
   const lines = [

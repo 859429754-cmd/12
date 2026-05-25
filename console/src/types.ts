@@ -179,9 +179,16 @@ export type BacktestTrade = {
   return_pct?: number;
   fee_paid?: number;
   slippage_paid?: number;
+  funding_paid?: number;
+  requested_qty?: number;
+  filled_qty?: number;
+  fill_ratio?: number;
+  holding_bars?: number;
   exit_reason?: string;
   stop_loss_price?: number;
+  max_adverse_excursion?: number;
   max_adverse_excursion_pct?: number;
+  intrabar_path?: string;
 };
 
 export type BacktestResult = {
@@ -192,7 +199,17 @@ export type BacktestResult = {
   profit_factor?: number;
   leverage?: number;
   final_equity?: number;
-  cost_model?: { cost_pct_of_initial_equity?: number };
+  cost_model?: {
+    cost_pct_of_initial_equity?: number;
+    total_fee_paid?: number;
+    total_slippage_paid?: number;
+    total_funding_paid?: number;
+    total_cost_paid?: number;
+    funding_rate_per_8h?: number;
+    min_order_qty?: number;
+    max_volume_participation?: number;
+  };
+  skipped_orders?: Array<Record<string, number | string | boolean | null>>;
   trades?: BacktestTrade[];
   trade_ledger?: BacktestTrade[];
   ai_guard_applied?: boolean;
