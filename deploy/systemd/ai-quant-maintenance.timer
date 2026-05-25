@@ -1,0 +1,12 @@
+[Unit]
+Description=Run AI Quant Runtime Maintenance
+
+[Timer]
+OnBootSec=10min
+OnCalendar=hourly
+Persistent=true
+AccuracySec=1min
+Unit=ai-quant-maintenance.service
+
+[Install]
+WantedBy=timers.target

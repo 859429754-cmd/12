@@ -1,0 +1,121 @@
+from __future__ import annotations
+
+import json
+
+import pytest
+
+from ai_quant_trader.brain.deepseek import DeepSeekBrain
+from ai_quant_trader.core.models import (
+    AggregatedOrderflow,
+    AiDecision,
+    DenseZone,
+    NewsDigest,
+    NewsItem,
+    PatternCandidate,
+    RegimePattern,
+    SignalAction,
+    StrategySignal,
+)
+
+
+@pytest.mark.asyncio
+async def test_deepseek_decision_requires_structured_trade_prices(monkeypatch) -> None:
+    brain = DeepSeekBrain(api_key="test-key", model="deepseek-v4-pro")
+
+    async def fake_chat_json(payload, timeout_seconds: int, retries: int):  # noqa: ANN001
+        assert payload["technical_signal"]["action"] == "long"
+        assert payload["regime_pattern"]["strategy_allowed"] == "trend"
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "symbol": "ETH/USDT:USDT",
+                                "regime": "trend",
+                                "direction": "long",
+                                "confidence": 0.78,
+                                "multiplier": 1.1,
+                                "news_alignment": "aligned",
+                                "orderflow_alignment": "aligned",
+                                "dense_zone_position": "above_poc",
+                                "entry_zone_estimate": 3500.0,
+                                "tp_estimate": 3710.0,
+                                "sl_estimate": 3415.0,
+                                "action_suggestion": "open_long",
+                                "veto_action": "allow",
+                                "brief_reason": "技术突破、订单流和消息面同向。",
+                                "reason_codes": ["trend_breakout", "news_aligned"],
+                                "data_quality_warnings": [],
+                            },
+                            ensure_ascii=False,
+                        )
+                    }
+                }
+            ]
+        }
+
+    monkeypatch.setattr(brain, "_chat_json", fake_chat_json)
+    decision = await brain.analyze_symbol(
+        StrategySignal(
+            symbol="ETH/USDT:USDT",
+            timeframe="1h",
+            action=SignalAction.LONG,
+            current_price=3500.0,
+            suggested_qty=0.5,
+            signal_strength=0.82,
+        ),
+        AggregatedOrderflow(symbol="ETH/USDT:USDT", alignment_hint="aligned", data_quality=0.9, source_count=3),
+        DenseZone(symbol="ETH/USDT:USDT", poc=3480.0, vah=3600.0, val=3360.0, current_position="above_value", strength=0.7),
+        PatternCandidate(symbol="ETH/USDT:USDT", pattern_type="rectangle_breakout", confidence=0.72),
+        NewsDigest(items=[NewsItem(title="Fed signals fewer cuts as core PCE holds at 2.8%", source="test")]),
+        RegimePattern(
+            symbol="ETH/USDT:USDT",
+            regime_candidate="trend",
+            strategy_allowed="trend",
+            pattern_family="trend_continuation",
+            pattern_name="rectangle_breakout",
+            breakout_quality="strong",
+            trend_score=0.78,
+            range_score=0.22,
+            reason_codes=["trend_score_dominant"],
+        ),
+    )
+
+    assert decision.action_suggestion == "open_long"
+    assert decision.tp_estimate == 3710.0
+    assert decision.sl_estimate == 3415.0
+    assert decision.entry_zone_estimate == 3500.0
+    assert decision.veto_action == "allow"
+    assert decision.trend_confirmation_score == 0.35
+    assert decision.range_risk_score == 0.65
+    assert decision.news_risk_score == 0.65
+    assert decision.orderflow_confirmation_score == 0.35
+    assert decision.dense_zone_breakout_score == 0.35
+
+
+def test_deepseek_normalizes_five_score_fields_conservatively() -> None:
+    brain = DeepSeekBrain(api_key="test-key")
+
+    parsed = brain._normalize_decision_json(
+        {
+            "regime": "trend",
+            "direction": "long",
+            "confidence": 0.8,
+            "multiplier": 1.0,
+            "veto_action": "allow",
+            "trend_confirmation_score": 3.0,
+            "range_risk_score": -1.0,
+            "news_risk_score": "not-a-number",
+            "orderflow_confirmation_score": None,
+            "dense_zone_breakout_score": 0.72,
+        }
+    )
+
+    decision = AiDecision.model_validate({"symbol": "ETH/USDT:USDT", **parsed})
+
+    assert decision.trend_confirmation_score == 1.0
+    assert decision.range_risk_score == 0.0
+    assert decision.news_risk_score == 0.65
+    assert decision.orderflow_confirmation_score == 0.35
+    assert decision.dense_zone_breakout_score == 0.72

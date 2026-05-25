@@ -1,0 +1,9 @@
+[Unit]
+Description=AI Quant HTTP Readiness Watchdog
+After=ai-quant-console.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/root/ai-quant-trader
+EnvironmentFile=-/root/ai-quant-trader/.env.runtime
+ExecStart=/root/ai-quant-trader/.venv/bin/python scripts/http_readiness_check.py --base-url http://127.0.0.1:8090 --mode readiness --allow-warn --timeout 5

@@ -1,0 +1,19 @@
+[Unit]
+Description=AI Quant Console
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/ai-quant-trader
+EnvironmentFile=-/root/ai-quant-trader/.env.runtime
+ExecStart=/root/ai-quant-trader/.venv/bin/uvicorn ai_quant_trader.api.server:app --host 127.0.0.1 --port 8090
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+KillSignal=SIGINT
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

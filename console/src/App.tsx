@@ -1,0 +1,3011 @@
+﻿import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  AlertTriangle,
+  BarChart3,
+  Bot,
+  BrainCircuit,
+  Database,
+  FlaskConical,
+  Gauge,
+  KeyRound,
+  LineChart,
+  Menu,
+  Newspaper,
+  Power,
+  RefreshCcw,
+  ServerCog,
+  ShieldCheck,
+  Wallet,
+} from "lucide-react";
+import type { ReactNode } from "react";
+import { api } from "./lib/api";
+import { MarketChart } from "./MarketChart";
+import type {
+  ApiList,
+  BacktestJob,
+  BacktestResult,
+  BacktestTrade,
+  Candle,
+  CandleResponse,
+  DenseZonePayload,
+  DbRow,
+  ExecutionAccountSlot,
+  MarketSymbolsResponse,
+  NewsResponse,
+  OptimizationResult,
+  PlatformOverview,
+  SystemReadiness,
+  StatusResponse,
+  StrategyProfile,
+  WorkspaceId,
+} from "./types";
+import { JsonBlock, Metric, Surface, button, danger, errText, input, mono, num, pct, shortSymbol } from "./ui";
+
+const DEFAULT_SYMBOL = "ETH/USDT:USDT";
+const WORKSPACE_IDS: WorkspaceId[] = ["dashboard", "market", "strategy", "ai", "agent", "execution", "data"];
+
+export function App() {
+  const [workspace, setWorkspace] = useState<WorkspaceId>(() => readWorkspaceHash());
+  const [status, setStatus] = useState<StatusResponse | null>(null);
+  const [platform, setPlatform] = useState<PlatformOverview | null>(null);
+  const [balance, setBalance] = useState<Record<string, unknown> | null>(null);
+  const [markets, setMarkets] = useState<MarketSymbolsResponse>({ items: [] });
+  const [symbol, setSymbol] = useState(DEFAULT_SYMBOL);
+  const [timeframe, setTimeframe] = useState("1h");
+  const [source, setSource] = useState("binance");
+  const [candles, setCandles] = useState<Candle[]>([]);
+  const [orders, setOrders] = useState<Array<DbRow>>([]);
+  const [positions, setPositions] = useState<Array<DbRow>>([]);
+  const [decisions, setDecisions] = useState<Array<DbRow>>([]);
+  const [riskSummary, setRiskSummary] = useState<Record<string, unknown> | null>(null);
+  const [readiness, setReadiness] = useState<SystemReadiness | null>(null);
+  const [accountSlots, setAccountSlots] = useState<ExecutionAccountSlot[]>([]);
+  const [denseZone, setDenseZone] = useState<DbRow<DenseZonePayload> | null>(null);
+  const [news, setNews] = useState<NewsResponse>({ items: [] });
+  const [warning, setWarning] = useState("");
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const symbols = useMemo(() => {
+    const fromMarkets = markets.items.map((item) => item.symbol);
+    const fromStatus = status?.symbols?.map((item) => item.symbol) || [];
+    const fromProfiles = platform?.strategy_profiles.map((item) => item.symbol) || [];
+    return Array.from(new Set([...fromMarkets, ...fromStatus, ...fromProfiles, DEFAULT_SYMBOL]));
+  }, [markets, platform, status]);
+
+  const selectedProfile = platform?.strategy_profiles.find((item) => item.symbol === symbol);
+
+  const load = useCallback(async () => {
+    setWarning("");
+    try {
+      const safe = async <T,>(promise: Promise<T>, fallback: T): Promise<T> => {
+        try {
+          return await promise;
+        } catch {
+          return fallback;
+        }
+      };
+      const [
+        nextStatus,
+        nextPlatform,
+        nextReadiness,
+        nextMarkets,
+        nextBalance,
+        nextPositions,
+        nextRiskSummary,
+        nextAccountSlots,
+        nextOrders,
+        nextDecisions,
+        nextDenseZone,
+        nextNews,
+        nextCandles,
+      ] =
+        await Promise.all([
+          api<StatusResponse>("/api/status", { retries: 1 }),
+          api<PlatformOverview>("/api/platform/overview", { retries: 1 }),
+          api<SystemReadiness>("/api/system/readiness", { retries: 1 }),
+          api<MarketSymbolsResponse>("/api/markets/symbols", { retries: 1 }),
+          api<Record<string, unknown>>("/api/account/balance", { retries: 1 }),
+          api<ApiList>("/api/positions?limit=50", { retries: 1 }),
+          api<Record<string, unknown>>("/api/risk/summary", { retries: 1 }),
+          safe(api<{ items: ExecutionAccountSlot[] }>("/api/execution/accounts", { retries: 1 }), { items: [] }),
+          api<ApiList>(`/api/orders?limit=80&symbol=${encodeURIComponent(symbol)}`, { retries: 1 }),
+          api<ApiList>(`/api/decisions?limit=80&symbol=${encodeURIComponent(symbol)}`, { retries: 1 }),
+          safe(api<{ item: DbRow<DenseZonePayload> | null }>(`/api/dense-zones/latest?symbol=${encodeURIComponent(symbol)}`, { retries: 1 }), { item: null }),
+          api<NewsResponse>("/api/news/latest?limit=24", { retries: 1 }),
+          api<CandleResponse>(
+            `/api/market/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${timeframe}&limit=5000&source=${source}`,
+            { retries: 1, timeoutMs: 15000 },
+          ),
+        ]);
+      setStatus(nextStatus);
+      setPlatform(nextPlatform);
+      setReadiness(nextReadiness);
+      setMarkets(nextMarkets);
+      setBalance(nextBalance);
+      setPositions(nextPositions.items || []);
+      setRiskSummary(nextRiskSummary);
+      setAccountSlots(nextAccountSlots.items || []);
+      setOrders(nextOrders.items || []);
+      setDecisions(nextDecisions.items || []);
+      setDenseZone(nextDenseZone.item || null);
+      setNews(nextNews);
+      setCandles(nextCandles.items || []);
+      setWarning(nextCandles.warning || "");
+    } catch (error) {
+      setWarning(errText(error));
+    }
+  }, [source, symbol, timeframe]);
+
+  useEffect(() => {
+    void load();
+    const id = window.setInterval(() => void load(), 60_000);
+    return () => window.clearInterval(id);
+  }, [load]);
+
+  useEffect(() => {
+    if (window.location.hash.replace("#", "") !== workspace) {
+      window.history.replaceState(null, "", `#${workspace}`);
+    }
+  }, [workspace]);
+
+  const postAction = async (path: string, body: Record<string, unknown>) => {
+    setBusy(true);
+    setMessage("");
+    try {
+      const result = await api<Record<string, unknown>>(path, { method: "POST", body: JSON.stringify(body), timeoutMs: 15000 });
+      setMessage(String(result.message || "ok"));
+      await load();
+    } catch (error) {
+      setMessage(errText(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <main className="grid h-screen grid-cols-[306px_minmax(0,1fr)] overflow-hidden bg-[#eef2f7] text-[#172033]">
+      <ShellNav
+        platform={platform}
+        workspace={workspace}
+        setWorkspace={setWorkspace}
+        symbol={symbol}
+        setSymbol={setSymbol}
+        symbols={symbols}
+        profile={selectedProfile}
+        status={status}
+        balance={balance}
+        busy={busy}
+        message={message}
+        postAction={postAction}
+      />
+      <section className="flex min-w-0 flex-col overflow-hidden">
+      <TopBar
+        platform={platform}
+        status={status}
+        workspace={workspace}
+        setWorkspace={setWorkspace}
+        refresh={load}
+        warning={warning}
+      />
+      <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_358px] gap-5 overflow-hidden p-5">
+        <WorkspaceBody
+          workspace={workspace}
+          symbol={symbol}
+          setSymbol={setSymbol}
+          symbols={symbols}
+          timeframe={timeframe}
+          setTimeframe={setTimeframe}
+          source={source}
+          setSource={setSource}
+        candles={candles}
+        warning={warning}
+        runtimeStatus={status}
+        balance={balance}
+        markets={markets}
+        news={news}
+        positions={positions}
+        orders={orders}
+          accountSlots={accountSlots}
+          denseZone={denseZone}
+          riskSummary={riskSummary}
+          readiness={readiness}
+        busy={busy}
+        postAction={postAction}
+        decisions={decisions}
+        platform={platform}
+      />
+        <RightRail
+          symbol={symbol}
+          status={status}
+          decisions={decisions}
+          orders={orders}
+          news={news}
+          denseZone={denseZone}
+          busy={busy}
+          postAction={postAction}
+        />
+      </div>
+      </section>
+    </main>
+  );
+}
+
+function readWorkspaceHash(): WorkspaceId {
+  const value = window.location.hash.replace("#", "");
+  return WORKSPACE_IDS.includes(value as WorkspaceId) ? (value as WorkspaceId) : "dashboard";
+}
+
+function workspaceIcon(id: WorkspaceId) {
+  const className = "h-4 w-4";
+  if (id === "dashboard") return <Gauge className={className} />;
+  if (id === "market") return <BarChart3 className={className} />;
+  if (id === "strategy") return <FlaskConical className={className} />;
+  if (id === "ai") return <BrainCircuit className={className} />;
+  if (id === "agent") return <Bot className={className} />;
+  if (id === "execution") return <Power className={className} />;
+  return <Database className={className} />;
+}
+
+function workspaceLabel(id: WorkspaceId, platform: PlatformOverview | null) {
+  const zh: Record<WorkspaceId, string> = {
+    dashboard: "总览",
+    market: "行情图表",
+    strategy: "策略与回测",
+    ai: "AI 大脑",
+    agent: "Agent 网关",
+    execution: "交易执行",
+    data: "数据健康",
+  };
+  return zh[id] || platform?.workspaces.find((item) => item.id === id)?.label || id;
+}
+
+function platformShellLabel(value?: string) {
+  if (value === "quantdinger_style") return "工作台外壳";
+  return value || "--";
+}
+
+function platformCoreLabel(value?: string) {
+  if (value === "local_ai_quant_trader") return "本地内核";
+  return value || "--";
+}
+
+function executionModeLabel(value?: string) {
+  if (value === "mock") return "模拟";
+  if (value === "live") return "实盘";
+  return value || "--";
+}
+
+function tradeModeLabel(value?: string) {
+  if (value === "strategy_confirmed") return "策略确认";
+  if (value === "ai_candidate_approval") return "AI候选审批";
+  if (value === "pure_ai_paper") return "纯AI纸面";
+  return value || "--";
+}
+
+function ShellNav({
+  platform,
+  workspace,
+  setWorkspace,
+  symbol,
+  setSymbol,
+  symbols,
+  profile,
+  status,
+  balance,
+  busy,
+  message,
+  postAction,
+}: {
+  platform: PlatformOverview | null;
+  workspace: WorkspaceId;
+  setWorkspace: (value: WorkspaceId) => void;
+  symbol: string;
+  setSymbol: (value: string) => void;
+  symbols: string[];
+  profile: StrategyProfile | undefined;
+  status: StatusResponse | null;
+  balance: Record<string, unknown> | null;
+  busy: boolean;
+  message: string;
+  postAction: (path: string, body: Record<string, unknown>) => Promise<void>;
+}) {
+  const workspaces = platform?.workspaces || [
+    { id: "dashboard" as WorkspaceId, label: "Dashboard" },
+    { id: "market" as WorkspaceId, label: "Market" },
+    { id: "strategy" as WorkspaceId, label: "Strategy" },
+    { id: "ai" as WorkspaceId, label: "AI Brain" },
+    { id: "agent" as WorkspaceId, label: "Agent Gateway" },
+    { id: "execution" as WorkspaceId, label: "Execution" },
+    { id: "data" as WorkspaceId, label: "Data Health" },
+  ];
+  return (
+    <aside className="flex min-h-0 flex-col border-r border-[#d9e2ef] bg-white shadow-[10px_0_30px_rgba(26,42,68,0.08)]">
+      <div className="flex h-[72px] shrink-0 items-center gap-3 border-b border-[#e3eaf3] px-6">
+        <div className="grid h-10 w-10 place-items-center rounded-xl bg-[#2454ff] text-lg font-black text-white shadow-lg shadow-blue-200">
+          Q
+        </div>
+        <div>
+          <div className="text-xl font-bold tracking-tight text-[#2454ff]">量化 AI 工作台</div>
+          <div className="text-[11px] text-[#7b8798]">本地策略内核 / Agent 安全外壳</div>
+        </div>
+      </div>
+      <nav className="shrink-0 px-3 py-4">
+        {workspaces.map((item) => {
+          const active = workspace === item.id;
+          return (
+            <button
+              key={item.id}
+              className={`mb-1 flex h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-sm transition ${
+                active ? "bg-[#eef3ff] text-[#2454ff] shadow-inner" : "text-[#5b6778] hover:bg-[#f4f7fb] hover:text-[#172033]"
+              }`}
+              onClick={() => setWorkspace(item.id)}
+            >
+              {workspaceIcon(item.id)}
+              <span className="font-medium">{workspaceLabel(item.id, platform)}</span>
+            </button>
+          );
+        })}
+      </nav>
+      <div className="min-h-0 flex-1 overflow-auto border-t border-[#e3eaf3] bg-[#f8fbff] p-3">
+        <LeftRail
+          symbol={symbol}
+          setSymbol={setSymbol}
+          symbols={symbols}
+          profile={profile}
+          status={status}
+          balance={balance}
+          busy={busy}
+          message={message}
+          postAction={postAction}
+        />
+      </div>
+    </aside>
+  );
+}
+
+function TopBar({
+  platform,
+  status,
+  workspace,
+  setWorkspace,
+  refresh,
+  warning,
+}: {
+  platform: PlatformOverview | null;
+  status: StatusResponse | null;
+  workspace: WorkspaceId;
+  setWorkspace: (value: WorkspaceId) => void;
+  refresh: () => void;
+  warning: string;
+}) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const switchWorkspace = (id: WorkspaceId) => {
+    setWorkspace(id);
+    setMenuOpen(false);
+  };
+  return (
+    <header className="relative flex h-[72px] shrink-0 items-center gap-4 border-b border-[#d9e2ef] bg-white px-6 shadow-sm">
+      <button
+        className={`grid h-10 w-10 place-items-center rounded-xl border border-[#d9e2ef] bg-[#f8fbff] text-[#5b6778] transition hover:border-[#2454ff] hover:text-[#2454ff] ${
+          menuOpen ? "border-[#2454ff] text-[#2454ff] shadow-sm" : ""
+        }`}
+        aria-label="打开工作台菜单"
+        aria-expanded={menuOpen}
+        onClick={() => setMenuOpen((value) => !value)}
+      >
+        <Menu size={18} />
+      </button>
+      {menuOpen ? (
+        <div className="absolute left-6 top-[58px] z-30 w-72 rounded-2xl border border-[#d9e2ef] bg-white p-3 shadow-2xl shadow-slate-200">
+          <div className="mb-2 px-2 text-[11px] font-semibold text-[#7b8798]">工作台菜单</div>
+          <div className="grid gap-1">
+            {WORKSPACE_IDS.map((id) => (
+              <button
+                key={id}
+                className={`flex h-10 items-center gap-3 rounded-xl px-3 text-left text-sm transition ${
+                  workspace === id ? "bg-[#eef3ff] text-[#2454ff]" : "text-[#53627a] hover:bg-[#f4f7fb] hover:text-[#172033]"
+                }`}
+                onClick={() => switchWorkspace(id)}
+              >
+                {workspaceIcon(id)}
+                <span className="font-medium">{workspaceLabel(id, platform)}</span>
+              </button>
+            ))}
+          </div>
+          <div className="mt-3 border-t border-[#e3eaf3] pt-3">
+            <button
+              className={`${button} h-10 w-full justify-center`}
+              onClick={() => {
+                refresh();
+                setMenuOpen(false);
+              }}
+            >
+              <RefreshCcw size={13} />
+              刷新全部数据
+            </button>
+            <div className="mt-2 rounded-xl bg-[#f8fbff] px-3 py-2 text-[11px] text-[#7b8798]">
+              本地控制台：127.0.0.1:8090
+            </div>
+          </div>
+        </div>
+      ) : null}
+      <div className="min-w-[260px]">
+        <div className="text-[11px] uppercase tracking-wide text-[#7b8798]">工作区</div>
+        <div className="text-lg font-semibold text-[#172033]">{workspaceLabel(workspace, platform)}</div>
+      </div>
+      <div className="hidden items-center gap-2 lg:flex">
+        <StatusPill label="外壳" value={platformShellLabel(platform?.platform.shell)} />
+        <StatusPill label="内核" value={platformCoreLabel(platform?.platform.core)} />
+        <StatusPill label="模式" value={executionModeLabel(status?.execution_mode)} />
+      </div>
+      <div className="ml-auto flex min-w-0 items-center gap-3 text-[11px] text-[#7b8798]">
+        {warning ? <span className="max-w-[440px] truncate rounded-full bg-[#fff7e6] px-3 py-2 text-[#b7791f]">{warning}</span> : null}
+        <span className={`rounded-full px-3 py-2 ${status?.opening_paused ? "bg-[#fff7e6] text-[#b7791f]" : "bg-[#e7f8ee] text-[#0a9f5a]"}`}>
+          {status?.opening_paused ? "开仓已暂停" : "允许开仓"}
+        </span>
+        <button className={button} onClick={refresh}>
+          <RefreshCcw size={13} />
+        </button>
+      </div>
+    </header>
+  );
+}
+
+function StatusPill({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl border border-[#d9e2ef] bg-[#f8fbff] px-3 py-2">
+      <div className="text-[10px] uppercase text-[#7b8798]">{label}</div>
+      <div className={`${mono} max-w-36 truncate text-xs font-semibold text-[#172033]`}>{value}</div>
+    </div>
+  );
+}
+
+function LeftRail({
+  symbol,
+  setSymbol,
+  symbols,
+  profile,
+  status,
+  balance,
+  busy,
+  message,
+  postAction,
+}: {
+  symbol: string;
+  setSymbol: (value: string) => void;
+  symbols: string[];
+  profile: StrategyProfile | undefined;
+  status: StatusResponse | null;
+  balance: Record<string, unknown> | null;
+  busy: boolean;
+  message: string;
+  postAction: (path: string, body: Record<string, unknown>) => Promise<void>;
+}) {
+  const usdt = balance?.USDT && typeof balance.USDT === "object" ? (balance.USDT as Record<string, unknown>) : {};
+  return (
+    <aside className="flex min-h-0 flex-col gap-2 overflow-auto">
+      <Surface title={<><ShieldCheck size={13} /> 策略档案</>}>
+        <select className={`${input} mb-2 w-full ${mono}`} value={symbol} onChange={(event) => setSymbol(event.target.value)}>
+          {symbols.map((item) => (
+            <option key={item} value={item}>
+              {shortSymbol(item)}
+            </option>
+          ))}
+        </select>
+        <div className="grid grid-cols-2 gap-2">
+          <Metric label="档案" value={profile?.profile_name || "--"} />
+          <Metric label="策略" value={profile?.enabled ? "运行中" : "研究中"} tone={profile?.enabled ? "good" : "warn"} />
+          <Metric label="授权" value={profile?.opening_authorized ? "已授权" : "未授权"} tone={profile?.opening_authorized ? "good" : "warn"} />
+          <Metric label="报告" value={profile?.report_enabled ? "开启" : "关闭"} />
+        </div>
+        <div className="mt-2 grid grid-cols-2 gap-1">
+          <button className={button} disabled={busy} onClick={() => postAction("/api/control/authorize", { operator_id: "console", symbols: [symbol] })}>
+            授权开仓
+          </button>
+          <button className={button} disabled={busy} onClick={() => postAction("/api/control/pause", { operator_id: "console", symbols: [symbol] })}>
+            暂停开仓
+          </button>
+          <button className={button} disabled={busy} onClick={() => postAction("/api/control/enable-report", { operator_id: "console", symbols: [symbol] })}>
+            开启报告
+          </button>
+          <button className={button} disabled={busy} onClick={() => postAction("/api/control/disable-report", { operator_id: "console", symbols: [symbol] })}>
+            关闭报告
+          </button>
+        </div>
+        {message ? <div className="mt-2 rounded-xl border border-[#dfe7f1] bg-white p-2 text-[11px] text-[#53627a]">{message}</div> : null}
+      </Surface>
+
+      <Surface title={<><Wallet size={13} /> 账户</>}>
+        <div className="grid grid-cols-2 gap-2">
+          <Metric label="USDT 总额" value={num(balance?.total_usdt ?? usdt.total)} />
+          <Metric label="USDT 可用" value={num(balance?.free_usdt ?? usdt.free)} />
+          <Metric label="风控上限" value={`${num(status?.risk?.max_total_leverage || 4, 1)}x`} />
+          <Metric label="交易模式" value={status?.trade_mode || "--"} />
+        </div>
+      </Surface>
+
+      <Surface title={<><Power size={13} /> 执行控制</>}>
+        <div className="grid grid-cols-1 gap-1">
+          <button className={danger} disabled={busy} onClick={() => postAction("/api/control/close-position", { operator_id: "console", symbol })}>
+            平仓 {shortSymbol(symbol)}
+          </button>
+          <button className={danger} disabled={busy} onClick={() => postAction("/api/control/panic-close", { operator_id: "console", symbols: [] })}>
+            紧急全平
+          </button>
+        </div>
+      </Surface>
+    </aside>
+  );
+}
+
+function WorkspaceBody({
+  workspace,
+  symbol,
+  setSymbol,
+  symbols,
+  timeframe,
+  setTimeframe,
+  source,
+  setSource,
+  candles,
+  warning,
+  runtimeStatus,
+  balance,
+  markets,
+  news,
+  positions,
+  orders,
+  accountSlots,
+  denseZone,
+  riskSummary,
+  readiness,
+  busy,
+  postAction,
+  decisions,
+  platform,
+}: {
+  workspace: WorkspaceId;
+  symbol: string;
+  setSymbol: (value: string) => void;
+  symbols: string[];
+  timeframe: string;
+  setTimeframe: (value: string) => void;
+  source: string;
+  setSource: (value: string) => void;
+  candles: Candle[];
+  warning: string;
+  runtimeStatus: StatusResponse | null;
+  balance: Record<string, unknown> | null;
+  markets: MarketSymbolsResponse;
+  news: NewsResponse;
+  positions: Array<DbRow>;
+  orders: Array<DbRow>;
+  accountSlots: ExecutionAccountSlot[];
+  denseZone: DbRow<DenseZonePayload> | null;
+  riskSummary: Record<string, unknown> | null;
+  readiness: SystemReadiness | null;
+  busy: boolean;
+  postAction: (path: string, body: Record<string, unknown>) => Promise<void>;
+  decisions: Array<DbRow>;
+  platform: PlatformOverview | null;
+}) {
+  const selectedProfile = platform?.strategy_profiles.find((item) => item.symbol === symbol);
+  if (workspace === "strategy") {
+    return <StrategyWorkspace symbol={symbol} setSymbol={setSymbol} symbols={symbols} platform={platform} profile={selectedProfile} />;
+  }
+  if (workspace === "dashboard") {
+    return <DashboardWorkspace symbol={symbol} status={platform} candles={candles} warning={warning} readiness={readiness} />;
+  }
+  if (workspace === "ai") {
+    return <AiBrainWorkspace symbol={symbol} status={runtimeStatus} platform={platform} profile={selectedProfile} decisions={decisions} />;
+  }
+  if (workspace === "agent") {
+    return <AgentGatewayWorkspace platform={platform} />;
+  }
+  if (workspace === "execution") {
+    return (
+      <ExecutionWorkspace
+        symbol={symbol}
+        platform={platform}
+        status={runtimeStatus}
+        balance={balance}
+        positions={positions}
+        orders={orders}
+        accountSlots={accountSlots}
+        riskSummary={riskSummary}
+        busy={busy}
+        postAction={postAction}
+      />
+    );
+  }
+  if (workspace === "data") {
+    return (
+      <DataWorkspace
+        platform={platform}
+        status={runtimeStatus}
+        markets={markets}
+        news={news}
+        candles={candles}
+        warning={warning}
+        source={source}
+        timeframe={timeframe}
+        balance={balance}
+        riskSummary={riskSummary}
+        positions={positions}
+        orders={orders}
+      />
+    );
+  }
+  return (
+    <MarketWorkspace
+      symbol={symbol}
+      setSymbol={setSymbol}
+      symbols={symbols}
+      timeframe={timeframe}
+      setTimeframe={setTimeframe}
+      source={source}
+      setSource={setSource}
+      candles={candles}
+      warning={warning}
+      profile={selectedProfile}
+      orders={orders}
+      decisions={decisions}
+      denseZone={denseZone}
+    />
+  );
+}
+
+function MarketWorkspace({
+  symbol,
+  setSymbol,
+  symbols,
+  timeframe,
+  setTimeframe,
+  source,
+  setSource,
+  candles,
+  warning,
+  profile,
+  orders,
+  decisions,
+  denseZone,
+}: {
+  symbol: string;
+  setSymbol: (value: string) => void;
+  symbols: string[];
+  timeframe: string;
+  setTimeframe: (value: string) => void;
+  source: string;
+  setSource: (value: string) => void;
+  candles: Candle[];
+  warning: string;
+  profile?: StrategyProfile;
+  orders: Array<DbRow>;
+  decisions: Array<DbRow>;
+  denseZone: DbRow<DenseZonePayload> | null;
+}) {
+  const latest = candles.at(-1);
+  const prev = candles.at(-2);
+  const changePct = latest && prev ? ((latest.close - prev.close) / prev.close) * 100 : 0;
+  const windowCandles = candles.slice(-240);
+  const localHigh = Math.max(...windowCandles.map((item) => item.high), 0);
+  const localLow = Math.min(...windowCandles.map((item) => item.low).filter(Number.isFinite));
+  const volume = latest?.volume || 0;
+  const params = profile?.params || {};
+  const timeframes = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"];
+  return (
+    <section className="min-h-0 space-y-5 overflow-auto pr-1">
+      <Surface
+        title={<><BarChart3 size={13} /> 专业行情图表</>}
+        action={
+          <div className="flex gap-2">
+            <select className={`${input} ${mono}`} value={symbol} onChange={(event) => setSymbol(event.target.value)}>
+              {symbols.map((item) => (
+                <option key={item} value={item}>
+                  {shortSymbol(item)}
+                </option>
+              ))}
+            </select>
+            <select className={`${input} ${mono}`} value={timeframe} onChange={(event) => setTimeframe(event.target.value)}>
+              {timeframes.map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
+            </select>
+            <select className={`${input} ${mono}`} value={source} onChange={(event) => setSource(event.target.value)}>
+              {["binance", "okx", "gateio", "auto"].map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
+            </select>
+          </div>
+        }
+      >
+        <div className="grid grid-cols-6 gap-3">
+          <Metric label="最新价" value={num(latest?.close)} tone={changePct >= 0 ? "good" : "bad"} />
+          <Metric label="涨跌幅" value={pct(changePct)} tone={changePct >= 0 ? "good" : "bad"} />
+          <Metric label="最高" value={num(latest?.high)} />
+          <Metric label="最低" value={num(latest?.low)} />
+          <Metric label="成交量" value={num(volume, 2)} />
+          <Metric label="K线数量" value={num(candles.length, 0)} />
+        </div>
+        <div className="mt-4 flex flex-wrap items-center gap-2 text-[11px] text-[#53627a]">
+          <ChartChip label="EMA" value={String(params.ema_length || 89)} />
+          <ChartChip label="KC" value={`${params.kc_length || 20}/${params.kc_scalar || 2.8}`} />
+          <ChartChip label="ATR" value={String(params.atr_length || 14)} />
+          <ChartChip label="VOL" value={String(params.volume_multiple || "--")} />
+          <ChartChip label="KDJ" value={String(params.kdj_length || "--")} />
+          <ChartChip label="240根高低" value={`${num(localLow)} - ${num(localHigh)}`} />
+          {warning ? <span className="rounded-full bg-[#fff7e6] px-3 py-1 text-[#b7791f]">{warning}</span> : null}
+        </div>
+      </Surface>
+      <Surface title={<><LineChart size={13} /> K线走势与指标叠加</>}>
+        <MarketChart candles={candles} profile={profile} orders={orders} decisions={decisions} denseZone={denseZone?.payload} height={620} />
+        <div className="mt-3 flex flex-wrap gap-3 text-[11px] text-[#53627a]">
+          <span><span className="text-[#0a9f5a]">■</span> 阳线 / 成交量</span>
+          <span><span className="text-[#e11d48]">■</span> 阴线 / 成交量</span>
+          <span><span className="text-[#1f2937]">━</span> EMA 过滤线</span>
+          <span><span className="text-[#2454ff]">━</span> 肯特纳上下轨</span>
+          <span><span className="text-[#64748b]">━</span> 肯特纳中轨</span>
+        </div>
+      </Surface>
+      <DenseZonePanel denseZone={denseZone?.payload} />
+      <Surface title={<><ShieldCheck size={13} /> 图表交易契约</>}>
+        <div className="grid grid-cols-4 gap-3">
+          <Metric label="数据源" value={source} />
+          <Metric label="周期" value={timeframe} />
+          <Metric label="策略档案" value={profile?.profile_name || "--"} />
+          <Metric label="状态" value={profile?.enabled ? "运行中" : "研究中"} tone={profile?.enabled ? "good" : "warn"} />
+        </div>
+      </Surface>
+    </section>
+  );
+}
+
+function ChartChip({ label, value }: { label: string; value: string }) {
+  return (
+    <span className="rounded-full border border-[#dfe7f1] bg-[#f8fbff] px-3 py-1">
+      {label}: <span className={mono}>{value}</span>
+    </span>
+  );
+}
+
+function DenseZonePanel({ denseZone }: { denseZone?: DenseZonePayload }) {
+  if (!denseZone) {
+    return (
+      <Surface title={<><ShieldCheck size={13} /> 密集区结构</>}>
+        <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs text-[#53627a]">
+          暂无密集区记录。等待下一次交易循环或 AI 扫描后，图表会自动叠加 POC、上下沿和相邻密集区。
+        </div>
+      </Surface>
+    );
+  }
+  return (
+    <Surface title={<><ShieldCheck size={13} /> 密集区结构</>}>
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-6">
+        <Metric label="上沿" value={num(denseZone.zone_high ?? denseZone.vah)} />
+        <Metric label="POC/中位" value={num(denseZone.zone_mid ?? denseZone.poc)} />
+        <Metric label="下沿" value={num(denseZone.zone_low ?? denseZone.val)} />
+        <Metric label="趋势评分" value={confidencePct(denseZone.trend_score)} />
+        <Metric label="震荡评分" value={confidencePct(denseZone.range_score)} />
+        <Metric label="强度" value={confidencePct(denseZone.strength)} />
+      </div>
+      <div className="mt-3 grid grid-cols-1 gap-2 text-xs lg:grid-cols-3">
+        <BoundaryLine label="当前位置" value={denseZoneLabel(denseZone.current_position)} />
+        <BoundaryLine label="突破状态" value={breakoutStatusLabel(denseZone.breakout_status)} />
+        <BoundaryLine label="结构描述" value={String(denseZone.structure_label || "等待确认")} />
+      </div>
+    </Surface>
+  );
+}
+
+function StrategyWorkspace({
+  symbol,
+  setSymbol,
+  symbols,
+  platform,
+  profile,
+}: {
+  symbol: string;
+  setSymbol: (value: string) => void;
+  symbols: string[];
+  platform: PlatformOverview | null;
+  profile: StrategyProfile | undefined;
+}) {
+  return (
+    <section className="min-h-0 space-y-5 overflow-auto pr-1">
+      <div className="grid grid-cols-1 gap-5 2xl:grid-cols-[340px_minmax(0,1fr)]">
+        <StrategyListPanel
+          symbol={symbol}
+          setSymbol={setSymbol}
+          profiles={platform?.strategy_profiles || []}
+          symbols={symbols}
+        />
+        <Surface title={<><ShieldCheck size={13} /> 策略参数与执行契约</>}>
+          <StrategyParameterGrid profile={profile} />
+          <div className="mt-4 grid grid-cols-1 gap-3 xl:grid-cols-2">
+            <ContractCard
+              title="入场逻辑"
+              items={[
+                ["信号K线", contractValueLabel(profile?.execution_contract?.signal_candle || "closed_1h_bar")],
+                ["成交假设", contractValueLabel(profile?.execution_contract?.entry_fill || "next_tradeable_open")],
+                ["反手规则", String(profile?.params?.use_reversal ?? true) === "true" ? "允许先平后反手" : "禁止反手"],
+              ]}
+            />
+            <ContractCard
+              title="退出与风控"
+              items={[
+                ["止损", contractValueLabel(profile?.execution_contract?.stop_rule || "fixed_atr_stop_from_entry")],
+                ["中轨退出", contractValueLabel(profile?.execution_contract?.exit_rule || "reverse_cross_of_keltner_midline")],
+                ["名义仓位", `${num(profile?.backtest_defaults?.notional_multiple, 2)}x`],
+              ]}
+            />
+          </div>
+        </Surface>
+      </div>
+      <StrategyParameterEditor symbol={symbol} profile={profile} />
+      <BacktestPanel symbol={symbol} setSymbol={setSymbol} symbols={symbols} profile={profile} />
+    </section>
+  );
+}
+
+function StrategyListPanel({
+  symbol,
+  setSymbol,
+  profiles,
+  symbols,
+}: {
+  symbol: string;
+  setSymbol: (value: string) => void;
+  profiles: StrategyProfile[];
+  symbols: string[];
+}) {
+  const profileSymbols = profiles.length ? profiles.map((item) => item.symbol) : symbols;
+  return (
+    <Surface title={<><Bot size={13} /> 策略列表</>}>
+      <div className="grid grid-cols-1 gap-3 xl:grid-cols-3 2xl:grid-cols-1">
+        {profileSymbols.map((item) => {
+          const profile = profiles.find((profile) => profile.symbol === item);
+          const active = item === symbol;
+          return (
+            <button
+              key={item}
+              className={`w-full rounded-2xl border p-4 text-left transition ${
+                active
+                  ? "border-[#2454ff] bg-[#eef3ff] shadow-[0_12px_30px_rgba(36,84,255,0.12)]"
+                  : "border-[#dfe7f1] bg-[#f8fbff] hover:border-[#a8b9d3]"
+              }`}
+              onClick={() => setSymbol(item)}
+            >
+              <div className="flex items-center justify-between">
+                <span className="rounded-lg bg-white px-2 py-1 text-[11px] font-semibold text-[#2454ff] shadow-sm">
+                  Gate.io
+                </span>
+                <span className={`rounded-full px-2 py-1 text-[11px] ${profile?.enabled ? "bg-[#e7f8ee] text-[#0a9f5a]" : "bg-[#fff7e6] text-[#b7791f]"}`}>
+                  {profile?.enabled ? "运行中" : "研究中"}
+                </span>
+              </div>
+              <div className="mt-3 text-lg font-semibold text-[#172033]">{shortSymbol(item)}</div>
+              <div className="mt-2 flex items-center justify-between gap-2 text-[11px] text-[#53627a]">
+                <span className="min-w-0 truncate">{profile?.profile_name || "待配置档案"}</span>
+                <span className="shrink-0">{profile?.opening_authorized ? "已授权" : "未授权"}</span>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </Surface>
+  );
+}
+
+function StrategyParameterGrid({ profile }: { profile?: StrategyProfile }) {
+  const params = profile?.params || {};
+  return (
+    <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+      <Metric label="档案" value={profile?.profile_name || "--"} />
+      <Metric label="周期" value={String(profile?.backtest_defaults?.timeframe || "1h")} />
+      <Metric label="KC中轨" value={String(params.kc_length || 20)} />
+      <Metric label="KC宽度" value={num(params.kc_scalar ?? 2.8, 2)} />
+      <Metric label="ATR周期" value={String(params.atr_length || 14)} />
+      <Metric label="ATR止损" value={num(params.atr_stop_multiple ?? 1.5, 2)} />
+      <Metric label="成交量过滤" value={String(params.use_volume_filter ?? true) === "true" ? "开启" : "关闭"} />
+      <Metric label="成交量倍数" value={num(params.volume_multiple ?? 2.5, 2)} />
+      <Metric label="EMA过滤" value={String(params.use_ema_filter ?? false) === "true" ? "开启" : "关闭"} />
+      <Metric label="EMA周期" value={String(params.ema_length || 89)} />
+      <Metric label="动量过滤" value={String(params.momentum_filter || "KDJ")} />
+      <Metric label="KDJ周期" value={String(params.kdj_length || 9)} />
+    </div>
+  );
+}
+
+function ContractCard({ title, items }: { title: string; items: Array<[string, string]> }) {
+  return (
+    <div className="rounded-2xl border border-[#dfe7f1] bg-[#f8fbff] p-4">
+      <div className="font-semibold text-[#172033]">{title}</div>
+      <div className="mt-3 grid gap-2 text-xs">
+        {items.map(([label, value]) => (
+          <BoundaryLine key={label} label={label} value={value} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function contractValueLabel(value: unknown) {
+  const text = String(value || "--");
+  const labels: Record<string, string> = {
+    closed_1h_bar: "1小时收盘确认",
+    next_tradeable_open: "下一根可交易开盘价",
+    fixed_atr_stop_from_entry: "开仓价固定ATR止损",
+    reverse_cross_of_keltner_midline: "反向穿越KC中轨",
+    keltner_breakout_with_enabled_filters: "肯特纳突破并通过启用过滤器",
+    blocked: "禁止",
+  };
+  return labels[text] || text;
+}
+
+const EDITABLE_STRATEGY_PARAMS = [
+  { key: "kc_length", path: "strategy.trend.kc_length", label: "KC中轨周期", step: "1", min: 5, max: 100 },
+  { key: "kc_scalar", path: "strategy.trend.kc_scalar", label: "KC通道宽度", step: "0.1", min: 0.5, max: 8 },
+  { key: "atr_length", path: "strategy.trend.atr_length", label: "ATR周期", step: "1", min: 5, max: 100 },
+  { key: "atr_stop_multiple", path: "strategy.trend.atr_stop_multiple", label: "ATR止损倍数", step: "0.1", min: 0.2, max: 20 },
+  { key: "vma_length", path: "strategy.trend.vma_length", label: "成交量均线周期", step: "1", min: 5, max: 100 },
+  { key: "volume_multiple", path: "strategy.trend.volume_multiple", label: "成交量放大倍数", step: "0.1", min: 0.5, max: 8 },
+  { key: "ema_length", path: "strategy.trend.ema_length", label: "EMA过滤周期", step: "1", min: 20, max: 300 },
+] as const;
+
+function StrategyParameterEditor({ symbol, profile }: { symbol: string; profile?: StrategyProfile }) {
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [proposals, setProposals] = useState<Array<DbRow>>([]);
+  const [submitting, setSubmitting] = useState("");
+  const [message, setMessage] = useState("");
+  const params = profile?.params || {};
+
+  const loadProposals = useCallback(async () => {
+    try {
+      const response = await api<ApiList>("/api/proposals?status=pending&limit=30", { timeoutMs: 8000, retries: 1 });
+      setProposals((response.items || []).filter((row) => row.payload?.type === "parameter_update"));
+    } catch (error) {
+      setMessage(`参数提案加载失败：${errText(error)}`);
+    }
+  }, []);
+
+  useEffect(() => {
+    const next: Record<string, string> = {};
+    EDITABLE_STRATEGY_PARAMS.forEach((item) => {
+      next[item.key] = String(params[item.key] ?? "");
+    });
+    setValues(next);
+    setMessage("");
+  }, [profile?.symbol, profile?.profile_name]);
+
+  useEffect(() => {
+    void loadProposals();
+  }, [loadProposals]);
+
+  const createProposal = async (item: (typeof EDITABLE_STRATEGY_PARAMS)[number]) => {
+    const value = Number(values[item.key]);
+    if (!Number.isFinite(value)) {
+      setMessage(`${item.label} 不是有效数字。`);
+      return;
+    }
+    setSubmitting(item.key);
+    setMessage("");
+    try {
+      const result = await api<Record<string, unknown>>("/api/proposals/parameter", {
+        method: "POST",
+        timeoutMs: 12000,
+        body: JSON.stringify({
+          operator_id: "console",
+          path: item.path,
+          value,
+          symbols: [symbol],
+        }),
+      });
+      setMessage(`已创建 ${item.label} 参数提案 #${String(result.proposal_id || "--")}，审批后生效。`);
+      await loadProposals();
+    } catch (error) {
+      setMessage(errText(error));
+    } finally {
+      setSubmitting("");
+    }
+  };
+
+  const handleProposal = async (proposalId: number, action: "approve" | "reject") => {
+    setSubmitting(`${action}:${proposalId}`);
+    setMessage("");
+    try {
+      await api<Record<string, unknown>>(`/api/proposals/${proposalId}/${action}`, {
+        method: "POST",
+        timeoutMs: 12000,
+        body: JSON.stringify({ operator_id: "console" }),
+      });
+      setMessage(action === "approve" ? `提案 #${proposalId} 已审批生效。` : `提案 #${proposalId} 已拒绝，未修改运行参数。`);
+      await loadProposals();
+    } catch (error) {
+      setMessage(errText(error));
+    } finally {
+      setSubmitting("");
+    }
+  };
+
+  return (
+    <Surface title={<><ShieldCheck size={13} /> 策略参数修改</>}>
+      <div className="mb-3 rounded-xl border border-[#ffdca8] bg-[#fff8ed] p-3 text-[11px] leading-relaxed text-[#8a5a00]">
+        修改不会直接写入实盘配置，只会创建待审批提案；审批通过后才热加载到策略运行参数。这是为了避免误操作把回测参数直接推到实盘。
+      </div>
+      <div className="grid grid-cols-1 gap-3 xl:grid-cols-2 2xl:grid-cols-4">
+        {EDITABLE_STRATEGY_PARAMS.map((item) => {
+          const current = params[item.key];
+          const changed = String(current ?? "") !== String(values[item.key] ?? "");
+          return (
+            <div key={item.key} className="rounded-2xl border border-[#dfe7f1] bg-[#f8fbff] p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-xs font-semibold text-[#172033]">{item.label}</div>
+                  <div className="mt-1 text-[10px] text-[#7b8798]">
+                    当前值 <span className={mono}>{num(current, 4)}</span> / 范围 {item.min}-{item.max}
+                  </div>
+                </div>
+                <span className={`rounded-full px-2 py-1 text-[10px] ${changed ? "bg-[#fff7e6] text-[#b7791f]" : "bg-[#e7f8ee] text-[#0a9f5a]"}`}>
+                  {changed ? "待提交" : "未改动"}
+                </span>
+              </div>
+              <div className="mt-3 grid grid-cols-[minmax(0,1fr)_92px] gap-2">
+                <input
+                  className={`${input} ${mono} w-full`}
+                  type="number"
+                  min={item.min}
+                  max={item.max}
+                  step={item.step}
+                  value={values[item.key] ?? ""}
+                  onChange={(event) => setValues((prev) => ({ ...prev, [item.key]: event.target.value }))}
+                />
+                <button className={button} disabled={!changed || submitting === item.key} onClick={() => createProposal(item)}>
+                  提交提案
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div className="mt-4 overflow-hidden rounded-2xl border border-[#dfe7f1] bg-white">
+        <div className="flex h-10 items-center justify-between border-b border-[#e6edf5] px-3 text-xs">
+          <span className="font-semibold text-[#172033]">待审批参数提案</span>
+          <button className={button} onClick={() => void loadProposals()}>刷新提案</button>
+        </div>
+        <div className="max-h-64 overflow-auto">
+          {proposals.length ? (
+            proposals.map((row) => (
+              <ParameterProposalRow
+                key={row.id}
+                row={row}
+                busy={submitting.endsWith(`:${row.id}`)}
+                onApprove={() => void handleProposal(row.id, "approve")}
+                onReject={() => void handleProposal(row.id, "reject")}
+              />
+            ))
+          ) : (
+            <div className="px-3 py-6 text-center text-xs text-[#7b8798]">暂无待审批参数提案。</div>
+          )}
+        </div>
+      </div>
+      {message ? <div className="mt-3 rounded-xl border border-[#dfe7f1] bg-white p-3 text-xs text-[#53627a]">{message}</div> : null}
+    </Surface>
+  );
+}
+
+function ParameterProposalRow({
+  row,
+  busy,
+  onApprove,
+  onReject,
+}: {
+  row: DbRow;
+  busy: boolean;
+  onApprove: () => void;
+  onReject: () => void;
+}) {
+  const payload = row.payload || {};
+  const changes = (payload.changes as Record<string, { old?: unknown; new?: unknown }> | undefined) || {};
+  return (
+    <div className="grid grid-cols-[minmax(0,1fr)_160px] gap-3 border-b border-[#edf2f7] p-3 text-xs">
+      <div className="min-w-0">
+        <div className="flex items-center gap-2">
+          <span className="rounded-full bg-[#fff7e6] px-2 py-1 text-[10px] text-[#b7791f]">待审批</span>
+          <span className={mono}>#{row.id}</span>
+          <span className="truncate text-[#7b8798]">{row.created_at}</span>
+        </div>
+        <div className="mt-2 grid gap-1">
+          {Object.entries(changes).map(([path, change]) => (
+            <div key={path} className="rounded-lg bg-[#f8fbff] px-2 py-1">
+              <span className="font-semibold text-[#172033]">{paramPathLabel(path)}</span>
+              <span className={`${mono} ml-2 text-[#53627a]`}>{num(change.old, 4)} → {num(change.new, 4)}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="grid content-center gap-2">
+        <button className={button} disabled={busy} onClick={onApprove}>审批生效</button>
+        <button className={danger} disabled={busy} onClick={onReject}>拒绝</button>
+      </div>
+    </div>
+  );
+}
+
+function paramPathLabel(path: string) {
+  const shortKey = path.split(".").at(-1) || path;
+  const labels: Record<string, string> = {
+    kc_length: "KC中轨周期",
+    kc_scalar: "KC通道宽度",
+    atr_length: "ATR周期",
+    atr_stop_multiple: "ATR止损倍数",
+    vma_length: "成交量均线周期",
+    volume_multiple: "成交量放大倍数",
+    ema_length: "EMA过滤周期",
+  };
+  return labels[shortKey] || shortKey;
+}
+
+function DashboardWorkspace({
+  symbol,
+  status,
+  candles,
+  warning,
+  readiness,
+}: {
+  symbol: string;
+  status: PlatformOverview | null;
+  candles: Candle[];
+  warning: string;
+  readiness: SystemReadiness | null;
+}) {
+  const profile = status?.strategy_profiles.find((item) => item.symbol === symbol);
+  const activeProfiles = status?.strategy_profiles.filter((item) => item.enabled).length || 0;
+  const liveProfiles = status?.strategy_profiles.filter((item) => item.live_ready).length || 0;
+  return (
+    <section className="min-h-0 space-y-5 overflow-auto pr-1">
+      <Surface title={<><ServerCog size={13} /> 量化系统运行总览</>}>
+        <div className="grid grid-cols-6 gap-3">
+          <Metric label="平台外壳" value={platformShellLabel(status?.platform.shell)} />
+          <Metric label="交易内核" value={platformCoreLabel(status?.platform.core)} />
+          <Metric label="执行模式" value={executionModeLabel(status?.platform.execution_mode)} />
+          <Metric label="策略档案" value={`${activeProfiles}/${status?.strategy_profiles.length || 0}`} />
+          <Metric label="实盘就绪" value={String(liveProfiles)} tone={liveProfiles ? "warn" : "good"} />
+          <Metric label="K线数量" value={num(candles.length, 0)} />
+        </div>
+        <div className="mt-4 grid grid-cols-4 gap-3">
+          <Metric label="当前标的" value={shortSymbol(symbol)} />
+          <Metric label="当前档案" value={profile?.profile_name || "--"} />
+          <Metric label="名义仓位" value={`${num(profile?.backtest_defaults?.notional_multiple, 2)}x`} />
+          <Metric label="数据状态" value={warning || "健康"} tone={warning ? "warn" : "good"} />
+        </div>
+      </Surface>
+      <ReadinessPanel readiness={readiness} />
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
+        <Surface title={<><FlaskConical size={13} /> 平台迁移地图</>}>
+          <div className="space-y-2 text-xs text-[#53627a]">
+            <RoadmapItem title="总览" body="集中展示账户、策略、任务、数据健康与风险状态。" done />
+            <RoadmapItem title="策略 / 回测" body="策略档案、回测运行、参数寻优、交割单留痕。" done />
+            <RoadmapItem title="AI 大脑" body="DeepSeek 五档仓位、新闻、订单流、形态审计记录。" />
+            <RoadmapItem title="Agent 网关" body="参考 QuantDinger /api/agent/v1，默认只读和纸面回测。" />
+            <RoadmapItem title="交易执行" body="所有真实订单仍必须通过本地 Gateway + RiskManager。" done />
+          </div>
+        </Surface>
+        <Surface title={<><ShieldCheck size={13} /> 不可绕过的交易内核</>}>
+          <div className="grid gap-2 text-xs">
+            <BoundaryLine label="策略核心" value="本地 ETH 肯特纳通道 + 成交量 + KDJ 趋势引擎" />
+            <BoundaryLine label="AI核心" value="DeepSeek 五档仓位叠加判断" />
+            <BoundaryLine label="执行核心" value="Gate.io 网关，必须经过风控管理器" />
+            <BoundaryLine label="参数变更" value="只能创建提案，审批后生效" />
+            <BoundaryLine label="实盘下单" value="禁止任何界面绕过 Gateway 与 RiskManager" />
+          </div>
+          <details className="mt-3 rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs">
+            <summary className="cursor-pointer font-semibold text-[#53627a]">查看执行契约原始审计数据</summary>
+            <div className="mt-2">
+              <JsonBlock data={profile?.execution_contract || {}} maxHeight="max-h-40" />
+            </div>
+          </details>
+        </Surface>
+      </div>
+    </section>
+  );
+}
+
+function ReadinessPanel({ readiness }: { readiness: SystemReadiness | null }) {
+  const overall = readiness?.overall || "warn";
+  const exchangePayload = readiness?.exchange_safety?.payload || {};
+  const reconciliationPayload = readiness?.latest_reconciliation?.payload || {};
+  const orderLifecyclePayload = readiness?.latest_order_lifecycle?.payload || {};
+  const dataHealthPayload = readiness?.latest_data_health?.payload || {};
+  const aiDriftPayload = readiness?.latest_ai_drift?.payload || {};
+  const newsRiskPayload = readiness?.latest_news_risk_review?.payload || {};
+  const workerHeartbeats = readiness?.latest_worker_heartbeats || {};
+  const blockedReasons = (readiness?.checks || []).filter((check) => check.status === "block").map((check) => readinessCheckLabel(check.label));
+  return (
+    <Surface
+      title={<><ShieldCheck size={13} /> 策略与 AI 运行就绪检查</>}
+      action={<span className={`rounded-full px-3 py-1 text-[11px] ${readinessToneClass(overall)}`}>{readinessLabel(overall)}</span>}
+    >
+      <div className="grid grid-cols-5 gap-3">
+        <Metric label="整体状态" value={readinessLabel(overall)} tone={overall === "ok" ? "good" : overall === "block" ? "bad" : "warn"} />
+        <Metric label="执行模式" value={executionModeLabel(readiness?.execution_mode)} />
+        <Metric label="交易模式" value={tradeModeLabel(readiness?.trade_mode)} />
+        <Metric label="授权档案" value={`${num(readiness?.authorized_profile_count, 0)}/${num(readiness?.profile_count, 0)}`} />
+        <Metric label="DeepSeek" value={readiness?.deepseek_ready ? "已配置" : "缺失"} tone={readiness?.deepseek_ready ? "good" : "warn"} />
+      </div>
+      <div className="mt-3 grid grid-cols-5 gap-3">
+        <Metric label="交易所状态" value={exchangeStatusLabel(exchangePayload.status)} tone={exchangePayload.can_open_new_entries ? "good" : "bad"} />
+        <Metric label="新开仓" value={exchangePayload.can_open_new_entries ? "允许" : "禁止"} tone={exchangePayload.can_open_new_entries ? "good" : "bad"} />
+        <Metric label="最近对账" value={reconciliationStatusLabel(reconciliationPayload.status)} tone={reconciliationPayload.status === "ok" ? "good" : "warn"} />
+        <Metric label="数据新鲜度" value={healthStatusLabel(dataHealthPayload.status)} tone={dataHealthPayload.status === "ok" ? "good" : dataHealthPayload.status === "block" ? "bad" : "warn"} />
+        <Metric label="AI 漂移" value={healthStatusLabel(aiDriftPayload.status)} tone={aiDriftPayload.status === "ok" ? "good" : aiDriftPayload.status === "block" ? "bad" : "warn"} />
+      </div>
+      <div className="mt-3 grid grid-cols-3 gap-2 text-[11px] text-[#53627a]">
+        <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3">
+          <div className="font-semibold text-[#172033]">交易所降级说明</div>
+          <div className="mt-1 leading-relaxed">{exchangeSafetyReason(exchangePayload.reason)}</div>
+          <div className="mt-1 leading-relaxed">{exchangeSafetyReason(exchangePayload.manual_action)}</div>
+        </div>
+        <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3">
+          <div className="font-semibold text-[#172033]">订单状态机</div>
+          <div className="mt-1 leading-relaxed">{orderLifecycleSummary(orderLifecyclePayload)}</div>
+          <div className="mt-1 leading-relaxed">{workerHeartbeatSummary(workerHeartbeats)}</div>
+          <div className="mt-1 leading-relaxed">阻断：{blockedReasons.length ? blockedReasons.join(" / ") : "无"}</div>
+        </div>
+        <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3">
+          <div className="font-semibold text-[#172033]">最新新闻风险审计</div>
+          <div className="mt-1 leading-relaxed">{newsRiskSummary(newsRiskPayload)}</div>
+        </div>
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        {(readiness?.checks || []).map((check) => (
+          <div key={check.id} className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-semibold text-[#172033]">{readinessCheckLabel(check.label)}</span>
+              <span className={`rounded-full px-2 py-1 text-[10px] ${readinessToneClass(check.status)}`}>{readinessLabel(check.status)}</span>
+            </div>
+            <div className="mt-2 text-[11px] leading-relaxed text-[#53627a]">{readinessDetail(check.detail)}</div>
+          </div>
+        ))}
+      </div>
+    </Surface>
+  );
+}
+
+function exchangeStatusLabel(status: unknown) {
+  const value = String(status || "--");
+  const labels: Record<string, string> = {
+    ok: "正常",
+    degraded_readonly: "只读降级",
+    reconciliation_required: "需要对账",
+    blocked: "阻断",
+  };
+  return labels[value] || value;
+}
+
+function reconciliationStatusLabel(status: unknown) {
+  if (!status) return "未完成";
+  return exchangeStatusLabel(status);
+}
+
+function healthStatusLabel(status: unknown) {
+  const value = String(status || "warn");
+  if (value === "ok") return "正常";
+  if (value === "block") return "阻断";
+  return "警告";
+}
+
+function exchangeSafetyReason(value: unknown) {
+  const text = String(value || "Mock 模式无需私有对账；实盘模式必须先完成 Gate 持仓、余额、挂单与止损对账。");
+  return text
+    .replace("exchange_reconciliation_not_run", "尚未完成交易所私有状态对账。")
+    .replace("exchange_private_state_stale_over_5m", "交易所私有状态超过 5 分钟不可验证，禁止新开仓。")
+    .replace("exchange_reconciliation_required", "交易所状态与本地状态需要人工复核。")
+    .replace("mock_gateway_no_private_reconciliation_required", "Mock 网关不需要私有交易所对账。")
+    .replace("exchange_reconciliation_ok", "交易所私有状态对账通过。");
+}
+
+function newsRiskSummary(payload: Record<string, unknown>) {
+  if (!Object.keys(payload).length) return "当前没有重大新闻复评记录。";
+  const event = payload.event && typeof payload.event === "object" ? (payload.event as Record<string, unknown>) : {};
+  const risk = payload.risk && typeof payload.risk === "object" ? (payload.risk as Record<string, unknown>) : {};
+  const title = String(event.title || "重大新闻复评");
+  const reason = String(risk.reason || "--");
+  return `${title}；风控结论：${reason}`;
+}
+
+function orderLifecycleSummary(payload: Record<string, unknown>) {
+  if (!Object.keys(payload).length) return "无记录";
+  const status = String(payload.status || "--");
+  const clientOrderId = String(payload.client_order_id || "").slice(-8);
+  const labels: Record<string, string> = {
+    intent_recorded: "意图已记录",
+    submitting: "提交中",
+    submitted: "已提交",
+    accepted: "已接收",
+    partially_filled: "部分成交",
+    filled: "已成交",
+    cancel_pending: "撤单中",
+    cancelled: "已撤单",
+    cancel_failed: "撤单失败",
+    rejected: "拒单",
+    unknown: "未知",
+    duplicate_suppressed: "重复抑制",
+    blocked: "阻断",
+  };
+  return `${labels[status] || status}${clientOrderId ? ` #${clientOrderId}` : ""}`;
+}
+
+function workerHeartbeatSummary(rows: Record<string, DbRow | null>) {
+  const entries = Object.entries(rows);
+  if (!entries.length) return "Worker 心跳：无记录";
+  const failed = entries
+    .filter(([, row]) => !row || String(row.payload?.status || "warn") !== "ok")
+    .map(([worker]) => worker.replace("_worker", ""));
+  return failed.length ? `Worker 心跳异常：${failed.join(" / ")}` : "Worker 心跳正常";
+}
+
+function readinessLabel(status: string) {
+  if (status === "ok") return "正常";
+  if (status === "block") return "阻断";
+  return "警告";
+}
+
+function readinessToneClass(status: string) {
+  if (status === "ok") return "bg-[#e7f8ee] text-[#0a9f5a]";
+  if (status === "block") return "bg-[#fff1f2] text-[#e11d48]";
+  return "bg-[#fff7e6] text-[#b7791f]";
+}
+
+function readinessCheckLabel(label: string) {
+  const labels: Record<string, string> = {
+    Database: "数据库",
+    "Strategy profiles": "策略档案",
+    "Opening authorization": "开仓授权",
+    "Opening pause": "开仓暂停",
+    DeepSeek: "DeepSeek",
+    "Risk limits": "风控上限",
+    "News cache": "新闻缓存",
+    "Backtest audit": "回测审计",
+    "Exchange safety": "交易所安全",
+    "Exchange reconciliation": "交易所对账",
+    "Data freshness": "数据新鲜度",
+    "AI drift": "AI 漂移",
+    "Major news risk review": "重大新闻复评",
+    "Order lifecycle": "订单生命周期",
+    "Worker heartbeat": "Worker 心跳",
+    "Runtime maintenance": "运行维护",
+    "Live AI guard": "实盘 AI 保护",
+  };
+  return labels[label] || label;
+}
+
+function readinessDetail(detail: string) {
+  return detail
+    .replace("SQLite store is reachable.", "SQLite 存储可访问。")
+    .replace("profiles enabled.", "个策略档案已启用。")
+    .replace("symbols authorized for opening.", "个标的已授权开仓。")
+    .replace("Opening is paused.", "开仓当前处于暂停状态。")
+    .replace("Opening is enabled.", "开仓当前允许。")
+    .replace("DeepSeek API key is configured.", "DeepSeek API Key 已配置。")
+    .replace("DeepSeek API key is missing; AI decisions will degrade.", "DeepSeek API Key 缺失，AI 决策会降级。")
+    .replace("Max total leverage:", "总杠杆上限：")
+    .replace("Latest news cache is missing.", "新闻缓存缺失。")
+    .replace("Latest backtest run is missing.", "回测记录缺失。")
+    .replace("Latest exchange reconciliation is missing.", "交易所对账记录缺失。")
+    .replace("Latest data freshness check is missing.", "数据新鲜度记录缺失。")
+    .replace("Latest AI drift check is missing.", "AI 漂移记录缺失。")
+    .replace("Latest major news risk review is missing.", "重大新闻复评记录缺失。")
+    .replace("Latest order lifecycle event is missing.", "订单生命周期记录缺失。")
+    .replace("All runtime worker heartbeats are fresh.", "所有运行 worker 心跳新鲜。")
+    .replace("Worker heartbeat problem:", "Worker 心跳异常：")
+    .replace("Runtime maintenance has not run yet.", "运行维护尚未执行。")
+    .replace("Runtime maintenance completed without warnings.", "运行维护无告警完成。")
+    .replace("Runtime maintenance warnings:", "运行维护告警：")
+    .replace("Disk space is below the configured floor.", "磁盘空间低于配置下限。")
+    .replace("Live mode requires a configured AI key for the current policy.", "当前策略要求实盘模式必须配置 AI Key。")
+    .replace("Latest news cache was updated", "新闻缓存更新于")
+    .replace("Latest backtest run was updated", "最近回测更新于")
+    .replace("Latest exchange reconciliation was updated", "交易所对账更新于")
+    .replace("Latest data freshness check was updated", "数据新鲜度更新于")
+    .replace("Latest AI drift check was updated", "AI 漂移更新于")
+    .replace("Latest major news risk review was updated", "重大新闻复评更新于")
+    .replace("Latest order lifecycle event was updated", "订单生命周期更新于")
+    .replace("less than 1 minute ago.", "1 分钟内。")
+    .replace("minutes ago.", "分钟前。");
+}
+function RoadmapItem({ title, body, done = false }: { title: string; body: string; done?: boolean }) {
+  return (
+    <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3">
+      <div className={done ? "text-[#0a9f5a]" : "text-[#b7791f]"}>{title}</div>
+      <div className="mt-1">{body}</div>
+    </div>
+  );
+}
+
+function BacktestPanel({
+  symbol,
+  setSymbol,
+  symbols,
+  profile,
+}: {
+  symbol: string;
+  setSymbol: (value: string) => void;
+  symbols: string[];
+  profile: StrategyProfile | undefined;
+}) {
+  const [startDate, setStartDate] = useState("2022-01-01");
+  const [endDate, setEndDate] = useState("2026-05-20");
+  const [dataSource, setDataSource] = useState("binance");
+  const [feeRate, setFeeRate] = useState("0.0004");
+  const [slippageBps, setSlippageBps] = useState("0");
+  const [leverage, setLeverage] = useState("4");
+  const [aiProxy, setAiProxy] = useState(false);
+  const [job, setJob] = useState<BacktestJob | null>(null);
+  const [result, setResult] = useState<BacktestResult | null>(null);
+  const [optimization, setOptimization] = useState<OptimizationResult | null>(null);
+  const [runs, setRuns] = useState<Array<DbRow>>([]);
+  const [error, setError] = useState("");
+  const [running, setRunning] = useState(false);
+  const trades = result?.trade_ledger || result?.trades || [];
+
+  const loadRuns = useCallback(async () => {
+    try {
+      const response = await api<ApiList>(`/api/backtest/runs?limit=24&symbol=${encodeURIComponent(symbol)}`, {
+        timeoutMs: 8000,
+        retries: 1,
+      });
+      setRuns(response.items || []);
+    } catch (error) {
+      setError(`回测历史加载失败：${errText(error)}`);
+    }
+  }, [symbol]);
+
+  useEffect(() => {
+    const defaults = profile?.backtest_defaults || {};
+    setDataSource(String(defaults.data_source || "binance"));
+    setFeeRate(String(defaults.fee_rate ?? "0.0004"));
+    setSlippageBps(String(defaults.slippage_bps ?? "0"));
+    setLeverage(String(defaults.leverage ?? "4"));
+  }, [profile?.symbol]);
+
+  useEffect(() => {
+    void loadRuns();
+  }, [loadRuns]);
+
+  const poll = async (jobId: string) => {
+    for (let idx = 0; idx < 480; idx += 1) {
+      await new Promise((resolve) => window.setTimeout(resolve, 1200));
+      const next = await api<BacktestJob>(`/api/backtest/jobs/${jobId}`, { timeoutMs: 8000, retries: 1 });
+      setJob(next);
+      if (next.status === "completed") return next;
+      if (next.status === "failed") throw new Error(next.error || "job failed");
+    }
+    throw new Error("job timeout");
+  };
+
+  const basePayload = () => ({
+    operator_id: "console",
+    symbol,
+    timeframe: "1h",
+    limit: 50000,
+    data_source: dataSource,
+    start_date: startDate,
+    end_date: endDate,
+    initial_equity: 200,
+    fee_rate: Number(feeRate) || 0,
+    slippage_bps: Number(slippageBps) || 0,
+    leverage: Number(leverage) || 1,
+  });
+
+  const runBacktest = async () => {
+    setRunning(true);
+    setError("");
+    setResult(null);
+    setOptimization(null);
+    try {
+      const started = await api<{ job_id: string }>("/api/backtest/trend/job", {
+        method: "POST",
+        body: JSON.stringify({ ...basePayload(), ai_proxy: aiProxy }),
+        timeoutMs: 12000,
+      });
+      const done = await poll(started.job_id);
+      setResult(done.result as BacktestResult);
+      await loadRuns();
+    } catch (error) {
+      setError(errText(error));
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const optimize = async () => {
+    setRunning(true);
+    setError("");
+    setResult(null);
+    setOptimization(null);
+    try {
+      const opt = profile?.optimization_defaults || {};
+      const started = await api<{ job_id: string }>("/api/backtest/trend/optimize/job", {
+        method: "POST",
+        timeoutMs: 12000,
+        body: JSON.stringify({
+          ...basePayload(),
+          validation_ratio: Number(opt.validation_ratio) || 0.3,
+          min_trades: Number(opt.min_trades) || 20,
+          max_candidates: Number(opt.max_candidates) || 512,
+          top_n: Number(opt.top_n) || 10,
+          ema_lengths: arrayValue<number>(opt.ema_lengths, [89]),
+          kc_lengths: arrayValue<number>(opt.kc_lengths, [20]),
+          kc_scalars: arrayValue<number>(opt.kc_scalars, [2.4, 2.6, 2.8, 3.0, 3.2]),
+          atr_lengths: arrayValue<number>(opt.atr_lengths, [14]),
+          vma_lengths: arrayValue<number>(opt.vma_lengths, [20]),
+          volume_multiples: arrayValue<number>(opt.volume_multiples, [2.0, 2.2, 2.5, 2.8, 3.0]),
+          atr_stop_multiples: arrayValue<number>(opt.atr_stop_multiples, [1.2, 1.5, 1.8, 2.0]),
+          position_fractions: arrayValue<number>(opt.position_fractions, [Number(profile?.params?.position_fraction) || 0.5]),
+          use_ema_filters: arrayValue<boolean>(opt.use_ema_filters, [false]),
+          use_volume_filters: arrayValue<boolean>(opt.use_volume_filters, [true]),
+          momentum_filters: arrayValue<string>(opt.momentum_filters, ["kdj"]),
+          kdj_lengths: arrayValue<number>(opt.kdj_lengths, [7, 9, 14]),
+        }),
+      });
+      const done = await poll(started.job_id);
+      setOptimization(done.result as OptimizationResult);
+      await loadRuns();
+    } catch (error) {
+      setError(errText(error));
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const applyRun = (row: DbRow) => {
+    const payload = row.payload as Record<string, unknown>;
+    const request = (payload.request as Record<string, unknown> | undefined) || {};
+    const runType = String(payload.type || "");
+    if (typeof request.symbol === "string" && symbols.includes(request.symbol)) setSymbol(request.symbol);
+    if (typeof request.data_source === "string") setDataSource(request.data_source);
+    if (typeof request.start_date === "string") setStartDate(request.start_date);
+    if (typeof request.end_date === "string") setEndDate(request.end_date);
+    if (request.fee_rate !== undefined) setFeeRate(String(request.fee_rate));
+    if (request.slippage_bps !== undefined) setSlippageBps(String(request.slippage_bps));
+    if (request.leverage !== undefined) setLeverage(String(request.leverage));
+    setAiProxy(Boolean(request.ai_proxy));
+    if (runType === "parameter_optimization") {
+      setOptimization(payload.result as OptimizationResult);
+      setResult(null);
+    } else {
+      setResult(payload.result as BacktestResult);
+      setOptimization(null);
+    }
+  };
+
+  const exportCurrentTrades = () => {
+    if (!trades.length) return;
+    exportTradesCsv(trades, `${shortSymbol(symbol)}_${startDate}_${endDate}_trades.csv`);
+  };
+
+  return (
+    <Surface
+      title={<><LineChart size={13} /> 策略回测与寻优</>}
+      action={<span className={mono}>{job?.progress || 0}%</span>}
+    >
+      <div className="grid gap-3 2xl:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="rounded-2xl border border-[#dfe7f1] bg-[#f8fbff] p-3">
+          <div className="mb-3 flex items-center justify-between">
+            <div>
+              <div className="text-xs font-semibold text-[#172033]">回测设置</div>
+              <div className="mt-1 text-[11px] text-[#7b8798]">信号使用已收盘K线，成交按下一可交易价格；实盘与回测必须共享同一策略契约。</div>
+            </div>
+            <span className="rounded-full bg-white px-3 py-1 text-[11px] text-[#53627a] shadow-sm">
+              档案 <span className={mono}>{profile?.profile_name || "--"}</span>
+            </span>
+          </div>
+          <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+            <BacktestField label="标的">
+              <select className={`${input} ${mono} w-full`} value={symbol} onChange={(event) => setSymbol(event.target.value)}>
+                {symbols.map((item) => (
+                  <option key={item} value={item}>{shortSymbol(item)}</option>
+                ))}
+              </select>
+            </BacktestField>
+            <BacktestField label="数据源">
+              <select className={`${input} ${mono} w-full`} value={dataSource} onChange={(event) => setDataSource(event.target.value)}>
+                {["binance", "okx", "gateio", "auto"].map((item) => <option key={item} value={item}>{item}</option>)}
+              </select>
+            </BacktestField>
+            <BacktestField label="开始日期">
+              <input className={`${input} ${mono} w-full`} value={startDate} onChange={(event) => setStartDate(event.target.value)} />
+            </BacktestField>
+            <BacktestField label="结束日期">
+              <input className={`${input} ${mono} w-full`} value={endDate} onChange={(event) => setEndDate(event.target.value)} />
+            </BacktestField>
+            <BacktestField label="手续费率">
+              <input className={`${input} ${mono} w-full`} value={feeRate} onChange={(event) => setFeeRate(event.target.value)} />
+            </BacktestField>
+            <BacktestField label="滑点 bps">
+              <input className={`${input} ${mono} w-full`} value={slippageBps} onChange={(event) => setSlippageBps(event.target.value)} />
+            </BacktestField>
+            <BacktestField label="杠杆">
+              <input className={`${input} ${mono} w-full`} value={leverage} onChange={(event) => setLeverage(event.target.value)} />
+            </BacktestField>
+            <BacktestField label="AI代理过滤">
+              <label className="flex h-9 items-center gap-2 rounded-lg border border-[#d8e1ee] bg-white px-2 text-xs text-[#53627a]">
+                <input type="checkbox" checked={aiProxy} onChange={(event) => setAiProxy(event.target.checked)} />
+                启用本地代理
+              </label>
+            </BacktestField>
+          </div>
+        </div>
+        <div className="rounded-2xl border border-[#dfe7f1] bg-white p-3">
+          <div className="text-xs font-semibold text-[#172033]">执行假设</div>
+          <div className="mt-3 grid gap-2 text-[11px]">
+            <BoundaryLine label="初始权益" value="200 USDT" />
+            <BoundaryLine label="名义仓位" value={`${num(profile?.backtest_defaults?.notional_multiple, 2)}x`} />
+            <BoundaryLine label="手续费" value={`${num(Number(feeRate) * 100, 4)}% / side`} />
+            <BoundaryLine label="滑点" value={`${num(slippageBps, 2)} bps`} />
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <button className={button} disabled={running} onClick={runBacktest}>{running ? "运行中" : "开始回测"}</button>
+            <button className={button} disabled={running} onClick={optimize}>参数寻优</button>
+            <button className={`${button} col-span-2`} disabled={!trades.length || running} onClick={exportCurrentTrades}>
+              导出当前交割单 CSV
+            </button>
+          </div>
+          {job?.message ? <div className="mt-2 text-[11px] text-[#53627a]">{job.message}</div> : null}
+        </div>
+      </div>
+      {error ? <div className="mt-2 rounded-xl border border-[#ffd1d6] bg-[#fff1f2] p-2 text-[11px] text-[#e11d48]">{error}</div> : null}
+      {result ? <BacktestMetrics result={result} /> : null}
+      {optimization ? <OptimizationView result={optimization} /> : null}
+      {trades.length ? <TradeLedgerTable trades={trades} /> : null}
+      <BacktestRunHistory
+        runs={runs}
+        onSelect={applyRun}
+      />
+    </Surface>
+  );
+}
+
+function BacktestField({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <label className="block">
+      <span className="mb-1 block text-[10px] uppercase tracking-wide text-[#7b8798]">{label}</span>
+      {children}
+    </label>
+  );
+}
+
+function BacktestMetrics({ result }: { result: BacktestResult }) {
+  const raw = result.raw_ai_proxy;
+  const aiApplied = Boolean(result.ai_guard_applied || raw);
+  return (
+    <div className="mt-3 space-y-3">
+      <div className="grid grid-cols-2 gap-2 lg:grid-cols-6">
+        <Metric label="收益率" value={pct(result.total_return_pct)} tone={Number(result.total_return_pct) >= 0 ? "good" : "bad"} />
+        <Metric label="最大回撤" value={pct(result.max_drawdown_pct)} tone="warn" />
+        <Metric label="交易数" value={num(result.trade_count, 0)} />
+        <Metric label="胜率" value={pct(result.win_rate_pct)} />
+        <Metric label="盈利因子" value={num(result.profit_factor, 3)} tone={Number(result.profit_factor) >= 1 ? "good" : "bad"} />
+        <Metric label="成本占比" value={pct(result.cost_model?.cost_pct_of_initial_equity)} />
+      </div>
+      {aiApplied ? (
+        <div className="rounded-2xl border border-[#ffdca8] bg-[#fff8ed] p-3">
+          <div className="mb-2 flex items-center justify-between text-xs">
+            <span className="font-semibold text-[#8a5a00]">AI代理对比</span>
+            <span className="text-[11px] text-[#8a5a00]">用于评估过滤/减仓是否正优化，不等同真实 DeepSeek 历史调用</span>
+          </div>
+          <div className="grid grid-cols-2 gap-2 lg:grid-cols-6">
+            <Metric label="原始收益" value={pct(raw?.total_return_pct)} />
+            <Metric label="AI后收益" value={pct(result.total_return_pct)} tone={Number(result.total_return_pct) >= Number(raw?.total_return_pct || 0) ? "good" : "bad"} />
+            <Metric label="原始回撤" value={pct(raw?.max_drawdown_pct)} />
+            <Metric label="AI后回撤" value={pct(result.max_drawdown_pct)} tone={Number(result.max_drawdown_pct) <= Number(raw?.max_drawdown_pct || 0) ? "good" : "warn"} />
+            <Metric label="原始交易" value={num(raw?.trade_count, 0)} />
+            <Metric label="AI后交易" value={num(result.trade_count, 0)} />
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function TradeLedgerTable({ trades }: { trades: BacktestTrade[] }) {
+  return (
+    <div className="mt-3 overflow-hidden rounded-2xl border border-[#dfe7f1] bg-white">
+      <div className="flex h-10 items-center justify-between border-b border-[#e6edf5] px-3 text-xs">
+        <span className="font-semibold text-[#172033]">交割单明细</span>
+        <span className="text-[11px] text-[#7b8798]">显示前 {Math.min(trades.length, 160)} / {trades.length} 笔</span>
+      </div>
+      <div className="max-h-72 overflow-auto">
+        <table className="w-full min-w-[980px] text-left text-[10px]">
+          <thead className="sticky top-0 bg-[#f8fbff] text-[#53627a]">
+            <tr>
+              <th className="px-2 py-2">开仓时间</th>
+              <th className="px-2 py-2">方向</th>
+              <th className="px-2 py-2">开仓价</th>
+              <th className="px-2 py-2">数量</th>
+              <th className="px-2 py-2">止损价</th>
+              <th className="px-2 py-2">平仓时间</th>
+              <th className="px-2 py-2">平仓价</th>
+              <th className="px-2 py-2">退出</th>
+              <th className="px-2 py-2">盈亏</th>
+              <th className="px-2 py-2">收益</th>
+              <th className="px-2 py-2">费用</th>
+              <th className="px-2 py-2">滑点</th>
+              <th className="px-2 py-2">MAE</th>
+            </tr>
+          </thead>
+          <tbody>
+            {trades.slice(0, 160).map((trade, idx) => (
+              <tr key={`${trade.entry_time || idx}-${trade.exit_time || idx}`} className="border-t border-[#edf2f7] text-[#2f3b52]">
+                <td className={`${mono} px-2 py-2`}>{trade.entry_time || "--"}</td>
+                <td className="px-2 py-2">{formatSide(trade.side)}</td>
+                <td className={`${mono} px-2 py-2`}>{num(trade.entry_price, 4)}</td>
+                <td className={`${mono} px-2 py-2`}>{num(trade.qty, 4)}</td>
+                <td className={`${mono} px-2 py-2`}>{num(trade.stop_loss_price, 4)}</td>
+                <td className={`${mono} px-2 py-2`}>{trade.exit_time || "--"}</td>
+                <td className={`${mono} px-2 py-2`}>{num(trade.exit_price, 4)}</td>
+                <td className="px-2 py-2">{trade.exit_reason || "--"}</td>
+                <td className={`${mono} px-2 py-2 ${Number(trade.pnl) >= 0 ? "text-[#0a9f5a]" : "text-[#e11d48]"}`}>{num(trade.pnl, 4)}</td>
+                <td className={`${mono} px-2 py-2`}>{pct(trade.return_pct)}</td>
+                <td className={`${mono} px-2 py-2`}>{num(trade.fee_paid, 4)}</td>
+                <td className={`${mono} px-2 py-2`}>{num(trade.slippage_paid, 4)}</td>
+                <td className={`${mono} px-2 py-2 text-[#e11d48]`}>{pct(trade.max_adverse_excursion_pct)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function formatSide(side?: string) {
+  const normalized = String(side || "").toLowerCase();
+  if (normalized.includes("long") || normalized === "buy") return "做多";
+  if (normalized.includes("short") || normalized === "sell") return "做空";
+  return side || "--";
+}
+
+function exportTradesCsv(trades: BacktestTrade[], filename: string) {
+  const headers = [
+    "entry_time",
+    "side",
+    "entry_price",
+    "qty",
+    "stop_loss_price",
+    "exit_time",
+    "exit_price",
+    "exit_reason",
+    "pnl",
+    "return_pct",
+    "fee_paid",
+    "slippage_paid",
+    "max_adverse_excursion_pct",
+  ];
+  const lines = [
+    headers.join(","),
+    ...trades.map((trade) =>
+      headers
+        .map((key) => csvCell((trade as Record<string, unknown>)[key]))
+        .join(","),
+    ),
+  ];
+  const blob = new Blob([`\uFEFF${lines.join("\n")}`], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename.replace(/[^\w.-]+/g, "_");
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
+function csvCell(value: unknown) {
+  if (value === null || value === undefined) return "";
+  const text = String(value);
+  if (/[",\n\r]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
+  return text;
+}
+
+function BacktestRunHistory({ runs, onSelect }: { runs: Array<DbRow>; onSelect: (row: DbRow) => void }) {
+  return (
+    <div className="mt-3 overflow-hidden rounded-2xl border border-[#dfe7f1] bg-white">
+      <div className="flex h-10 items-center justify-between border-b border-[#e6edf5] px-3 text-xs">
+        <span className="font-semibold text-[#172033]">历史回测与寻优记录</span>
+        <span className="text-[11px] text-[#7b8798]">来自 SQLite backtest_runs，按当前标的过滤</span>
+      </div>
+      <div className="max-h-56 overflow-auto">
+        {runs.length ? (
+          runs.map((row) => {
+            const payload = row.payload as Record<string, unknown>;
+            const summary = (payload.summary as Record<string, unknown> | undefined) || {};
+            const request = (payload.request as Record<string, unknown> | undefined) || {};
+            const isOptimization = String(payload.type || "") === "parameter_optimization";
+            return (
+              <button
+                key={row.id}
+                className="grid w-full grid-cols-[110px_1fr_78px_78px_70px_72px] gap-2 border-b border-[#edf2f7] px-3 py-2 text-left text-[11px] hover:bg-[#f8fbff]"
+                onClick={() => onSelect(row)}
+              >
+                <span>
+                  <span className={`rounded-full px-2 py-1 ${isOptimization ? "bg-[#fff7e6] text-[#b7791f]" : "bg-[#eaf0ff] text-[#2454ff]"}`}>
+                    {isOptimization ? "寻优" : "回测"}
+                  </span>
+                </span>
+                <span className="min-w-0 truncate text-[#2f3b52]">
+                  {row.created_at} / {String(request.start_date || "--")} 至 {String(request.end_date || "--")} / {String(request.data_source || "--")}
+                </span>
+                <span className={mono}>收益 {pct(summary.total_return_pct)}</span>
+                <span className={mono}>回撤 {pct(summary.max_drawdown_pct)}</span>
+                <span className={mono}>交易 {num(summary.trade_count, 0)}</span>
+                <span className={mono}>PF {num(summary.profit_factor, 3)}</span>
+              </button>
+            );
+          })
+        ) : (
+          <div className="px-3 py-6 text-center text-xs text-[#7b8798]">当前标的还没有落库回测记录。</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function OptimizationView({ result }: { result: OptimizationResult }) {
+  const best = result.best;
+  const params = best?.params || {};
+  return (
+    <div className="mt-3 rounded-2xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-[11px]">
+      <div className="mb-3 flex items-center justify-between">
+        <div>
+          <div className="text-xs font-semibold text-[#172033]">参数寻优结果</div>
+          <div className="mt-1 text-[#7b8798]">{String(result.selection_policy || "按验证集收益、回撤、交易数和稳定性综合排序")}</div>
+        </div>
+        <span className="rounded-full bg-white px-3 py-1 text-[#53627a] shadow-sm">{num(result.searched_candidates, 0)} 个候选</span>
+      </div>
+      <div className="grid grid-cols-2 gap-2 lg:grid-cols-6">
+        <Metric label="组合" value={String(params.momentum_filter || "无")} />
+        <Metric label="KC长度" value={num(params.kc_length, 0)} />
+        <Metric label="KC宽度" value={num(params.kc_scalar, 2)} />
+        <Metric label="VOL倍数" value={num(params.volume_multiple, 2)} />
+        <Metric label="KDJ周期" value={num(params.kdj_length, 0)} />
+        <Metric label="ATR止损" value={num(params.atr_stop_multiple, 2)} />
+      </div>
+      <div className="mt-2 grid grid-cols-2 gap-2 lg:grid-cols-6">
+        <Metric label="训练收益" value={pct(best?.train?.total_return_pct)} />
+        <Metric label="训练回撤" value={pct(best?.train?.max_drawdown_pct)} />
+        <Metric label="训练交易" value={num(best?.train?.trade_count, 0)} />
+        <Metric label="验证收益" value={pct(best?.validation?.total_return_pct)} tone={Number(best?.validation?.total_return_pct) >= 0 ? "good" : "bad"} />
+        <Metric label="验证回撤" value={pct(best?.validation?.max_drawdown_pct)} tone="warn" />
+        <Metric label="验证PF" value={num(best?.validation?.profit_factor, 3)} />
+      </div>
+      {best?.warnings?.length ? (
+        <div className="mt-2 rounded-xl border border-[#ffdca8] bg-[#fff8ed] p-2 text-[#8a5a00]">
+          {best.warnings.join(" / ")}
+        </div>
+      ) : null}
+      <div className="mt-3 max-h-36 overflow-auto rounded-xl border border-[#dfe7f1] bg-white">
+        {(result.candidates || []).map((item, idx) => (
+          <div key={idx} className="grid grid-cols-[42px_minmax(0,1fr)_80px_80px_80px_70px] gap-2 border-t border-[#edf2f7] px-2 py-2 first:border-t-0">
+            <span className={mono}>#{idx + 1}</span>
+            <span className={`${mono} truncate`}>
+              {String(item.params?.momentum_filter || "无")} / KC{num(item.params?.kc_scalar, 2)} / VOL{num(item.params?.volume_multiple, 2)} / ATR{num(item.params?.atr_stop_multiple, 2)}
+            </span>
+            <span>收益 {pct(item.validation?.total_return_pct)}</span>
+            <span>回撤 {pct(item.validation?.max_drawdown_pct)}</span>
+            <span>PF {num(item.validation?.profit_factor, 3)}</span>
+            <span>分数 {num(item.score, 3)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function arrayValue<T>(value: unknown, fallback: T[]): T[] {
+  return Array.isArray(value) && value.length > 0 ? (value as T[]) : fallback;
+}
+
+function AiBrainWorkspace({
+  symbol,
+  status,
+  platform,
+  profile,
+  decisions,
+}: {
+  symbol: string;
+  status: StatusResponse | null;
+  platform: PlatformOverview | null;
+  profile?: StrategyProfile;
+  decisions: Array<DbRow>;
+}) {
+  const ai = status?.ai || {};
+  const latestDecision = status?.latest_decisions?.[symbol]?.payload || decisions[0]?.payload || { state: "等待下一次AI判断" };
+  const reviewRuns = platform?.latest_ai_review_runs || [];
+  return (
+    <section className="min-h-0 space-y-5 overflow-auto pr-1">
+      <Surface title={<><BrainCircuit size={13} /> DeepSeek 五档决策中心</>}>
+        <div className="grid grid-cols-6 gap-3">
+          <Metric label="接入状态" value={ai.api_key_configured ? "已配置" : "未配置"} tone={ai.api_key_configured ? "good" : "warn"} />
+          <Metric label="常规模型" value={String(ai.decision_model || "--")} />
+          <Metric label="突发筛查" value={String(ai.emergency_screening_model || "--")} />
+          <Metric label="当前标的" value={shortSymbol(symbol)} />
+          <Metric label="策略档案" value={profile?.profile_name || "--"} />
+          <Metric label="AI评估记录" value={num(reviewRuns.length, 0)} />
+        </div>
+        <div className="mt-4">
+          <DecisionSummary data={latestDecision} />
+        </div>
+      </Surface>
+
+      <div className="grid grid-cols-5 gap-3">
+        <AiLevelCard level="满仓" scale="100%" condition="技术、趋势、新闻、订单流/密集区强共识，AI 置信度达标。" tone="good" />
+        <AiLevelCard level="强仓" scale="75%" condition="五分制评分较强，但未满足满仓共识条件。" tone="good" />
+        <AiLevelCard level="标准仓" scale="50%" condition="趋势有效，部分确认因子仍需折扣。" tone="warn" />
+        <AiLevelCard level="弱仓" scale="25%" condition="刚超过最低交易阈值，只允许小仓验证。" tone="warn" />
+        <AiLevelCard level="阻断" scale="0%" condition="震荡/方向冲突/置信度不足/硬风控触发。" tone="bad" />
+      </div>
+
+      <div className="grid min-h-0 grid-cols-[minmax(0,1fr)_420px] gap-5 overflow-hidden">
+        <Surface title={<><ShieldCheck size={13} /> AI 不可越权边界</>}>
+          <div className="grid grid-cols-2 gap-3 text-xs text-[#53627a]">
+            <Guardrail title="不能绕过策略信号" body="当前真实执行仍以本地趋势策略触发为入口，AI 只能确认、降仓或否决。" />
+            <Guardrail title="不能绕过授权" body="冷启动暂停、逐标的授权、同向持仓禁止重复加仓都在 RiskManager 层强制执行。" />
+            <Guardrail title="不能突破杠杆上限" body="总名义仓位必须被裁剪到权益乘以全局杠杆上限以内。" />
+            <Guardrail title="不能直接晋升参数" body="回测或 AI 建议必须经过验证，不能直接改实盘策略参数。" />
+          </div>
+          <div className="mt-4">
+            <JsonBlock data={latestDecision} maxHeight="max-h-80" />
+          </div>
+        </Surface>
+
+        <Surface title={<><BrainCircuit size={13} /> 最近 AI 决策</>}>
+          <div className="max-h-[520px] overflow-auto">
+            {decisions.length ? (
+              decisions.slice(0, 24).map((row) => <DecisionRow key={`${row.id}-${row.created_at}`} row={row} />)
+            ) : (
+              <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs text-[#53627a]">暂无 AI 决策记录。</div>
+            )}
+          </div>
+        </Surface>
+      </div>
+    </section>
+  );
+}
+
+function AiLevelCard({
+  level,
+  scale,
+  condition,
+  tone,
+}: {
+  level: string;
+  scale: string;
+  condition: string;
+  tone: "good" | "warn" | "bad";
+}) {
+  const toneClass = tone === "good" ? "text-[#0a9f5a]" : tone === "bad" ? "text-[#e11d48]" : "text-[#b7791f]";
+  return (
+    <div className="rounded-2xl border border-[#d9e2ef] bg-white p-4 shadow-[0_12px_35px_rgba(26,42,68,0.06)]">
+      <div className="text-[11px] uppercase text-[#7b8798]">{level}</div>
+      <div className={`${mono} mt-1 text-2xl font-bold ${toneClass}`}>{scale}</div>
+      <div className="mt-3 text-xs leading-5 text-[#53627a]">{condition}</div>
+    </div>
+  );
+}
+
+function Guardrail({ title, body }: { title: string; body: string }) {
+  return (
+    <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3">
+      <div className="font-semibold text-[#172033]">{title}</div>
+      <div className="mt-1 leading-5">{body}</div>
+    </div>
+  );
+}
+
+function DecisionRow({ row }: { row: DbRow }) {
+  const payload = row.payload || {};
+  const event = payload.event && typeof payload.event === "object" ? (payload.event as Record<string, unknown>) : null;
+  const body = payload.ai && typeof payload.ai === "object"
+    ? (payload.ai as Record<string, unknown>)
+    : payload.payload && typeof payload.payload === "object"
+      ? (payload.payload as Record<string, unknown>)
+      : payload;
+  const risk = payload.risk && typeof payload.risk === "object" ? (payload.risk as Record<string, unknown>) : null;
+  const action = String(body.action_suggestion || body.veto_action || body.action || payload.state || "--");
+  const regime = String(body.regime || event?.event_type || "--");
+  const confidence = body.confidence ?? "--";
+  const direction = String(body.direction || "--");
+  return (
+    <div className="mb-2 rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs">
+      <div className="flex items-center justify-between gap-3">
+        <div className="font-semibold text-[#172033]">{row.symbol ? shortSymbol(row.symbol) : "系统"}</div>
+        <div className={`${mono} text-[11px] text-[#53627a]`}>{row.created_at}</div>
+      </div>
+      <div className="mt-2 grid grid-cols-5 gap-2">
+        <Metric label="状态" value={regime} />
+        <Metric label="方向" value={direction} />
+        <Metric label="动作" value={action} />
+        <Metric label="置信度" value={String(confidence)} />
+        {risk ? <Metric label="仓位档" value={`${tierLabel(risk.position_tier)} ${positionScaleLabel(risk.position_scale)}`} /> : null}
+      </div>
+    </div>
+  );
+}
+
+function AgentGatewayWorkspace({ platform }: { platform: PlatformOverview | null }) {
+  const gateway = platform?.platform.agent_gateway;
+  const [probe, setProbe] = useState<{ status: number; message: string; ok: boolean } | null>(null);
+  const [probing, setProbing] = useState(false);
+
+  const probeHealth = async () => {
+    setProbing(true);
+    try {
+      const response = await fetch("/api/agent/v1/health");
+      const body = await response.json().catch(() => ({}));
+      setProbe({
+        status: response.status,
+        ok: response.ok,
+        message: String((body as Record<string, unknown>).detail || (body as Record<string, unknown>).message || (response.ok ? "ok" : "blocked")),
+      });
+    } catch (error) {
+      setProbe({ status: 0, ok: false, message: errText(error) });
+    } finally {
+      setProbing(false);
+    }
+  };
+
+  return (
+    <section className="min-h-0 space-y-5 overflow-auto pr-1">
+      <Surface
+        title={<><KeyRound size={13} /> Agent 网关控制台</>}
+        action={<button className={button} disabled={probing} onClick={probeHealth}>{probing ? "探测中" : "探测健康接口"}</button>}
+      >
+        <div className="grid grid-cols-6 gap-3">
+          <Metric label="版本" value={gateway?.version || "agent/v1"} />
+          <Metric label="Token" value={gateway?.enabled ? "已配置" : "未配置"} tone={gateway?.enabled ? "warn" : "good"} />
+          <Metric label="权限范围" value={(gateway?.scopes || ["R", "B"]).join("/")} tone="good" />
+          <Metric label="纸面模式" value={gateway?.paper_only ? "强制" : "未知"} tone="good" />
+          <Metric label="实盘交易" value={gateway?.live_trading || "拒绝"} tone="good" />
+          <Metric label="探测结果" value={probe ? `HTTP ${probe.status}` : "未探测"} tone={probe?.ok ? "good" : probe ? "warn" : "default"} />
+        </div>
+        {probe ? (
+          <div className="mt-3 rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs text-[#53627a]">
+            健康接口返回：{probe.message}。浏览器端不保存 Agent Token；如果这里返回 503/401，说明网关未配置或未授权，属于安全阻断。
+          </div>
+        ) : null}
+      </Surface>
+
+      <div className="grid grid-cols-4 gap-3">
+        <AgentCapability title="读取行情" scope="R" status="允许" body="读取市场、策略档案、任务状态。" tone="good" />
+        <AgentCapability title="纸面回测" scope="B" status="允许" body="必须带幂等键，不触碰交易所。" tone="good" />
+        <AgentCapability title="读取密钥" scope="-" status="拒绝" body="密钥只在服务端环境，不能经 Agent 暴露。" tone="bad" />
+        <AgentCapability title="真实下单" scope="-" status="拒绝" body="Agent 默认永远不能直接实盘交易。" tone="bad" />
+      </div>
+
+      <div className="grid min-h-0 grid-cols-[minmax(0,1fr)_420px] gap-5 overflow-hidden">
+        <Surface title={<><ServerCog size={13} /> Agent API 清单</>}>
+          <div className="grid gap-2">
+            <EndpointRow method="GET" path="/api/agent/v1/health" scope="R" note="健康检查；需要 Bearer Token。" />
+            <EndpointRow method="GET" path="/api/agent/v1/strategy-profiles" scope="R" note="读取策略档案；只读。" />
+            <EndpointRow method="POST" path="/api/agent/v1/backtests" scope="B" note="启动纸面回测；必须带 Idempotency-Key。" />
+            <EndpointRow method="GET" path="/api/agent/v1/backtests/{job_id}" scope="R" note="读取 Agent 创建的回测任务。" />
+          </div>
+          <div className="mt-4 grid grid-cols-2 gap-3">
+            <Guardrail title="Token 不进前端" body="浏览器界面只显示是否配置，不显示、不输入、不缓存 Agent Token。" />
+            <Guardrail title="幂等键必需" body="Agent 启动回测必须带 Idempotency-Key，避免网络重试造成重复任务。" />
+            <Guardrail title="审计必需" body="每个 Agent 调用写入 agent_audit_events，记录路由、权限、任务、幂等尾号。" />
+            <Guardrail title="实盘隔离" body="Agent 路由没有下单能力；真实交易仍只走控制台核心执行链路。" />
+          </div>
+        </Surface>
+
+        <Surface title={<><FlaskConical size={13} /> 最近纸面任务</>}>
+          <div className="max-h-[520px] overflow-auto">
+            {(platform?.latest_backtest_runs || []).length ? (
+              (platform?.latest_backtest_runs || []).map((row) => <AgentBacktestRun key={`${row.id}-${row.created_at}`} row={row} />)
+            ) : (
+              <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs text-[#53627a]">暂无回测任务。</div>
+            )}
+          </div>
+        </Surface>
+      </div>
+    </section>
+  );
+}
+
+function AgentCapability({
+  title,
+  scope,
+  status,
+  body,
+  tone,
+}: {
+  title: string;
+  scope: string;
+  status: string;
+  body: string;
+  tone: "good" | "bad";
+}) {
+  const toneClass = tone === "good" ? "text-[#0a9f5a]" : "text-[#e11d48]";
+  return (
+    <div className="rounded-2xl border border-[#dfe7f1] bg-white p-4 shadow-[0_12px_35px_rgba(26,42,68,0.06)]">
+      <div className="flex items-center justify-between gap-3">
+        <div className="font-semibold text-[#172033]">{title}</div>
+        <span className={`${mono} rounded-full border border-[#dfe7f1] bg-[#f8fbff] px-2 py-1 text-[11px]`}>{scope}</span>
+      </div>
+      <div className={`mt-2 text-xl font-bold ${toneClass}`}>{status}</div>
+      <div className="mt-2 text-xs leading-5 text-[#53627a]">{body}</div>
+    </div>
+  );
+}
+
+function EndpointRow({ method, path, scope, note }: { method: string; path: string; scope: string; note: string }) {
+  return (
+    <div className="grid grid-cols-[70px_minmax(0,1fr)_64px] items-center gap-3 rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs">
+      <span className={`${mono} font-semibold text-[#2454ff]`}>{method}</span>
+      <div>
+        <div className={`${mono} truncate font-semibold text-[#172033]`}>{path}</div>
+        <div className="mt-1 text-[#53627a]">{note}</div>
+      </div>
+      <span className="rounded-full bg-white px-2 py-1 text-center text-[11px] text-[#53627a]">scope {scope}</span>
+    </div>
+  );
+}
+
+function AgentBacktestRun({ row }: { row: DbRow }) {
+  const payload = row.payload || {};
+  const summary = payload.summary && typeof payload.summary === "object" ? (payload.summary as Record<string, unknown>) : {};
+  return (
+    <div className="mb-2 rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs">
+      <div className="flex items-center justify-between gap-3">
+        <div className="font-semibold text-[#172033]">{shortSymbol(String(row.symbol || payload.symbol || "--"))}</div>
+        <div className={`${mono} text-[11px] text-[#53627a]`}>{row.created_at}</div>
+      </div>
+      <div className="mt-2 grid grid-cols-3 gap-2">
+        <Metric label="收益率" value={pct(summary.total_return_pct)} />
+        <Metric label="回撤" value={pct(summary.max_drawdown_pct)} />
+        <Metric label="交易数" value={num(summary.trade_count, 0)} />
+      </div>
+    </div>
+  );
+}
+
+function ExecutionWorkspace({
+  symbol,
+  platform,
+  status,
+  balance,
+  positions,
+  orders,
+  accountSlots,
+  riskSummary,
+  busy,
+  postAction,
+}: {
+  symbol: string;
+  platform: PlatformOverview | null;
+  status: StatusResponse | null;
+  balance: Record<string, unknown> | null;
+  positions: Array<DbRow>;
+  orders: Array<DbRow>;
+  accountSlots: ExecutionAccountSlot[];
+  riskSummary: Record<string, unknown> | null;
+  busy: boolean;
+  postAction: (path: string, body: Record<string, unknown>) => Promise<void>;
+}) {
+  const usdt = balance?.USDT && typeof balance.USDT === "object" ? (balance.USDT as Record<string, unknown>) : {};
+  const executionMode = status?.execution_mode || platform?.platform.execution_mode || "mock";
+  const enabled = status?.enabled_symbols || [];
+  const riskCap = Number(riskSummary?.max_total_leverage ?? status?.risk?.max_total_leverage ?? 4);
+  const totalEquity = Number(balance?.total_usdt ?? balance?.usdt_total ?? usdt.total ?? 0);
+  const maxNotional = totalEquity > 0 ? totalEquity * riskCap : 0;
+  const channels = platform?.strategy_channels || [];
+  const trendChannel = channels.find((item) => item.channel === "trend");
+  const rangeChannel = channels.find((item) => item.channel === "range");
+  return (
+    <section className="min-h-0 space-y-5 overflow-auto pr-1">
+      <Surface title={<><ShieldCheck size={13} /> 实盘安全链路</>}>
+        <div className="grid grid-cols-6 gap-3">
+          <Metric label="执行模式" value={executionMode === "live" ? "真实网关" : "模拟网关"} tone={executionMode === "live" ? "warn" : "good"} />
+          <Metric label="交易模式" value={status?.trade_mode || platform?.platform.trade_mode || "--"} />
+          <Metric label="开仓状态" value={status?.opening_paused ? "已暂停" : "允许"} tone={status?.opening_paused ? "warn" : "good"} />
+          <Metric label="授权标的" value={`${enabled.length}`} />
+          <Metric label="权益估算" value={num(totalEquity)} />
+          <Metric label="最大名义" value={num(maxNotional)} />
+        </div>
+        <div className="mt-4 grid grid-cols-5 gap-3">
+          <ExecutionStep title="控制台/Agent" body="只能提交动作请求，不能直接碰交易所密钥。" done />
+          <ExecutionStep title="策略信号" body="必须来自本地策略引擎，AI 不能凭空开仓。" done />
+          <ExecutionStep title="AI 五档" body="只允许确认、降仓、阻断，不允许突破硬风控。" done />
+          <ExecutionStep title="RiskManager" body="授权、同向持仓、杠杆上限、置信度统一裁剪。" done />
+          <ExecutionStep title="Gateway" body={executionMode === "live" ? "Gate.io 真实网关" : "本地 Mock 网关"} done={executionMode === "mock"} warn={executionMode === "live"} />
+        </div>
+      </Surface>
+
+      <div className="grid grid-cols-1 gap-5 2xl:grid-cols-[minmax(0,1fr)_430px]">
+        <Surface title={<><ServerCog size={13} /> 策略运行通道</>}>
+          <div className="grid grid-cols-2 gap-3">
+            <StrategyChannelCard
+              title="趋势策略运行"
+              account={trendChannel?.account_label || "账号1：趋势策略 API"}
+              status={trendChannel?.live_ready ? "实盘就绪" : trendChannel?.executable ? "可运行" : "阻断"}
+              body="当前 ETH 趋势引擎入口。策略信号触发后，DeepSeek 五档仓位确认，再进入 RiskManager 和趋势账号 Gateway。"
+              enabled={Boolean(trendChannel?.executable)}
+              liveReady={Boolean(trendChannel?.live_ready)}
+              details={[
+                `授权标的 ${trendChannel?.authorized_symbols?.length || enabled.length}`,
+                `账户 ${trendChannel?.account_configured ? "已配置" : "未配置"}`,
+                `单账户上限 ${num(riskCap, 1)}x`,
+              ]}
+            />
+            <StrategyChannelCard
+              title="震荡策略运行"
+              account={rangeChannel?.account_label || "账号2：震荡策略 API"}
+              status="模块预留"
+              body="预留给箱体/均值回归/网格策略。未完成回测、风控和账户 Gateway 绑定前，不能实盘执行。"
+              details={[
+                `账户 ${rangeChannel?.account_configured ? "已配置" : "未配置"}`,
+                "策略 未接入",
+                `路由 ${rangeChannel?.gateway_binding === "active" ? "已备好" : "待配置"}`,
+              ]}
+            />
+          </div>
+          <div className="mt-3 rounded-xl border border-[#ffdca8] bg-[#fff8ed] p-3 text-xs leading-5 text-[#8a5a00]">
+            当前按你的要求采用“单账户独立风控”：趋势账户和震荡账户各自最高 4x。组合总风险允许叠加，但控制台会单独展示，不能把它误认为一个账户的 4x 限制。
+          </div>
+        </Surface>
+        <RuntimeModePanel executionMode={executionMode} busy={busy} postAction={postAction} />
+      </div>
+
+      <AccountSlotManager accountSlots={accountSlots} busy={busy} postAction={postAction} />
+
+      <div className="grid grid-cols-4 gap-5">
+        <Surface title={<><Wallet size={13} /> 账户与风控</>}>
+          <div className="grid grid-cols-2 gap-3">
+            <Metric label="USDT总额" value={num(balance?.total_usdt ?? balance?.usdt_total ?? usdt.total)} />
+            <Metric label="USDT可用" value={num(balance?.free_usdt ?? balance?.usdt_free ?? usdt.free)} />
+            <Metric label="杠杆硬上限" value={`${num(riskCap, 1)}x`} />
+            <Metric label="最低AI置信度" value={num(riskSummary?.min_confidence_to_trade ?? status?.risk?.min_confidence_to_trade, 2)} />
+          </div>
+        </Surface>
+        <Surface title={<><Power size={13} /> 人工危险操作</>}>
+          <div className="grid gap-2">
+            <button className={danger} disabled={busy} onClick={() => postAction("/api/control/close-position", { operator_id: "console", symbol })}>
+              平仓 {shortSymbol(symbol)}
+            </button>
+            <button className={danger} disabled={busy} onClick={() => postAction("/api/control/panic-close", { operator_id: "console", symbols: [] })}>
+              暂停开仓并一键全平
+            </button>
+            <div className="text-[11px] leading-5 text-[#53627a]">这里不提供手动开仓入口。真实开仓必须由策略信号、AI、RiskManager 和 Gateway 串联通过。</div>
+          </div>
+        </Surface>
+        <Surface title={<><ServerCog size={13} /> 网关边界</>}>
+          <div className="grid gap-2 text-xs text-[#53627a]">
+            <BoundaryLine label="业务层" value="不写 dry_run 分支" />
+            <BoundaryLine label="模拟运行" value="MockExchangeGateway 本地记账" />
+            <BoundaryLine label="真实运行" value="GateRealGateway 固定 dry_run=false" />
+            <BoundaryLine label="Agent" value="默认只读/纸面回测" />
+          </div>
+        </Surface>
+        <Surface title={<><Database size={13} /> 审计要求</>}>
+          <div className="grid gap-2 text-xs text-[#53627a]">
+            <BoundaryLine label="订单" value="orders 表留痕" />
+            <BoundaryLine label="AI" value="ai_decisions 表留痕" />
+            <BoundaryLine label="风控" value="RiskDecision 原因可追踪" />
+            <BoundaryLine label="密钥" value="不得进入日志/页面" />
+          </div>
+        </Surface>
+      </div>
+
+      <div className="grid grid-cols-1 gap-5 2xl:grid-cols-[minmax(0,1fr)_460px]">
+        <Surface title={<><Wallet size={13} /> 持仓快照</>}>
+          <div className="max-h-[440px] overflow-auto">
+            {positions.length ? (
+              <table className="w-full text-left text-xs">
+                <thead className="sticky top-0 bg-[#f8fbff] text-[#53627a]">
+                  <tr><th className="p-2">标的</th><th>方向</th><th>数量</th><th>开仓价</th><th>标记价</th><th>未实现盈亏</th></tr>
+                </thead>
+                <tbody>
+                  {positions.map((row) => <PositionRow key={`${row.id}-${row.symbol}`} row={row} />)}
+                </tbody>
+              </table>
+            ) : (
+              <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs text-[#53627a]">暂无持仓快照。模拟网关无持仓时这是正常状态。</div>
+            )}
+          </div>
+        </Surface>
+        <Surface title={<><Power size={13} /> 最近订单</>}>
+          <div className="max-h-[440px] overflow-auto">
+            {orders.length ? orders.slice(0, 30).map((row) => <OrderRow key={`${row.id}-${row.created_at}`} row={row} />) : (
+              <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs text-[#53627a]">暂无订单记录。</div>
+            )}
+          </div>
+        </Surface>
+      </div>
+    </section>
+  );
+}
+
+function StrategyChannelCard({
+  title,
+  account,
+  status,
+  body,
+  enabled = false,
+  liveReady = false,
+  details = [],
+}: {
+  title: string;
+  account: string;
+  status: string;
+  body: string;
+  enabled?: boolean;
+  liveReady?: boolean;
+  details?: string[];
+}) {
+  return (
+    <div className="rounded-2xl border border-[#dfe7f1] bg-[#f8fbff] p-4">
+      <div className="flex items-center justify-between gap-3">
+        <div className="font-semibold text-[#172033]">{title}</div>
+        <span className={`rounded-full px-3 py-1 text-[11px] ${liveReady ? "bg-[#e7f8ee] text-[#0a9f5a]" : enabled ? "bg-[#eaf1ff] text-[#2454ff]" : "bg-[#fff7e6] text-[#b7791f]"}`}>
+          {status}
+        </span>
+      </div>
+      <div className={`${mono} mt-2 text-xs text-[#2454ff]`}>{account}</div>
+      <div className="mt-2 text-xs leading-5 text-[#53627a]">{body}</div>
+      {details.length ? (
+        <div className="mt-3 grid grid-cols-3 gap-2">
+          {details.map((detail) => (
+            <div key={detail} className="rounded-xl border border-[#dfe7f1] bg-white px-3 py-2 text-[11px] text-[#53627a]">
+              {detail}
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function RuntimeModePanel({
+  executionMode,
+  busy,
+  postAction,
+}: {
+  executionMode: string;
+  busy: boolean;
+  postAction: (path: string, body: Record<string, unknown>) => Promise<void>;
+}) {
+  const [pin, setPin] = useState("");
+  return (
+    <Surface title={<><Power size={13} /> 模拟 / 实盘模式</>}>
+      <div className="grid grid-cols-2 gap-2">
+        <button
+          className={`${button} justify-center ${executionMode === "mock" ? "border-[#0a9f5a] text-[#0a9f5a]" : ""}`}
+          disabled={busy}
+          onClick={() => postAction("/api/control/runtime-mode", { operator_id: "console", dry_run: true })}
+        >
+          模拟运行
+        </button>
+        <button
+          className={`${button} justify-center ${executionMode === "live" ? "border-[#b7791f] text-[#b7791f]" : ""}`}
+          disabled={busy || pin.trim().length < 4}
+          onClick={() => postAction("/api/control/runtime-mode", { operator_id: "console", dry_run: false, trade_pin: pin })}
+        >
+          开启实盘
+        </button>
+      </div>
+      <input
+        className={`${input} ${mono} mt-3 w-full`}
+        type="password"
+        value={pin}
+        placeholder="实盘 Trade PIN"
+        onChange={(event) => setPin(event.target.value)}
+      />
+      <div className="mt-2 text-[11px] leading-5 text-[#53627a]">
+        实盘按钮只切换网关模式，不代表系统已通过实盘验收。未配置 PIN、API、授权或风控检查失败时后端会拒绝。
+      </div>
+    </Surface>
+  );
+}
+
+function AccountSlotManager({
+  accountSlots,
+  busy,
+  postAction,
+}: {
+  accountSlots: ExecutionAccountSlot[];
+  busy: boolean;
+  postAction: (path: string, body: Record<string, unknown>) => Promise<void>;
+}) {
+  return (
+    <Surface title={<><KeyRound size={13} /> 双账户 API 槽位</>}>
+      <div className="grid grid-cols-1 gap-3 2xl:grid-cols-2">
+        {(["trend", "range"] as const).map((slot) => (
+          <AccountSlotCard
+            key={slot}
+            slot={slot}
+            item={accountSlots.find((account) => account.slot === slot)}
+            busy={busy}
+            postAction={postAction}
+          />
+        ))}
+      </div>
+    </Surface>
+  );
+}
+
+function AccountSlotCard({
+  slot,
+  item,
+  busy,
+  postAction,
+}: {
+  slot: "trend" | "range";
+  item?: ExecutionAccountSlot;
+  busy: boolean;
+  postAction: (path: string, body: Record<string, unknown>) => Promise<void>;
+}) {
+  const [apiKey, setApiKey] = useState("");
+  const [apiSecret, setApiSecret] = useState("");
+  const label = slot === "trend" ? "账号1：趋势策略" : "账号2：震荡策略";
+  const submit = async () => {
+    await postAction("/api/execution/accounts/secret", {
+      operator_id: "console",
+      account_slot: slot,
+      exchange: "gateio",
+      api_key: apiKey,
+      api_secret: apiSecret,
+    });
+    setApiKey("");
+    setApiSecret("");
+  };
+  return (
+    <div className="rounded-2xl border border-[#dfe7f1] bg-[#f8fbff] p-4">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="font-semibold text-[#172033]">{item?.label || label}</div>
+          <div className="mt-1 text-[11px] text-[#7b8798]">Gate.io USDT 永续 / {slot === "trend" ? "趋势策略" : "震荡策略"}</div>
+        </div>
+        <span className={`rounded-full px-3 py-1 text-[11px] ${item?.configured ? "bg-[#e7f8ee] text-[#0a9f5a]" : "bg-[#fff7e6] text-[#b7791f]"}`}>
+          {item?.configured ? "已配置" : "未配置"}
+        </span>
+      </div>
+      <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
+        <Metric label="版本" value={num(item?.version, 0)} />
+        <Metric label="Key尾号" value={item?.key_tail || "-"} />
+        <Metric label="实盘路由" value={item?.gateway_binding === "active" ? "已绑定" : "待绑定"} tone={item?.gateway_binding === "active" ? "good" : "warn"} />
+      </div>
+      {item?.credential_source === "legacy_default_gateio" ? (
+        <div className="mt-2 rounded-xl border border-[#ffdca8] bg-[#fff8ed] px-3 py-2 text-[11px] leading-5 text-[#8a5a00]">
+          正在兼容使用旧版 GATEIO_API_KEY 作为趋势账号。建议后续迁移到 GATEIO_TREND_API_KEY，便于双账户隔离。
+        </div>
+      ) : null}
+      <div className="mt-3 grid grid-cols-1 gap-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_96px]">
+        <input className={`${input} ${mono}`} type="password" placeholder="API Key" value={apiKey} onChange={(event) => setApiKey(event.target.value)} />
+        <input className={`${input} ${mono}`} type="password" placeholder="API Secret" value={apiSecret} onChange={(event) => setApiSecret(event.target.value)} />
+        <button className={button} disabled={busy || apiKey.length < 8 || apiSecret.length < 8} onClick={submit}>
+          更新
+        </button>
+      </div>
+      <div className="mt-2 text-[11px] text-[#53627a]">
+        明文只写入运行密钥文件；SQLite 和审计日志只保存指纹与尾号。
+      </div>
+    </div>
+  );
+}
+
+function ExecutionStep({ title, body, done = false, warn = false }: { title: string; body: string; done?: boolean; warn?: boolean }) {
+  const tone = warn ? "text-[#b7791f]" : done ? "text-[#0a9f5a]" : "text-[#53627a]";
+  return (
+    <div className="rounded-2xl border border-[#dfe7f1] bg-[#f8fbff] p-3">
+      <div className={`text-sm font-semibold ${tone}`}>{title}</div>
+      <div className="mt-2 text-xs leading-5 text-[#53627a]">{body}</div>
+    </div>
+  );
+}
+
+function BoundaryLine({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex justify-between gap-3 rounded-xl border border-[#dfe7f1] bg-[#f8fbff] px-3 py-2">
+      <span>{label}</span>
+      <span className="font-medium text-[#172033]">{value}</span>
+    </div>
+  );
+}
+
+function PositionRow({ row }: { row: DbRow }) {
+  const payload = row.payload || {};
+  return (
+    <tr className="border-t border-[#dfe7f1]">
+      <td className="p-2 font-medium text-[#172033]">{shortSymbol(String(row.symbol || payload.symbol || "--"))}</td>
+      <td>{String(payload.side || "--")}</td>
+      <td className={mono}>{num(payload.qty, 6)}</td>
+      <td className={mono}>{num(payload.entry_price)}</td>
+      <td className={mono}>{num(payload.mark_price)}</td>
+      <td className={`${mono} ${Number(payload.unrealized_pnl || 0) >= 0 ? "text-[#0a9f5a]" : "text-[#e11d48]"}`}>{num(payload.unrealized_pnl)}</td>
+    </tr>
+  );
+}
+
+function OrderRow({ row }: { row: DbRow }) {
+  const payload = row.payload || {};
+  const side = String(payload.side || payload.action || "--");
+  const status = String(payload.status || "--");
+  return (
+    <div className="mb-2 rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs">
+      <div className="flex items-center justify-between gap-3">
+        <div className="font-semibold text-[#172033]">{shortSymbol(String(row.symbol || payload.symbol || "--"))}</div>
+        <div className={`${mono} text-[11px] text-[#53627a]`}>{row.created_at}</div>
+      </div>
+      <div className="mt-2 grid grid-cols-4 gap-2">
+        <Metric label="方向" value={side} />
+        <Metric label="数量" value={num(payload.amount || payload.qty, 6)} />
+        <Metric label="价格" value={num(payload.price)} />
+        <Metric label="状态" value={status} />
+      </div>
+    </div>
+  );
+}
+
+function DataWorkspace({
+  platform,
+  status,
+  markets,
+  news,
+  candles,
+  warning,
+  source,
+  timeframe,
+  balance,
+  riskSummary,
+  positions,
+  orders,
+}: {
+  platform: PlatformOverview | null;
+  status: StatusResponse | null;
+  markets: MarketSymbolsResponse;
+  news: NewsResponse;
+  candles: Candle[];
+  warning: string;
+  source: string;
+  timeframe: string;
+  balance: Record<string, unknown> | null;
+  riskSummary: Record<string, unknown> | null;
+  positions: Array<DbRow>;
+  orders: Array<DbRow>;
+}) {
+  const latestCandle = candles.at(-1);
+  const latestNews = (news.timeline || news.items.map((item) => item.payload)).at(0);
+  const newsWarn = (news.warnings || []).length > 0;
+  const aiConfigured = Boolean(status?.ai?.api_key_configured);
+  const gatewayOk = Boolean(balance?.ok ?? true);
+  const marketOk = candles.length > 0 && !warning;
+  const newsOk = !newsWarn && (news.timeline?.length || news.items.length) > 0;
+  const riskOk = Boolean(riskSummary) && Number(riskSummary?.max_total_leverage || status?.risk?.max_total_leverage || 0) > 0;
+  return (
+    <section className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-5 overflow-hidden">
+      <Surface title={<><Database size={13} /> 数据健康总览</>}>
+        <div className="grid grid-cols-6 gap-3">
+          <Metric label="K线源" value={marketOk ? "健康" : "告警"} tone={marketOk ? "good" : "warn"} />
+          <Metric label="新闻源" value={newsOk ? "健康" : "需检查"} tone={newsOk ? "good" : "warn"} />
+          <Metric label="DeepSeek" value={aiConfigured ? "已配置" : "未配置"} tone={aiConfigured ? "good" : "warn"} />
+          <Metric label="Gateway" value={gatewayOk ? "可用" : "异常"} tone={gatewayOk ? "good" : "bad"} />
+          <Metric label="风控配置" value={riskOk ? "有效" : "缺失"} tone={riskOk ? "good" : "bad"} />
+          <Metric label="审计记录" value={`${orders.length} 单`} />
+        </div>
+      </Surface>
+
+      <div className="grid min-h-0 grid-cols-1 gap-5 overflow-auto">
+        <Surface title={<><ServerCog size={13} /> 外部依赖状态</>}>
+          <div className="grid grid-cols-1 gap-3 2xl:grid-cols-2">
+            <HealthCard
+              title="行情 K线"
+              status={marketOk ? "健康" : "降级"}
+              tone={marketOk ? "good" : "warn"}
+              rows={[
+                ["数据源", source],
+                ["周期", timeframe],
+                ["K线数量", num(candles.length, 0)],
+                ["最新时间", String(latestCandle?.time || "--")],
+                ["告警", warning || "无"],
+              ]}
+            />
+            <HealthCard
+              title="新闻快讯"
+              status={newsOk ? "健康" : "需检查"}
+              tone={newsOk ? "good" : "warn"}
+              rows={[
+                ["快讯数量", num(news.timeline?.length || news.items.length, 0)],
+                ["缓存年龄", news.age_minutes == null ? "--" : `${num(news.age_minutes, 1)} 分钟`],
+                ["最新消息", String(latestNews?.title || latestNews?.headline || latestNews?.summary || "--").slice(0, 48)],
+                ["告警", news.warnings?.join("; ") || "无"],
+              ]}
+            />
+            <HealthCard
+              title="DeepSeek"
+              status={aiConfigured ? "已接入" : "未配置"}
+              tone={aiConfigured ? "good" : "warn"}
+              rows={[
+                ["常规模型", String(status?.ai?.decision_model || "--")],
+                ["报告模型", String(status?.ai?.report_model || "--")],
+                ["突发筛查", String(status?.ai?.emergency_screening_model || "--")],
+                ["状态", String(status?.ai?.status_message || "--")],
+              ]}
+            />
+            <HealthCard
+              title="交易网关"
+              status={gatewayOk ? "可用" : "异常"}
+              tone={gatewayOk ? "good" : "bad"}
+              rows={[
+                ["执行模式", status?.execution_mode || platform?.platform.execution_mode || "--"],
+                ["账户返回", String(balance?.ok ?? "--")],
+                ["USDT总额", num(balance?.total_usdt ?? balance?.usdt_total)],
+                ["通知通道", (platform?.platform.notification_channels || []).length ? "外部" : "仅本地"],
+              ]}
+            />
+          </div>
+        </Surface>
+
+        <Surface title={<><ShieldCheck size={13} /> 本地核心状态</>}>
+          <div className="grid grid-cols-1 gap-3 2xl:grid-cols-3">
+            <HealthCard
+              title="RiskManager"
+              status={riskOk ? "有效" : "异常"}
+              tone={riskOk ? "good" : "bad"}
+              rows={[
+                ["开仓状态", status?.opening_paused ? "已暂停" : "允许"],
+                ["授权标的", String(status?.enabled_symbols?.length || 0)],
+                ["杠杆上限", `${num(riskSummary?.max_total_leverage ?? status?.risk?.max_total_leverage, 1)}x`],
+                ["最低AI置信度", num(riskSummary?.min_confidence_to_trade ?? status?.risk?.min_confidence_to_trade, 2)],
+              ]}
+            />
+            <HealthCard
+              title="任务与审计"
+              status="运行中"
+              tone="good"
+              rows={[
+                ["回测任务", num(platform?.latest_backtest_runs.length, 0)],
+                ["AI评估任务", num(platform?.latest_ai_review_runs.length, 0)],
+                ["持仓快照", num(positions.length, 0)],
+                ["订单记录", num(orders.length, 0)],
+              ]}
+            />
+            <HealthCard
+              title="标的配置"
+              status={markets.items.length ? "已加载" : "空"}
+              tone={markets.items.length ? "good" : "warn"}
+              rows={[
+                ["标的数量", num(markets.items.length, 0)],
+                ["已启用策略", num(markets.items.filter((item) => item.strategy_enabled).length, 0)],
+                ["配置标的", markets.items.map((item) => item.base).join(" / ") || "--"],
+              ]}
+            />
+          </div>
+        </Surface>
+      </div>
+    </section>
+  );
+}
+
+function HealthCard({
+  title,
+  status,
+  tone,
+  rows,
+}: {
+  title: string;
+  status: string;
+  tone: "good" | "warn" | "bad";
+  rows: Array<[string, string]>;
+}) {
+  const toneClass = tone === "good" ? "bg-[#e7f8ee] text-[#0a9f5a]" : tone === "bad" ? "bg-[#fff1f2] text-[#e11d48]" : "bg-[#fff7e6] text-[#b7791f]";
+  return (
+    <div className="rounded-2xl border border-[#dfe7f1] bg-[#f8fbff] p-4">
+      <div className="flex items-center justify-between gap-3">
+        <div className="font-semibold text-[#172033]">{title}</div>
+        <span className={`rounded-full px-3 py-1 text-[11px] font-medium ${toneClass}`}>{status}</span>
+      </div>
+      <div className="mt-3 grid gap-2 text-xs">
+        {rows.map(([label, value]) => (
+          <BoundaryLine key={label} label={label} value={value} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function RightRail({
+  symbol,
+  status,
+  decisions,
+  orders,
+  news,
+  denseZone,
+  busy,
+  postAction,
+}: {
+  symbol: string;
+  status: StatusResponse | null;
+  decisions: Array<DbRow>;
+  orders: Array<DbRow>;
+  news: NewsResponse;
+  denseZone: DbRow<DenseZonePayload> | null;
+  busy: boolean;
+  postAction: (path: string, body: Record<string, unknown>) => Promise<void>;
+}) {
+  const latestDecision = status?.latest_decisions?.[symbol]?.payload || decisions[0]?.payload || { state: "等待下一次AI判断" };
+  return (
+    <aside className="flex min-h-0 flex-col gap-2 overflow-auto">
+      <Surface title={<><BrainCircuit size={13} /> AI 决策</>}>
+        <DecisionSummary data={latestDecision} />
+        <DecisionNarrative data={latestDecision} />
+        <div className="mt-3">
+          <MiniDenseZone denseZone={denseZone?.payload} />
+        </div>
+        <details className="mt-3 rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs">
+          <summary className="cursor-pointer font-semibold text-[#53627a]">查看原始审计数据</summary>
+          <div className="mt-2">
+            <JsonBlock data={latestDecision} maxHeight="max-h-48" />
+          </div>
+        </details>
+      </Surface>
+      <Surface
+        title={<><Newspaper size={13} /> 新闻快讯</>}
+        action={<button className={button} disabled={busy} onClick={() => postAction("/api/news/refresh", { operator_id: "console" })}>刷新</button>}
+      >
+        {news.warnings?.length ? (
+          <div className="mb-2 rounded-xl border border-[#f3d18a] bg-[#fff7e6] p-2 text-[11px] text-[#b7791f]">{news.warnings.join("; ")}</div>
+        ) : null}
+        <div className="space-y-2">
+          {(news.timeline || news.items.map((item) => item.payload)).slice(0, 16).map((item, idx) => (
+            <div key={idx} className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs">
+              <div className="font-medium text-[#172033]">{String(item.title || item.headline || item.summary || "--")}</div>
+              <div className="mt-1 text-[11px] text-[#53627a]">{String(item.published_at || item.time || item.source || "")}</div>
+            </div>
+          ))}
+        </div>
+      </Surface>
+      <Surface title="最近事件">
+        <div className="space-y-1 text-[11px]">
+          {[...orders, ...decisions].slice(0, 24).map((row) => (
+            <div key={`${row.id}-${row.created_at}`} className="border-b border-[#dfe7f1] pb-1">
+              <span className={mono}>{row.created_at}</span> {row.symbol} {String(row.payload.action || row.payload.side || row.payload.status || "")}
+            </div>
+          ))}
+        </div>
+      </Surface>
+    </aside>
+  );
+}
+
+function DecisionSummary({ data }: { data: Record<string, unknown> }) {
+  const event = data.event && typeof data.event === "object" ? (data.event as Record<string, unknown>) : null;
+  const payload = data.payload && typeof data.payload === "object" ? (data.payload as Record<string, unknown>) : data;
+  const body = payload.ai && typeof payload.ai === "object" ? (payload.ai as Record<string, unknown>) : payload;
+  const risk = payload.risk && typeof payload.risk === "object" ? (payload.risk as Record<string, unknown>) : null;
+  const regime = String(body.regime || payload.regime || data.regime || event?.event_type || "--");
+  const direction = String(body.direction || payload.direction || data.direction || "--");
+  const action = String(body.action_suggestion || body.veto_action || payload.action || data.state || "--");
+  const confidence = body.confidence ?? payload.confidence ?? data.confidence ?? null;
+  const scale = risk
+    ? { label: tierLabel(risk.position_tier), scale: positionScaleLabel(risk.position_scale) }
+    : aiScaleFromConfidence(confidence);
+  const scoreRows: Array<[string, unknown]> = [
+    ["趋势确认", body.trend_confirmation_score],
+    ["震荡风险", body.range_risk_score],
+    ["新闻风险", body.news_risk_score],
+    ["订单流确认", body.orderflow_confirmation_score],
+    ["密集区突破", body.dense_zone_breakout_score],
+  ];
+  return (
+    <div className="mb-3 grid grid-cols-5 gap-2">
+      <Metric label="行情状态" value={regimeLabel(regime)} />
+      <Metric label="方向" value={directionLabel(direction)} />
+      <Metric label="动作" value={actionLabel(action)} />
+      <Metric label="置信度" value={confidencePct(confidence)} />
+      <Metric label="仓位档" value={`${scale.label} / ${scale.scale}`} />
+      {scoreRows.map(([label, value]) => (
+        <Metric key={label} label={label} value={confidencePct(value)} tone={Number(value) >= 0.7 ? "good" : Number(value) >= 0.45 ? "warn" : "bad"} />
+      ))}
+      <div className="col-span-5 rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs">
+        <div className="mb-2 flex items-center justify-between">
+          <span className="font-semibold text-[#172033]">RiskManager 五档映射</span>
+          <span className={`${mono} text-[#2454ff]`}>{scale.label} / {scale.scale}</span>
+        </div>
+        <div className="h-2 overflow-hidden rounded-full bg-[#dfe7f1]">
+          <div className="h-full rounded-full bg-[#2454ff]" style={{ width: risk ? positionScaleLabel(risk.position_scale) : confidenceBarWidth(confidence) }} />
+        </div>
+        <div className="mt-2 text-[11px] leading-5 text-[#53627a]">真实仓位由本地策略信号、AI 五分制、硬风控和剩余杠杆共同裁剪；重大新闻复评只落库，不直接下单。</div>
+      </div>
+    </div>
+  );
+}
+
+function DecisionNarrative({ data }: { data: Record<string, unknown> }) {
+  const event = data.event && typeof data.event === "object" ? (data.event as Record<string, unknown>) : null;
+  const payload = data.payload && typeof data.payload === "object" ? (data.payload as Record<string, unknown>) : data;
+  const rows: Array<[string, string]> = [
+    ["消息面", alignmentLabel(payload.news_alignment)],
+    ["订单流", alignmentLabel(payload.orderflow_alignment)],
+    ["密集区", denseZoneLabel(payload.dense_zone_position)],
+    ["形态", patternLabel(payload.pattern_type)],
+    ["建议", actionLabel(payload.action_suggestion || payload.veto_action || data.action || data.state)],
+  ];
+  const reason = String(payload.brief_reason || payload.reason || event?.summary || "等待下一次 AI 判断。");
+  return (
+    <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs">
+      <div className="grid gap-2">
+        {rows.map(([label, value]) => (
+          <BoundaryLine key={label} label={label} value={value} />
+        ))}
+      </div>
+      <div className="mt-3 rounded-lg bg-white p-2 text-[11px] leading-relaxed text-[#53627a]">{reason}</div>
+    </div>
+  );
+}
+
+function regimeLabel(value: unknown) {
+  const text = String(value || "--");
+  const labels: Record<string, string> = {
+    trend: "趋势",
+    range: "震荡",
+    mixed: "混合",
+    flat: "横盘",
+    price_move: "价格异动",
+  };
+  return labels[text] || text;
+}
+
+function directionLabel(value: unknown) {
+  const text = String(value || "--");
+  const labels: Record<string, string> = {
+    long: "偏多",
+    short: "偏空",
+    flat: "观望",
+    neutral: "中性",
+  };
+  return labels[text] || text;
+}
+
+function actionLabel(value: unknown) {
+  const text = String(value || "--");
+  const labels: Record<string, string> = {
+    hold: "等待",
+    block: "阻断",
+    reduce: "减仓",
+    allow: "允许",
+    confirm: "确认",
+    wait: "等待",
+  };
+  return labels[text] || text;
+}
+
+function alignmentLabel(value: unknown) {
+  const text = String(value || "--");
+  const labels: Record<string, string> = {
+    aligned: "同向",
+    conflict: "冲突",
+    neutral: "中性",
+    bullish: "利多",
+    bearish: "利空",
+  };
+  return labels[text] || text;
+}
+
+function denseZoneLabel(value: unknown) {
+  const text = String(value || "--");
+  const labels: Record<string, string> = {
+    inside_value: "密集区内部",
+    inside_value_above_mid: "密集区内偏强",
+    inside_value_below_mid: "密集区内偏弱",
+    near_resistance: "接近阻力",
+    near_support: "接近支撑",
+    vacuum_breakout: "真空区突破",
+    unknown: "未知",
+  };
+  return labels[text] || text;
+}
+
+function patternLabel(value: unknown) {
+  const text = String(value || "--");
+  const labels: Record<string, string> = {
+    trend: "趋势结构",
+    range: "震荡结构",
+    breakout: "突破结构",
+    range_rectangle: "矩形震荡",
+    symmetrical_triangle: "收敛三角形",
+    ascending_triangle: "上升三角形",
+    descending_triangle: "下降三角形",
+    falling_wedge: "下降楔形",
+    rising_wedge: "上升楔形",
+    rectangle_breakout: "矩形突破",
+    unknown: "未知",
+  };
+  return labels[text] || text;
+}
+
+function MiniDenseZone({ denseZone }: { denseZone?: DenseZonePayload }) {
+  if (!denseZone) {
+    return <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs text-[#53627a]">密集区：等待本地结构分析。</div>;
+  }
+  return (
+    <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs">
+      <div className="mb-2 font-semibold text-[#172033]">本地密集区</div>
+      <div className="grid gap-2">
+        <BoundaryLine label="上沿" value={num(denseZone.zone_high ?? denseZone.vah)} />
+        <BoundaryLine label="POC/中位" value={num(denseZone.zone_mid ?? denseZone.poc)} />
+        <BoundaryLine label="下沿" value={num(denseZone.zone_low ?? denseZone.val)} />
+        <BoundaryLine label="结构" value={String(denseZone.structure_label || breakoutStatusLabel(denseZone.breakout_status))} />
+      </div>
+    </div>
+  );
+}
+
+function confidencePct(value: unknown) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "--";
+  return `${Math.round(number * 100)}%`;
+}
+
+function confidenceBarWidth(value: unknown) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "0%";
+  return `${Math.max(0, Math.min(100, Math.round(number * 100)))}%`;
+}
+
+function aiScaleFromConfidence(value: unknown) {
+  const confidence = Number(value);
+  if (!Number.isFinite(confidence) || confidence < 0.55) return { label: "阻断", scale: "0%" };
+  if (confidence >= 0.85) return { label: "满仓", scale: "100%" };
+  if (confidence >= 0.75) return { label: "强仓", scale: "75%" };
+  if (confidence >= 0.65) return { label: "标准仓", scale: "50%" };
+  return { label: "弱仓", scale: "25%" };
+}
+
+function tierLabel(value: unknown) {
+  const text = String(value || "block");
+  const labels: Record<string, string> = {
+    full: "满仓",
+    strong: "强仓",
+    normal: "标准仓",
+    weak: "弱仓",
+    block: "阻断",
+  };
+  return labels[text] || text;
+}
+
+function positionScaleLabel(value: unknown) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "0%";
+  return `${Math.max(0, Math.min(100, Math.round(number * 100)))}%`;
+}
+
+function breakoutStatusLabel(value: unknown) {
+  const text = String(value || "--");
+  const labels: Record<string, string> = {
+    inside_zone: "密集区内部",
+    breakout_up: "向上突破",
+    breakout_down: "向下突破",
+    retest_support: "回踩支撑",
+    retest_resistance: "反抽阻力",
+    failed_breakout: "假突破",
+    vacuum_travel: "真空区迁移",
+    unknown: "未知",
+  };
+  return labels[text] || text;
+}
+
+export function AppError({ error }: { error: string }) {
+  return (
+    <div className="flex h-screen items-center justify-center bg-[#eef2f7] text-[#e11d48]">
+      <AlertTriangle className="mr-2" />
+      {error}
+    </div>
+  );
+}
+

@@ -1,0 +1,225 @@
+export type SymbolConfig = { symbol: string; timeframe: string; leverage: number };
+
+export type DbRow<T = Record<string, unknown>> = {
+  id: number;
+  created_at: string;
+  symbol: string | null;
+  payload: T;
+};
+
+export type StatusResponse = {
+  mode: string;
+  execution_mode?: "mock" | "live";
+  opening_paused: boolean;
+  trade_mode: string;
+  enabled_symbols?: string[];
+  report_symbols?: string[];
+  risk: Record<string, unknown>;
+  ai: Record<string, unknown>;
+  symbols: SymbolConfig[];
+  latest_decisions?: Record<string, DbRow | null>;
+  exchange_safety?: DbRow | null;
+  latest_order_lifecycle?: DbRow | null;
+  latest_data_health?: DbRow | null;
+  latest_ai_drift?: DbRow | null;
+  latest_news_risk_review?: DbRow | null;
+  latest_worker_heartbeats?: Record<string, DbRow | null>;
+  latest_maintenance?: DbRow | null;
+};
+
+export type StrategyProfile = {
+  symbol: string;
+  profile_name: string;
+  strategy_type: string;
+  enabled: boolean;
+  opening_authorized: boolean;
+  report_enabled: boolean;
+  live_ready: boolean;
+  notes: string;
+  params: Record<string, unknown>;
+  backtest_defaults?: Record<string, number | string | boolean>;
+  optimization_defaults?: Record<string, unknown>;
+  execution_contract?: Record<string, unknown>;
+};
+
+export type StrategyChannel = {
+  channel: "trend" | "range";
+  label: string;
+  strategy_type: "trend" | "range";
+  account_slot: "trend" | "range";
+  account_label: string;
+  enabled: boolean;
+  executable: boolean;
+  status: string;
+  mode: "mock" | "live";
+  opening_paused: boolean;
+  authorized_symbols: string[];
+  configured_symbols: string[];
+  account_configured: boolean;
+  gateway_binding: string;
+  live_ready: boolean;
+  ai_sizing_tiers: Array<Record<string, number | string>>;
+  notes: string[];
+};
+
+export type PlatformOverview = {
+  platform: {
+    shell: string;
+    core: string;
+    execution_mode: "mock" | "live";
+    trade_mode: string;
+    notification_channels: string[];
+    agent_gateway?: {
+      enabled: boolean;
+      version: string;
+      scopes: string[];
+      paper_only: boolean;
+      live_trading: string;
+    };
+  };
+  workspaces: Array<{ id: WorkspaceId; label: string }>;
+  strategy_channels?: StrategyChannel[];
+  strategy_profiles: StrategyProfile[];
+  latest_backtest_runs: DbRow[];
+  latest_ai_review_runs: DbRow[];
+};
+
+export type ReadinessCheck = {
+  id: string;
+  label: string;
+  status: "ok" | "warn" | "block";
+  detail: string;
+  age_minutes?: number | null;
+};
+
+export type SystemReadiness = {
+  overall: "ok" | "warn" | "block";
+  execution_mode: "mock" | "live";
+  trade_mode: string;
+  configured_symbols: string[];
+  enabled_symbols: string[];
+  profile_count: number;
+  enabled_profile_count: number;
+  authorized_profile_count: number;
+  live_ready_profile_count: number;
+  deepseek_ready: boolean;
+  exchange_safety?: DbRow | null;
+  latest_reconciliation?: DbRow | null;
+  latest_order_lifecycle?: DbRow | null;
+  latest_data_health?: DbRow | null;
+  latest_ai_drift?: DbRow | null;
+  latest_news_risk_review?: DbRow | null;
+  latest_worker_heartbeats?: Record<string, DbRow | null>;
+  latest_maintenance?: DbRow | null;
+  checks: ReadinessCheck[];
+};
+
+export type ExecutionAccountSlot = {
+  slot: "trend" | "range";
+  label: string;
+  exchange: string;
+  strategy_type: "trend" | "range";
+  configured: boolean;
+  version: number;
+  key_tail: string;
+  secret_tail: string;
+  gateway_binding: string;
+  live_routing: string;
+  credential_source?: string;
+};
+
+export type WorkspaceId = "dashboard" | "market" | "strategy" | "ai" | "agent" | "execution" | "data";
+
+export type MarketSymbolsResponse = {
+  items: Array<{ symbol: string; base: string; quote: string; configured: boolean; strategy_enabled?: boolean }>;
+};
+
+export type Candle = { time: string; open: number; high: number; low: number; close: number; volume: number };
+export type CandleResponse = { items: Candle[]; source?: string; warning?: string };
+export type ApiList<T = Record<string, unknown>> = { items: Array<DbRow<T>> };
+export type NewsResponse = ApiList & {
+  timeline?: Array<Record<string, unknown>>;
+  warnings?: string[];
+  age_minutes?: number;
+};
+
+export type DenseZonePayload = {
+  symbol?: string;
+  poc?: number;
+  vah?: number;
+  val?: number;
+  support?: number | null;
+  resistance?: number | null;
+  current_position?: string;
+  strength?: number;
+  zone_low?: number | null;
+  zone_high?: number | null;
+  zone_mid?: number | null;
+  previous_zone_low?: number | null;
+  previous_zone_high?: number | null;
+  next_zone_low?: number | null;
+  next_zone_high?: number | null;
+  vacuum_low?: number | null;
+  vacuum_high?: number | null;
+  breakout_status?: string;
+  retest_status?: string;
+  trend_score?: number;
+  range_score?: number;
+  structure_label?: string;
+};
+
+export type BacktestTrade = {
+  side?: string;
+  entry_time?: string;
+  exit_time?: string;
+  entry_price?: number;
+  exit_price?: number;
+  qty?: number;
+  pnl?: number;
+  return_pct?: number;
+  fee_paid?: number;
+  slippage_paid?: number;
+  exit_reason?: string;
+  stop_loss_price?: number;
+  max_adverse_excursion_pct?: number;
+};
+
+export type BacktestResult = {
+  total_return_pct?: number;
+  max_drawdown_pct?: number;
+  trade_count?: number;
+  win_rate_pct?: number;
+  profit_factor?: number;
+  leverage?: number;
+  final_equity?: number;
+  cost_model?: { cost_pct_of_initial_equity?: number };
+  trades?: BacktestTrade[];
+  trade_ledger?: BacktestTrade[];
+  ai_guard_applied?: boolean;
+  raw_ai_proxy?: BacktestResult;
+};
+
+export type BacktestJob = {
+  status?: string;
+  progress?: number;
+  error?: string;
+  message?: string;
+  result?: BacktestResult | OptimizationResult;
+};
+
+export type OptimizationCandidate = {
+  params?: Record<string, number | string | boolean>;
+  score?: number;
+  train?: Record<string, number>;
+  validation?: Record<string, number>;
+  warnings?: string[];
+};
+
+export type OptimizationResult = {
+  baseline?: Record<string, number>;
+  baseline_params?: Record<string, number | string | boolean>;
+  best?: OptimizationCandidate;
+  candidates?: OptimizationCandidate[];
+  searched_candidates?: number;
+  selection_policy?: string;
+};

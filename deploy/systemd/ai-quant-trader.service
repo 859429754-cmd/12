@@ -1,0 +1,21 @@
+[Unit]
+Description=AI Quant Trader Workers
+After=network-online.target ai-quant-console.service
+Wants=network-online.target
+
+[Service]
+Type=notify
+WorkingDirectory=/root/ai-quant-trader
+EnvironmentFile=-/root/ai-quant-trader/.env.runtime
+ExecStart=/root/ai-quant-trader/.venv/bin/python -m ai_quant_trader.app
+Restart=always
+RestartSec=10
+WatchdogSec=60
+NotifyAccess=main
+TimeoutStopSec=45
+KillSignal=SIGINT
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

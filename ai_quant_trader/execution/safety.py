@@ -1,0 +1,159 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+from ai_quant_trader.core.models import ExchangeConnectionStatus, ExchangeSafetyState, PositionSnapshot, ReconciliationReport
+from ai_quant_trader.strategy.trend_state import TrendStateStore
+
+
+class ExchangeSafetyMonitor:
+    """Fail-closed safety gate for live exchange state.
+
+    Existing positions are not auto-closed here. When private exchange state is
+    stale or inconsistent, the trading loop must stop opening new positions and
+    surface a manual Gate-side handling instruction.
+    """
+
+    def __init__(self, stale_after_seconds: int = 300):
+        self.stale_after_seconds = stale_after_seconds
+        self._state = ExchangeSafetyState(
+            status=ExchangeConnectionStatus.RECONCILIATION_REQUIRED,
+            can_open_new_entries=False,
+            reason="exchange_reconciliation_not_run",
+            stale_after_seconds=stale_after_seconds,
+        )
+
+    @property
+    def state(self) -> ExchangeSafetyState:
+        if self._state.last_success_at is None:
+            return self._state
+        if datetime.now(UTC) - self._state.last_success_at > timedelta(seconds=self.stale_after_seconds):
+            return self._state.model_copy(
+                update={
+                    "status": ExchangeConnectionStatus.DEGRADED_READONLY,
+                    "can_open_new_entries": False,
+                    "reason": "exchange_private_state_stale_over_5m",
+                    "checked_at": datetime.now(UTC),
+                }
+            )
+        return self._state
+
+    def mark_success(self, reason: str = "exchange_private_state_verified") -> ExchangeSafetyState:
+        now = datetime.now(UTC)
+        self._state = ExchangeSafetyState(
+            status=ExchangeConnectionStatus.OK,
+            can_open_new_entries=True,
+            reason=reason,
+            last_success_at=now,
+            checked_at=now,
+            stale_after_seconds=self.stale_after_seconds,
+        )
+        return self._state
+
+    def mark_failure(self, reason: str, failures: list[str] | None = None) -> ExchangeSafetyState:
+        last_success = self._state.last_success_at
+        status = ExchangeConnectionStatus.DEGRADED_READONLY
+        if last_success is None:
+            status = ExchangeConnectionStatus.RECONCILIATION_REQUIRED
+        elif datetime.now(UTC) - last_success > timedelta(seconds=self.stale_after_seconds):
+            status = ExchangeConnectionStatus.DEGRADED_READONLY
+        self._state = ExchangeSafetyState(
+            status=status,
+            can_open_new_entries=False,
+            reason=reason,
+            last_success_at=last_success,
+            checked_at=datetime.now(UTC),
+            stale_after_seconds=self.stale_after_seconds,
+            failures=failures or [reason],
+        )
+        return self._state
+
+    async def reconcile(
+        self,
+        gateway: Any,
+        symbols: list[str],
+        trend_state: TrendStateStore,
+        *,
+        live: bool,
+    ) -> ReconciliationReport:
+        issues: list[str] = []
+        balance_ok = False
+        positions_ok = False
+        open_orders_ok = False
+        native_stops_ok = True
+        local_state_ok = True
+        positions: list[PositionSnapshot] = []
+
+        try:
+            balance = await gateway.fetch_balance_summary()
+            balance_ok = bool(balance.get("ok", True))
+            if live and not balance_ok:
+                issues.append("exchange_balance_unavailable")
+        except Exception as exc:  # noqa: BLE001
+            issues.append(f"exchange_balance_error:{type(exc).__name__}")
+
+        try:
+            positions = await gateway.fetch_positions(symbols)
+            positions_ok = True
+        except Exception as exc:  # noqa: BLE001
+            issues.append(f"exchange_positions_error:{type(exc).__name__}")
+
+        try:
+            open_orders = await gateway.fetch_open_orders(symbols)
+            open_orders_ok = True
+        except AttributeError:
+            open_orders = []
+            open_orders_ok = not live
+            if live:
+                issues.append("exchange_open_orders_not_supported")
+        except Exception as exc:  # noqa: BLE001
+            open_orders = []
+            issues.append(f"exchange_open_orders_error:{type(exc).__name__}")
+
+        if live and positions_ok:
+            for position in positions:
+                local = trend_state.get(position.symbol)
+                if position.side.value != "flat" and abs(position.qty) > 0:
+                    if local is None:
+                        issues.append(f"orphan_position_without_local_trend_state:{position.symbol}")
+                        local_state_ok = False
+                    elif not local.native_stop_order_id:
+                        issues.append(f"native_stop_state_missing:{position.symbol}")
+                        native_stops_ok = False
+                elif local is not None:
+                    issues.append(f"local_trend_state_without_exchange_position:{position.symbol}")
+                    local_state_ok = False
+
+        if live and open_orders_ok:
+            for order in open_orders:
+                symbol = str(order.get("symbol") or "")
+                reduce_only = bool(order.get("reduceOnly") or order.get("reduce_only") or (order.get("info") or {}).get("reduce_only"))
+                if symbol in symbols and not reduce_only:
+                    issues.append(f"open_non_reduce_order_requires_review:{symbol}")
+                    open_orders_ok = False
+
+        status = ExchangeConnectionStatus.OK if not issues else ExchangeConnectionStatus.RECONCILIATION_REQUIRED
+        report = ReconciliationReport(
+            status=status,
+            symbol_count=len(symbols),
+            balance_ok=balance_ok,
+            positions_ok=positions_ok,
+            open_orders_ok=open_orders_ok,
+            native_stops_ok=native_stops_ok,
+            local_state_ok=local_state_ok,
+            issues=issues,
+        )
+        if status == ExchangeConnectionStatus.OK:
+            self.mark_success("exchange_reconciliation_ok")
+        else:
+            self._state = ExchangeSafetyState(
+                status=status,
+                can_open_new_entries=False,
+                reason="exchange_reconciliation_required",
+                last_success_at=self._state.last_success_at,
+                checked_at=datetime.now(UTC),
+                stale_after_seconds=self.stale_after_seconds,
+                failures=issues,
+            )
+        return report

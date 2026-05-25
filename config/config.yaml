@@ -1,0 +1,103 @@
+runtime:
+  dry_run: true
+  hourly_report_minute: 0
+  database_path: data/trader.sqlite3
+  audit_log_path: logs/audit.jsonl
+  allow_live_orders_after_restart: false
+  trade_mode: strategy_confirmed
+  price_monitor_interval_seconds: 60
+  price_wakeup_threshold_pct: 1.0
+  price_wakeup_volatility_multiplier: 1.8
+  execution_mode: mock
+risk:
+  max_total_leverage: 4.0
+  ai_full_size_confidence: 0.75
+  min_confidence_to_trade: 0.55
+  ai_candidate_min_confidence: 0.65
+  stale_data_seconds: 300
+  small_position_mode: false
+  small_position_notional_usdt: 20.0
+ai:
+  decision_model: deepseek-v4-pro
+  report_model: deepseek-v4-pro
+  emergency_screening_model: deepseek-v4-flash
+  emergency_decision_model: deepseek-v4-pro
+  base_url: https://api.deepseek.com
+  candidate_trade_min_confidence: 0.65
+  ai_enabled_symbols:
+  - ETH/USDT:USDT
+  - BTC/USDT:USDT
+  - SOL/USDT:USDT
+symbols:
+- symbol: ETH/USDT:USDT
+  timeframe: 1h
+  enabled_on_boot: false
+  leverage: 4
+- symbol: BTC/USDT:USDT
+  timeframe: 1h
+  enabled_on_boot: false
+  leverage: 4
+- symbol: SOL/USDT:USDT
+  timeframe: 1h
+  enabled_on_boot: false
+  leverage: 4
+strategy:
+  trend:
+    variant: with_volume
+    ema_length: 89
+    kc_length: 20
+    kc_scalar: 2.8
+    vma_length: 20
+    atr_length: 14
+    atr_stop_multiple: 1.5
+    volume_multiple: 2.5
+    position_fraction: 1.0
+    use_ema_filter: false
+    use_volume_filter: true
+    momentum_filter: kdj
+    kdj_length: 9
+    kdj_k_smooth: 3
+    kdj_d_smooth: 3
+symbol_params:
+  ETH/USDT:USDT:
+    enabled: true
+    profile_name: eth_kc_vol_kdj_ai_5level
+  BTC/USDT:USDT:
+    enabled: false
+    profile_name: btc_research_only
+  SOL/USDT:USDT:
+    enabled: false
+    profile_name: sol_research_only
+orderflow:
+  exchanges:
+  - binance
+  - okx
+  - bybit
+  weights:
+    binance: 1.0
+    okx: 1.0
+    bybit: 1.0
+news:
+  jin10_enabled: true
+  jin10_public_url: https://www.jin10.com/
+  entity_refresh_hours: 24
+  refresh_interval_minutes: 10
+  max_age_hours: 6
+  rss_sources:
+  - https://www.coindesk.com/arc/outboundfeeds/rss/
+  - https://cointelegraph.com/rss
+  - https://www.federalreserve.gov/feeds/press_all.xml
+  - https://www.bls.gov/feed/news_release_all.rss
+  - https://home.treasury.gov/news/press-releases/rss
+  - https://www.bea.gov/news/glance/rss.xml
+  - https://www.sec.gov/news/pressreleases.rss
+  - https://www.investing.com/rss/news_25.rss
+  - https://www.investing.com/rss/news_14.rss
+  - https://www.forexlive.com/feed/news
+  - https://feeds.marketwatch.com/marketwatch/topstories/
+  - https://www.cnbc.com/id/100003114/device/rss/rss.html
+  scrape_sources:
+  - https://www.whitehouse.gov/briefing-room/
+security:
+  admin_user_ids: []
+  runtime_env_path: .env.runtime
