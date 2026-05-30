@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createChart, ColorType, type IChartApi, type IPriceLine, type ISeriesApi, type UTCTimestamp } from "lightweight-charts";
 import type { Candle, DbRow, DenseZonePayload, StrategyProfile } from "./types";
 
@@ -26,6 +26,22 @@ export function MarketChart({
   const kcUpperRef = useRef<ISeriesApi<"Line"> | null>(null);
   const kcLowerRef = useRef<ISeriesApi<"Line"> | null>(null);
   const denseLinesRef = useRef<IPriceLine[]>([]);
+  const candlesByTimeRef = useRef<Map<number, Candle>>(new Map());
+  const [hoverCandle, setHoverCandle] = useState<Candle | null>(null);
+  const [range, setRange] = useState<"7d" | "30d" | "90d" | "all">("90d");
+  const [showKc, setShowKc] = useState(true);
+  const [showEma, setShowEma] = useState(false);
+  const [showVolume, setShowVolume] = useState(true);
+  const [showOrders, setShowOrders] = useState(true);
+  const [showAi, setShowAi] = useState(true);
+  const [showDense, setShowDense] = useState(true);
+  const focus = hoverCandle || candles.at(-1) || null;
+  const prev = useMemo(() => {
+    if (!focus) return null;
+    const idx = candles.findIndex((item) => item.time === focus.time);
+    return idx > 0 ? candles[idx - 1] : null;
+  }, [candles, focus]);
+  const changePct = focus && prev ? ((focus.close - prev.close) / prev.close) * 100 : 0;
 
   useEffect(() => {
     if (!rootRef.current) return;
@@ -55,6 +71,14 @@ export function MarketChart({
     const kcMidSeries = chart.addLineSeries({ color: "#64748b", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
     const kcUpperSeries = chart.addLineSeries({ color: "#2454ff", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
     const kcLowerSeries = chart.addLineSeries({ color: "#2454ff", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+    chart.subscribeCrosshairMove((param) => {
+      const timestamp = Number(param.time);
+      if (!Number.isFinite(timestamp)) {
+        setHoverCandle(null);
+        return;
+      }
+      setHoverCandle(candlesByTimeRef.current.get(timestamp) || null);
+    });
 
     chartRef.current = chart;
     candleRef.current = candlesSeries;
@@ -91,13 +115,14 @@ export function MarketChart({
       low: item.low,
       close: item.close,
     }));
+    candlesByTimeRef.current = new Map(candleData.map((item, idx) => [Number(item.time), candles[idx]]));
     const volumeData = candles.map((item) => ({
       time: Math.floor(new Date(item.time).getTime() / 1000) as UTCTimestamp,
       value: item.volume,
       color: item.close >= item.open ? "rgba(10, 159, 90, 0.35)" : "rgba(225, 29, 72, 0.35)",
     }));
     candleSeries.setData(candleData);
-    volumeSeries.setData(volumeData);
+    volumeSeries.setData(showVolume ? volumeData : []);
     const params = profile?.params || {};
     const emaLen = Number(params.ema_length || 89);
     const kcLen = Number(params.kc_length || 20);
@@ -107,22 +132,99 @@ export function MarketChart({
     const emaValues = ema(closes, emaLen);
     const kcMid = ema(closes, kcLen);
     const atrValues = atr(candles, atrLen);
-    emaRef.current?.setData(lineData(candles, emaValues));
-    kcMidRef.current?.setData(lineData(candles, kcMid));
-    kcUpperRef.current?.setData(lineData(candles, kcMid.map((value, idx) => value + atrValues[idx] * kcMult)));
-    kcLowerRef.current?.setData(lineData(candles, kcMid.map((value, idx) => value - atrValues[idx] * kcMult)));
+    emaRef.current?.setData(showEma ? lineData(candles, emaValues) : []);
+    kcMidRef.current?.setData(showKc ? lineData(candles, kcMid) : []);
+    kcUpperRef.current?.setData(showKc ? lineData(candles, kcMid.map((value, idx) => value + atrValues[idx] * kcMult)) : []);
+    kcLowerRef.current?.setData(showKc ? lineData(candles, kcMid.map((value, idx) => value - atrValues[idx] * kcMult)) : []);
     candleSeries.setMarkers([
-      ...orderMarkers(orders),
-      ...decisionMarkers(decisions),
+      ...(showOrders ? orderMarkers(orders) : []),
+      ...(showAi ? decisionMarkers(decisions) : []),
     ].sort((a, b) => Number(a.time) - Number(b.time)).slice(-120));
     for (const line of denseLinesRef.current) {
       candleSeries.removePriceLine(line);
     }
-    denseLinesRef.current = denseZoneLines(denseZone).map((item) => candleSeries.createPriceLine(item));
-    chartRef.current?.timeScale().fitContent();
-  }, [candles, decisions, denseZone, orders, profile]);
+    denseLinesRef.current = showDense ? denseZoneLines(denseZone).map((item) => candleSeries.createPriceLine(item)) : [];
+    applyVisibleRange(chartRef.current, candleData, range);
+  }, [candles, decisions, denseZone, orders, profile, range, showAi, showDense, showEma, showKc, showOrders, showVolume]);
 
-  return <div ref={rootRef} style={{ height }} className="w-full" />;
+  return (
+    <div className="overflow-hidden rounded-2xl border border-[#d9e2ef] bg-[#0b1220] shadow-[0_18px_48px_rgba(15,23,42,0.16)]">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#1e293b] bg-[#0f172a] px-3 py-2 text-xs text-[#cbd5e1]">
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="font-semibold text-white">专业K线</span>
+          <ChartStat label="O" value={focus?.open} />
+          <ChartStat label="H" value={focus?.high} tone="good" />
+          <ChartStat label="L" value={focus?.low} tone="bad" />
+          <ChartStat label="C" value={focus?.close} tone={changePct >= 0 ? "good" : "bad"} />
+          <ChartStat label="涨跌" value={`${changePct >= 0 ? "+" : ""}${changePct.toFixed(2)}%`} tone={changePct >= 0 ? "good" : "bad"} />
+          <ChartStat label="量" value={focus?.volume} compact />
+        </div>
+        <div className="flex flex-wrap items-center gap-1">
+          {(["7d", "30d", "90d", "all"] as const).map((item) => (
+            <ChartButton key={item} active={range === item} onClick={() => setRange(item)}>{rangeLabel(item)}</ChartButton>
+          ))}
+          <ChartButton active={showKc} onClick={() => setShowKc((value) => !value)}>KC</ChartButton>
+          <ChartButton active={showEma} onClick={() => setShowEma((value) => !value)}>EMA</ChartButton>
+          <ChartButton active={showVolume} onClick={() => setShowVolume((value) => !value)}>成交量</ChartButton>
+          <ChartButton active={showOrders} onClick={() => setShowOrders((value) => !value)}>订单</ChartButton>
+          <ChartButton active={showAi} onClick={() => setShowAi((value) => !value)}>AI</ChartButton>
+          <ChartButton active={showDense} onClick={() => setShowDense((value) => !value)}>密集区</ChartButton>
+        </div>
+      </div>
+      <div className="relative bg-white">
+        {candles.length ? null : (
+          <div className="absolute inset-0 z-10 grid place-items-center bg-white/80 text-sm text-[#53627a]">等待K线数据加载</div>
+        )}
+        <div ref={rootRef} style={{ height }} className="w-full" />
+      </div>
+      <div className="grid gap-2 border-t border-[#e2e8f0] bg-[#f8fbff] px-3 py-2 text-[11px] text-[#53627a] md:grid-cols-3">
+        <div>图例：KC 上下轨蓝色，中轨灰色；订单箭头和 AI 圆点可独立开关。</div>
+        <div>当前显示：{rangeLabel(range)} / {candles.length} 根K线</div>
+        <div>密集区价格线来自本地结构分析，不能替代交易所真实挂单深度。</div>
+      </div>
+    </div>
+  );
+}
+
+function ChartButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-lg border px-2.5 py-1 text-[11px] transition ${active ? "border-[#60a5fa] bg-[#1d4ed8] text-white shadow-sm" : "border-[#334155] bg-[#111827] text-[#cbd5e1] hover:border-[#64748b]"}`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function ChartStat({ label, value, tone = "default", compact = false }: { label: string; value: unknown; tone?: "default" | "good" | "bad"; compact?: boolean }) {
+  const color = tone === "good" ? "text-[#22c55e]" : tone === "bad" ? "text-[#f43f5e]" : "text-[#e2e8f0]";
+  const formatted = typeof value === "string" ? value : formatChartNumber(value, compact ? 0 : 2);
+  return <span className={`${color} font-mono`}><span className="text-[#94a3b8]">{label}</span> {formatted}</span>;
+}
+
+function formatChartNumber(value: unknown, digits = 2) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "--";
+  return number.toLocaleString("en-US", { maximumFractionDigits: digits });
+}
+
+function rangeLabel(value: "7d" | "30d" | "90d" | "all") {
+  return value === "7d" ? "7D" : value === "30d" ? "30D" : value === "90d" ? "90D" : "ALL";
+}
+
+function applyVisibleRange(chart: IChartApi | null, candleData: Array<{ time: UTCTimestamp }>, range: "7d" | "30d" | "90d" | "all") {
+  if (!chart || !candleData.length) return;
+  if (range === "all") {
+    chart.timeScale().fitContent();
+    return;
+  }
+  const bars = range === "7d" ? 24 * 7 : range === "30d" ? 24 * 30 : 24 * 90;
+  const visible = candleData.slice(-Math.min(candleData.length, bars));
+  const from = visible[0]?.time;
+  const to = visible.at(-1)?.time;
+  if (from && to) chart.timeScale().setVisibleRange({ from, to });
 }
 
 function lineData(candles: Candle[], values: number[]) {

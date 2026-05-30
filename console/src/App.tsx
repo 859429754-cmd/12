@@ -373,6 +373,7 @@ function ShellNav({
       </nav>
       <div className="min-h-0 flex-1 overflow-auto border-t border-[#e3eaf3] bg-[#f8fbff] p-3">
         <LeftRail
+          workspace={workspace}
           symbol={symbol}
           setSymbol={setSymbol}
           symbols={symbols}
@@ -502,6 +503,7 @@ function StatusPill({ label, value }: { label: string; value: string }) {
 }
 
 function LeftRail({
+  workspace,
   symbol,
   setSymbol,
   symbols,
@@ -512,6 +514,7 @@ function LeftRail({
   message,
   postAction,
 }: {
+  workspace: WorkspaceId;
   symbol: string;
   setSymbol: (value: string) => void;
   symbols: string[];
@@ -525,9 +528,10 @@ function LeftRail({
   const rawBalance = objectPayload(balance?.raw);
   const directUsdt = objectPayload(balance?.USDT);
   const usdt = Object.keys(directUsdt).length ? directUsdt : objectPayload(rawBalance.USDT);
+  const isDashboard = workspace === "dashboard";
   return (
     <aside className="flex min-h-0 flex-col gap-2 overflow-auto">
-      <Surface title={<><ShieldCheck size={13} /> 策略档案</>}>
+      <Surface title={<><ShieldCheck size={13} /> {isDashboard ? "快速控制" : "策略档案"}</>}>
         <select className={`${input} mb-2 w-full ${mono}`} value={symbol} onChange={(event) => setSymbol(event.target.value)}>
           {symbols.map((item) => (
             <option key={item} value={item}>
@@ -535,12 +539,20 @@ function LeftRail({
             </option>
           ))}
         </select>
-        <div className="grid grid-cols-2 gap-2">
-          <Metric label="档案" value={profile?.profile_name || "--"} />
-          <Metric label="策略" value={profile?.enabled ? "运行中" : "研究中"} tone={profile?.enabled ? "good" : "warn"} />
-          <Metric label="授权" value={profile?.opening_authorized ? "已授权" : "未授权"} tone={profile?.opening_authorized ? "good" : "warn"} />
-          <Metric label="报告" value={profile?.report_enabled ? "开启" : "关闭"} />
-        </div>
+        {isDashboard ? (
+          <div className="rounded-xl border border-[#dfe7f1] bg-white p-3 text-xs text-[#53627a]">
+            <BoundaryLine label="策略" value={profile?.enabled ? "运行中" : "研究中"} />
+            <BoundaryLine label="授权" value={profile?.opening_authorized ? "已授权" : "未授权"} />
+            <BoundaryLine label="模式" value={executionModeLabel(status?.execution_mode)} />
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-2">
+            <Metric label="档案" value={profile?.profile_name || "--"} />
+            <Metric label="策略" value={profile?.enabled ? "运行中" : "研究中"} tone={profile?.enabled ? "good" : "warn"} />
+            <Metric label="授权" value={profile?.opening_authorized ? "已授权" : "未授权"} tone={profile?.opening_authorized ? "good" : "warn"} />
+            <Metric label="报告" value={profile?.report_enabled ? "开启" : "关闭"} />
+          </div>
+        )}
         <div className="mt-2 grid grid-cols-2 gap-1">
           <button className={button} disabled={busy} onClick={() => postAction("/api/control/authorize", { operator_id: "console", symbols: [symbol] })}>
             授权开仓
@@ -558,14 +570,16 @@ function LeftRail({
         {message ? <div className="mt-2 rounded-xl border border-[#dfe7f1] bg-white p-2 text-[11px] text-[#53627a]">{message}</div> : null}
       </Surface>
 
-      <Surface title={<><Wallet size={13} /> 账户</>}>
-        <div className="grid grid-cols-2 gap-2">
-          <Metric label="USDT 总额" value={num(balance?.usdt_total ?? balance?.total_usdt ?? usdt.total)} />
-          <Metric label="USDT 可用" value={num(balance?.usdt_free ?? balance?.free_usdt ?? usdt.free)} />
-          <Metric label="风控上限" value={`${num(status?.risk?.max_total_leverage || 4, 1)}x`} />
-          <Metric label="交易模式" value={tradeModeLabel(status?.trade_mode)} />
-        </div>
-      </Surface>
+      {!isDashboard ? (
+        <Surface title={<><Wallet size={13} /> 账户</>}>
+          <div className="grid grid-cols-2 gap-2">
+            <Metric label="USDT 总额" value={num(balance?.usdt_total ?? balance?.total_usdt ?? usdt.total)} />
+            <Metric label="USDT 可用" value={num(balance?.usdt_free ?? balance?.free_usdt ?? usdt.free)} />
+            <Metric label="风控上限" value={`${num(status?.risk?.max_total_leverage || 4, 1)}x`} />
+            <Metric label="交易模式" value={tradeModeLabel(status?.trade_mode)} />
+          </div>
+        </Surface>
+      ) : null}
 
       <Surface title={<><Power size={13} /> 执行控制</>}>
         <div className="grid grid-cols-1 gap-1">
@@ -3243,6 +3257,7 @@ function DecisionSummary({ data }: { data: Record<string, unknown> }) {
   const scale = risk
     ? { label: tierLabel(risk.position_tier), scale: positionScaleLabel(risk.position_scale) }
     : aiScaleFromConfidence(confidence);
+  const activeTier = risk ? String(risk.position_tier || "block") : tierKeyFromConfidence(confidence);
   const scoreRows: Array<[string, unknown]> = [
     ["趋势确认", body.trend_confirmation_score],
     ["震荡风险", body.range_risk_score],
@@ -3260,15 +3275,44 @@ function DecisionSummary({ data }: { data: Record<string, unknown> }) {
       {scoreRows.map(([label, value]) => (
         <Metric key={label} label={label} value={confidencePct(value)} tone={Number(value) >= 0.7 ? "good" : Number(value) >= 0.45 ? "warn" : "bad"} />
       ))}
-      <div className="col-span-5 rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs">
-        <div className="mb-2 flex items-center justify-between">
-          <span className="font-semibold text-[#172033]">本地风控五档映射</span>
-          <span className={`${mono} text-[#2454ff]`}>{scale.label} / {scale.scale}</span>
+      <AiSizingTierStrip activeTier={activeTier} activeScale={scale.scale} />
+    </div>
+  );
+}
+
+function AiSizingTierStrip({ activeTier, activeScale }: { activeTier: string; activeScale: string }) {
+  const tiers = [
+    { key: "block", label: "阻断", scale: "0%", body: "AI 或硬风控否决，不开仓。" },
+    { key: "weak", label: "弱仓", scale: "25%", body: "只允许小仓验证。" },
+    { key: "normal", label: "标准仓", scale: "50%", body: "趋势有效但仍需折扣。" },
+    { key: "strong", label: "强仓", scale: "75%", body: "多因子同向确认。" },
+    { key: "full", label: "满仓", scale: "100%", body: "强趋势且风险项全部通过。" },
+  ];
+  return (
+    <div className="col-span-5 rounded-xl border border-[#cfe0ff] bg-gradient-to-br from-[#f8fbff] to-white p-3 text-xs shadow-inner">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <div className="font-semibold text-[#172033]">ETH 实盘五档映射</div>
+          <div className="mt-1 text-[11px] text-[#64748b]">AI 只负责缩放和否决，方向必须来自本地策略信号。</div>
         </div>
-        <div className="h-2 overflow-hidden rounded-full bg-[#dfe7f1]">
-          <div className="h-full rounded-full bg-[#2454ff]" style={{ width: risk ? positionScaleLabel(risk.position_scale) : confidenceBarWidth(confidence) }} />
-        </div>
-        <div className="mt-2 text-[11px] leading-5 text-[#53627a]">真实仓位由本地策略信号、AI 五分制、硬风控和剩余杠杆共同裁剪；重大新闻复评只落库，不直接下单。</div>
+        <span className={`${mono} rounded-full bg-[#2454ff] px-3 py-1 text-white`}>当前 {tierLabel(activeTier)} / {activeScale}</span>
+      </div>
+      <div className="grid gap-2 md:grid-cols-5">
+        {tiers.map((tier) => {
+          const active = tier.key === activeTier;
+          return (
+            <div key={tier.key} className={`rounded-xl border p-3 transition-all duration-200 ${active ? "border-[#2454ff] bg-[#eef3ff] shadow-[0_10px_22px_rgba(36,84,255,0.16)]" : "border-[#dfe7f1] bg-white"}`}>
+              <div className="flex items-center justify-between gap-2">
+                <span className={`font-semibold ${active ? "text-[#2454ff]" : "text-[#172033]"}`}>{tier.label}</span>
+                <span className={`${mono} text-[11px] ${active ? "text-[#2454ff]" : "text-[#64748b]"}`}>{tier.scale}</span>
+              </div>
+              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[#e6edf5]">
+                <div className={`h-full rounded-full ${active ? "bg-[#2454ff]" : "bg-[#cbd6e5]"}`} style={{ width: tier.scale }} />
+              </div>
+              <div className="mt-2 min-h-8 text-[11px] leading-4 text-[#53627a]">{tier.body}</div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -3413,6 +3457,15 @@ function aiScaleFromConfidence(value: unknown) {
   if (confidence >= 0.75) return { label: "强仓", scale: "75%" };
   if (confidence >= 0.65) return { label: "标准仓", scale: "50%" };
   return { label: "弱仓", scale: "25%" };
+}
+
+function tierKeyFromConfidence(value: unknown) {
+  const confidence = Number(value);
+  if (!Number.isFinite(confidence) || confidence < 0.55) return "block";
+  if (confidence >= 0.85) return "full";
+  if (confidence >= 0.75) return "strong";
+  if (confidence >= 0.65) return "normal";
+  return "weak";
 }
 
 function tierLabel(value: unknown) {
