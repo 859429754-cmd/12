@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ai_quant_trader.core.config import load_config
 from ai_quant_trader.ops.maintenance import result_to_json, run_runtime_maintenance

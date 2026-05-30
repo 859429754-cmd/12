@@ -205,29 +205,29 @@ class DeepSeekBrain:
 
     def _normalize_side(self, value: Any) -> str:
         text = str(value or "").strip().lower()
-        if text in {"long", "buy", "bull", "bullish", "up", "?", "??", "??"}:
+        if text in {"long", "buy", "bull", "bullish", "up", "多", "看多", "做多"}:
             return "long"
-        if text in {"short", "sell", "bear", "bearish", "down", "?", "??", "??"}:
+        if text in {"short", "sell", "bear", "bearish", "down", "空", "看空", "做空"}:
             return "short"
         return "flat"
 
     def _normalize_alignment(self, value: Any) -> str:
         text = str(value or "").strip().lower()
-        if text in {"aligned", "support", "supports", "confirm", "confirmed", "bullish", "bearish", "long", "short", "??", "??"}:
+        if text in {"aligned", "support", "supports", "confirm", "confirmed", "bullish", "bearish", "long", "short", "同向", "一致"}:
             return "aligned"
-        if text in {"conflict", "conflicting", "against", "oppose", "opposite", "??", "??"}:
+        if text in {"conflict", "conflicting", "against", "oppose", "opposite", "冲突", "反向"}:
             return "conflict"
-        if text in {"neutral", "flat", "mixed", "??", "??"}:
+        if text in {"neutral", "flat", "mixed", "中性", "观望"}:
             return "neutral"
         return "unknown"
 
     def _normalize_veto(self, value: Any) -> str:
         text = str(value or "").strip().lower()
-        if text in {"allow", "approve", "go", "??"}:
+        if text in {"allow", "approve", "go", "允许"}:
             return "allow"
-        if text in {"reduce", "scale_down", "smaller", "??", "??"}:
+        if text in {"reduce", "scale_down", "smaller", "降仓", "减仓"}:
             return "reduce"
-        return "block" if text in {"block", "veto", "deny", "??", "??"} else "reduce"
+        return "block" if text in {"block", "veto", "deny", "阻断", "否决"} else "reduce"
 
     def _normalize_optional_float(self, value: Any) -> float | None:
         if value is None:
@@ -382,13 +382,28 @@ class DeepSeekBrain:
         direction = Side.LONG if signal.action == SignalAction.LONG else Side.SHORT if signal.action == SignalAction.SHORT else Side.FLAT
         data_ok = orderflow.data_quality >= 0.5 and not news.warnings
         aligned_orderflow = orderflow.alignment_hint == Alignment.ALIGNED
+        ai_unavailable = (
+            reason == "missing_deepseek_api_key"
+            or reason.startswith("deepseek_error:")
+            or reason.startswith("deepseek_budget_blocked:")
+        )
         strategy_allowed = (
             regime_pattern.strategy_allowed
             if regime_pattern is not None
             else str(signal.technical_evidence.get("strategy_allowed") or "trend")
         )
         regime_blocks_entry = is_entry and strategy_allowed != "trend"
-        if regime_blocks_entry:
+        if is_entry and ai_unavailable:
+            veto = VetoAction.BLOCK
+            confidence = 0.0
+            regime = MarketRegime.UNCERTAIN
+            action = "block"
+            trend_confirmation_score = 0.0
+            range_risk_score = 0.75
+            news_risk_score = 0.75 if news.warnings else 0.55
+            orderflow_confirmation_score = 0.0
+            dense_zone_breakout_score = 0.0
+        elif regime_blocks_entry:
             veto = VetoAction.BLOCK
             confidence = 0.35
             regime = MarketRegime.RANGE if strategy_allowed == "range" else MarketRegime.UNCERTAIN

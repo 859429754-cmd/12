@@ -158,6 +158,13 @@ class AiConfig(BaseModel):
     candidate_trade_min_confidence: float = Field(default=0.65, ge=0, le=1)
     ai_enabled_symbols: list[str] = Field(default_factory=list)
     symbol_prompt_weights: dict[str, dict[str, float]] = Field(default_factory=dict)
+    call_budget_enabled: bool = True
+    max_calls_per_hour: int = Field(default=8, ge=1, le=200)
+    max_calls_per_day: int = Field(default=60, ge=1, le=2000)
+    max_major_news_reviews_per_hour: int = Field(default=3, ge=1, le=200)
+    max_major_news_reviews_per_day: int = Field(default=24, ge=1, le=1000)
+    event_dedupe_hours: int = Field(default=48, ge=1, le=168)
+    failure_cooldown_minutes: int = Field(default=20, ge=0, le=1440)
 
 
 class SecurityConfig(BaseModel):

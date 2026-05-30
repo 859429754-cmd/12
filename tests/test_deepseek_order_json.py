@@ -119,3 +119,68 @@ def test_deepseek_normalizes_five_score_fields_conservatively() -> None:
     assert decision.news_risk_score == 0.65
     assert decision.orderflow_confirmation_score == 0.35
     assert decision.dense_zone_breakout_score == 0.72
+
+
+def test_deepseek_normalizes_chinese_decision_terms() -> None:
+    brain = DeepSeekBrain(api_key="test-key")
+
+    parsed = brain._normalize_decision_json(
+        {
+            "regime": "震荡",
+            "direction": "做空",
+            "news_alignment": "冲突",
+            "orderflow_alignment": "同向",
+            "veto_action": "降仓",
+        }
+    )
+
+    assert parsed["regime"] == "range"
+    assert parsed["direction"] == "short"
+    assert parsed["news_alignment"] == "conflict"
+    assert parsed["orderflow_alignment"] == "aligned"
+    assert parsed["veto_action"] == "reduce"
+
+
+@pytest.mark.asyncio
+async def test_deepseek_unavailable_blocks_entry_even_when_signal_is_strong(monkeypatch) -> None:
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    brain = DeepSeekBrain(api_key=None)
+
+    decision = await brain.analyze_symbol(
+        StrategySignal(
+            symbol="ETH/USDT:USDT",
+            timeframe="1h",
+            action=SignalAction.LONG,
+            current_price=3500.0,
+            suggested_qty=0.5,
+            signal_strength=0.9,
+        ),
+        AggregatedOrderflow(symbol="ETH/USDT:USDT", alignment_hint="aligned", data_quality=0.95, source_count=3),
+        DenseZone(
+            symbol="ETH/USDT:USDT",
+            poc=3480.0,
+            vah=3600.0,
+            val=3360.0,
+            current_position="above_value",
+            strength=0.8,
+            trend_score=0.8,
+        ),
+        PatternCandidate(symbol="ETH/USDT:USDT", pattern_type="rectangle_breakout", confidence=0.8),
+        NewsDigest(items=[NewsItem(title="Macro calendar quiet", source="test")]),
+        RegimePattern(
+            symbol="ETH/USDT:USDT",
+            regime_candidate="trend",
+            strategy_allowed="trend",
+            pattern_family="trend_continuation",
+            pattern_name="rectangle_breakout",
+            breakout_quality="strong",
+            trend_score=0.85,
+            range_score=0.15,
+            reason_codes=["trend_score_dominant"],
+        ),
+    )
+
+    assert decision.veto_action == "block"
+    assert decision.action_suggestion == "block"
+    assert decision.confidence == 0.0
+    assert "missing_deepseek_api_key" in decision.reason_codes

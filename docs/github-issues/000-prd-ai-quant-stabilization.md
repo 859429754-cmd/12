@@ -24,20 +24,21 @@ The system has a working FastAPI/React/SQLite/Gateway architecture, but several 
 ## Current Strategy Contract
 
 - Timeframe: 1h
-- EMA filter: EMA89
+- EMA89 is calculated for evidence/charting, but disabled as a production entry gate by default.
 - Volume MA: SMA(volume, 20)
-- Volume multiple: 1.5
+- Volume multiple: 2.5
+- Momentum filter: KDJ(9, 3, 3)
 - KC middle: EMA(close, 20)
 - KC width: ATR14 * 2.8
-- ATR fixed stop multiple: 3.0
+- ATR fixed stop multiple: 1.5
 - Leverage cap: 4x total equity
 
 Entry:
 
 - Long only when previous close <= previous KC upper and current closed candle close > current KC upper.
 - Short only when previous close >= previous KC lower and current closed candle close < current KC lower.
-- Current close must be on the correct side of EMA89.
-- Current volume must exceed volume MA * 1.5.
+- Current volume must exceed volume MA * 2.5.
+- KDJ must confirm direction: long requires K > D and J >= 50; short requires K < D and J <= 50.
 
 Exit:
 
@@ -52,4 +53,3 @@ Exit:
 - Backtest ledger reports entry/exit time, side, prices, PnL, fee, slippage, exit reason, stop price, and max adverse excursion.
 - Live exits actually submit reduce-only/close orders.
 - No secrets are printed, committed, or written to issue bodies.
-

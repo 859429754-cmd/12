@@ -5,6 +5,7 @@ import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from ai_quant_trader.core.models import NewsDigest, NewsItem
 
@@ -181,3 +182,145 @@ class NewsMemoryStore:
             return parsed.astimezone(UTC)
         except ValueError:
             return datetime.now(UTC)
+
+
+class DailyNewsFlashStore:
+    """Stores today's important news flashes for AI review at signal time."""
+
+    def __init__(self, root: str = "data/news_daily", timezone_name: str = "Asia/Shanghai"):
+        self.root = Path(root)
+        self.timezone = ZoneInfo(timezone_name)
+
+    def update(self, digest: NewsDigest, now: datetime | None = None) -> NewsDigest:
+        records = self._load_today(now)
+        existing = {str(record.get("key") or "") for record in records}
+        changed = False
+        for item in digest.items:
+            if not self._is_important(item):
+                continue
+            key = self._key(item)
+            if key in existing:
+                continue
+            records.append(self._record(item, key))
+            existing.add(key)
+            changed = True
+        if changed:
+            self._save_today(records, now)
+        return self.enrich_digest(digest, now=now)
+
+    def enrich_digest(self, digest: NewsDigest, now: datetime | None = None, recent_minutes: int = 60) -> NewsDigest:
+        if "daily_news_flash_context_attached" in digest.warnings:
+            return digest
+        records = self._load_today(now)
+        if not records and not digest.items:
+            return digest
+        now_utc = self._now_utc(now)
+        recent_cutoff = now_utc - timedelta(minutes=recent_minutes)
+        recent_lines = [
+            self._format_item(item)
+            for item in digest.items
+            if item.published_at.astimezone(UTC) >= recent_cutoff
+        ][:12]
+        today_lines = [self._format_record(record) for record in records[:30]]
+        sections: list[str] = []
+        if recent_lines:
+            sections.append("最近1小时快讯：\n" + "\n".join(recent_lines))
+        if today_lines:
+            sections.append("今日重点快讯记忆：\n" + "\n".join(today_lines))
+        if digest.summary:
+            sections.append("当前新闻摘要：\n" + digest.summary)
+        if not sections:
+            return digest
+        summary = "\n\n".join(sections)
+        warnings = list(dict.fromkeys([*digest.warnings, "daily_news_flash_context_attached"]))
+        return digest.model_copy(update={"summary": summary, "warnings": warnings})
+
+    def context_summary(self, now: datetime | None = None, limit: int = 30) -> str:
+        records = self._load_today(now)
+        if not records:
+            return ""
+        lines = [self._format_record(record) for record in records[:limit]]
+        return "今日重点快讯记忆：\n" + "\n".join(lines)
+
+    def today_path(self, now: datetime | None = None) -> Path:
+        local_now = self._now_utc(now).astimezone(self.timezone)
+        return self.root / f"{local_now:%Y-%m-%d}.json"
+
+    def _load_today(self, now: datetime | None = None) -> list[dict[str, Any]]:
+        path = self.today_path(now)
+        if not path.exists():
+            return []
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return []
+        if not isinstance(data, list):
+            return []
+        data.sort(key=lambda row: (row.get("importance", 0), row.get("published_at", "")), reverse=True)
+        return data
+
+    def _save_today(self, records: list[dict[str, Any]], now: datetime | None = None) -> None:
+        path = self.today_path(now)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        records.sort(key=lambda row: (row.get("importance", 0), row.get("published_at", "")), reverse=True)
+        path.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _is_important(self, item: NewsItem) -> bool:
+        text = f"{item.title} {item.summary} {item.category}".lower()
+        if any(word in text for word in SHORT_NOISE_KEYWORDS):
+            return False
+        return (
+            item.credibility >= 0.80
+            or sum(1 for keyword in LONG_IMPACT_KEYWORDS if keyword in text) >= 1
+            or item.category.lower() in {"macro", "politics", "geopolitical", "regulation"}
+        )
+
+    def _record(self, item: NewsItem, key: str) -> dict[str, Any]:
+        text = f"{item.title} {item.summary} {item.category}".lower()
+        importance = sum(1 for keyword in LONG_IMPACT_KEYWORDS if keyword in text)
+        if item.credibility >= 0.90:
+            importance += 2
+        return {
+            "key": key,
+            "title": item.title,
+            "summary": item.summary or item.title,
+            "source": item.source,
+            "url": item.url,
+            "category": item.category,
+            "published_at": item.published_at.astimezone(UTC).isoformat(),
+            "credibility": item.credibility,
+            "importance": importance,
+        }
+
+    def _format_item(self, item: NewsItem) -> str:
+        when = item.published_at.astimezone(self.timezone).strftime("%H:%M")
+        summary = (item.summary or item.title).strip()
+        return f"- {when} [{item.source}] {item.title}：{summary}"
+
+    def _format_record(self, record: dict[str, Any]) -> str:
+        when = self._parse_dt(str(record.get("published_at") or "")).astimezone(self.timezone).strftime("%H:%M")
+        source = str(record.get("source") or "")
+        title = str(record.get("title") or "").strip()
+        summary = str(record.get("summary") or title).strip()
+        return f"- {when} [{source}] {title}：{summary}"
+
+    def _key(self, item: NewsItem) -> str:
+        raw = item.url or item.title
+        text = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", raw.lower())
+        return text[:160]
+
+    def _parse_dt(self, value: str) -> datetime:
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                return parsed.replace(tzinfo=UTC)
+            return parsed.astimezone(UTC)
+        except ValueError:
+            return datetime.now(UTC)
+
+    def _now_utc(self, now: datetime | None = None) -> datetime:
+        if now is None:
+            return datetime.now(UTC)
+        if now.tzinfo is None:
+            return now.replace(tzinfo=UTC)
+        return now.astimezone(UTC)

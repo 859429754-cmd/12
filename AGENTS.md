@@ -41,7 +41,7 @@
 - Python 必须使用 type hints；外部输入必须 Pydantic 校验。
 - TypeScript API 响应必须定义 interface/type；关键业务数据禁止随意 `any`。
 - 后端核心路径禁止 `print()`；前端关键路径禁止裸 `console.log()`。
-- 网络、交易所 API、WebSocket、文件、数据库、AI API、钉钉 API、外部数据源必须有具体异常处理、日志和降级路径。
+- 网络、交易所 API、WebSocket、文件、数据库、AI API、通知 API、外部数据源必须有具体异常处理、日志和降级路径。
 - 回测和实盘必须尽量共用策略信号接口，避免“回测一套、实盘一套”。
 - 每次实质代码修改后，按风险运行：
   - `python -m compileall ai_quant_trader tests`

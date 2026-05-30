@@ -917,7 +917,7 @@ def backtest_trend_strategy_ai_proxy(
         fee_rate=cost_model.taker_fee_rate,
         slippage_bps=cost_model.base_slippage_bps,
         leverage=leverage,
-        note="趋势策略候选+AI终裁代理回测：第一级只使用EMA89、KC(20,2.8)、VMA20、ATR14生成候选点；第二级AI代理只对这些候选点做允许、降仓、阻断，不调用DeepSeek。",
+        note="趋势策略候选+AI终裁代理回测：第一级复用当前 TrendStrategy 合同生成候选点；第二级AI代理只对这些候选点做允许、降仓、阻断，不调用DeepSeek。",
     )
     result["ai_proxy_enabled"] = True
     result["ai_proxy_stats"] = stats
@@ -1024,7 +1024,7 @@ def optimize_trend_parameters(
     kc_scalars = kc_scalars or [2.0, 2.4, 2.8, 3.2]
     atr_lengths = atr_lengths or [14]
     vma_lengths = vma_lengths or [20]
-    volume_multiples = volume_multiples or [1.2, 1.5, 1.8, 2.0]
+    volume_multiples = volume_multiples or [2.0, 2.2, 2.5, 2.8, 3.0]
     atr_stop_multiples = atr_stop_multiples or [1.5, 2.0, 2.5, 3.0]
     position_fractions = position_fractions or [base_config.position_fraction]
     use_ema_filters = use_ema_filters or [base_config.use_ema_filter]
@@ -1283,28 +1283,23 @@ def _trend_ai_proxy_action(
     kcm: str,
     kcl: str,
 ) -> tuple[SignalAction, float, str]:
+    strategy = TrendStrategy(config)
+    action = strategy.evaluate_action_from_indicators(df, idx, position)
+    if action in {SignalAction.EXIT_LONG, SignalAction.EXIT_SHORT}:
+        return action, 1.0, "允许"
+    if action == SignalAction.HOLD:
+        return SignalAction.HOLD, 0.0, "允许"
+
     last = df.iloc[idx]
     prev = df.iloc[idx - 1]
     close = float(last["close"])
-    prev_close = float(prev["close"])
     volume = float(last["volume"])
     vma = float(last["vma_20"]) if not math.isnan(float(last["vma_20"])) else 0.0
     atr_value = float(last["atr"]) if not math.isnan(float(last["atr"])) else 0.0
-    if vma <= 0 or atr_value <= 0 or any(math.isnan(float(last[col])) for col in ["ema_89", kcu, kcm, kcl]):
+    if vma <= 0 or atr_value <= 0 or any(math.isnan(float(last[col])) for col in [kcu, kcm, kcl]):
         return SignalAction.HOLD, 0.0, "阻断"
     if any(math.isnan(float(prev[col])) for col in [kcu, kcm, kcl]):
         return SignalAction.HOLD, 0.0, "阻断"
-
-    long_condition = prev_close <= float(prev[kcu]) and close > float(last[kcu]) and close > float(last["ema_89"]) and volume > vma * config.volume_multiple
-    short_condition = prev_close >= float(prev[kcl]) and close < float(last[kcl]) and close < float(last["ema_89"]) and volume > vma * config.volume_multiple
-    if not long_condition and not short_condition:
-        exit_long = position.qty > 0 and prev_close >= float(prev[kcm]) and close < float(last[kcm])
-        exit_short = position.qty < 0 and prev_close <= float(prev[kcm]) and close > float(last[kcm])
-        if exit_long:
-            return SignalAction.EXIT_LONG, 1.0, "允许"
-        if exit_short:
-            return SignalAction.EXIT_SHORT, 1.0, "允许"
-        return SignalAction.HOLD, 0.0, "允许"
 
     recent = df.iloc[max(0, idx - 48) : idx + 1]
     recent_high = float(recent["high"].max())
@@ -1312,24 +1307,20 @@ def _trend_ai_proxy_action(
     range_atr = (recent_high - recent_low) / max(atr_value, 1e-9)
     volume_multiple = volume / vma
     atr_pct = atr_value / max(close, 1e-9)
-    if long_condition:
+    if action == SignalAction.LONG:
         breakout_atr = max((close - float(last[kcu])) / atr_value, 0.0)
-        ema_distance = (close - float(last["ema_89"])) / atr_value
-        action = SignalAction.LONG
     else:
         breakout_atr = max((float(last[kcl]) - close) / atr_value, 0.0)
-        ema_distance = (float(last["ema_89"]) - close) / atr_value
-        action = SignalAction.SHORT
 
-    weak_breakout = breakout_atr < 0.25 or ema_distance < 0.35
+    weak_breakout = breakout_atr < 0.25
     chop_risk = range_atr < 7.0 and breakout_atr < 0.5
     extreme_volatility = atr_pct > 0.065
     if weak_breakout or chop_risk:
         return SignalAction.HOLD, 0.0, "阻断"
     if extreme_volatility:
-        return action, 0.45, "降仓"
-    if breakout_atr >= 0.75 and volume_multiple >= max(config.volume_multiple * 1.45, 2.0) and ema_distance >= 1.0:
-        return action, 1.25, "强突破加权"
+        return action, 0.25, "降仓"
+    if breakout_atr >= 0.75 and volume_multiple >= max(config.volume_multiple * 1.45, 2.0):
+        return action, 1.0, "允许"
     return action, 0.75, "降仓"
 
 
@@ -1340,20 +1331,14 @@ def _trend_candidate_side(
     kcu: str,
     kcl: str,
 ) -> str | None:
-    last = df.iloc[idx]
-    prev = df.iloc[idx - 1]
-    close = float(last["close"])
-    prev_close = float(prev["close"])
-    volume = float(last["volume"])
-    vma = float(last["vma_20"]) if not math.isnan(float(last["vma_20"])) else 0.0
-    atr_value = float(last["atr"]) if not math.isnan(float(last["atr"])) else 0.0
-    if vma <= 0 or atr_value <= 0 or any(math.isnan(float(last[col])) for col in ["ema_89", kcu, kcl]):
-        return None
-    if any(math.isnan(float(prev[col])) for col in [kcu, kcl]):
-        return None
-    if prev_close <= float(prev[kcu]) and close > float(last[kcu]) and close > float(last["ema_89"]) and volume > vma * config.volume_multiple:
+    action = TrendStrategy(config).evaluate_action_from_indicators(
+        df,
+        idx,
+        PositionSnapshot(symbol="", qty=0.0, mark_price=0.0),
+    )
+    if action == SignalAction.LONG:
         return "long"
-    if prev_close >= float(prev[kcl]) and close < float(last[kcl]) and close < float(last["ema_89"]) and volume > vma * config.volume_multiple:
+    if action == SignalAction.SHORT:
         return "short"
     return None
 

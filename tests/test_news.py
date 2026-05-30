@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import json
 import re
 from datetime import UTC, datetime, timedelta, timezone
 
 from ai_quant_trader.app import TradingApp
 from ai_quant_trader.core.models import NewsDigest, NewsItem
 from ai_quant_trader.data.news import NewsCollector
-from ai_quant_trader.data.news_memory import NewsMemoryStore
+from ai_quant_trader.data.news_memory import DailyNewsFlashStore, NewsMemoryStore
 from ai_quant_trader.reporting.hourly import HourlyReportBuilder
 from tests.test_console_api import write_config
 
@@ -214,6 +215,42 @@ def test_news_memory_keeps_long_impact_and_drops_noise(tmp_path) -> None:
     assert len(records) == 1
     assert "Fed" in records[0]["title"]
     assert "7天" in enriched.summary or "长期影响" in enriched.summary
+
+
+def test_daily_news_flash_store_records_today_and_enriches_signal_context(tmp_path) -> None:
+    now = datetime(2026, 5, 21, 10, 30, tzinfo=UTC)
+    store = DailyNewsFlashStore(str(tmp_path / "news_daily"))
+    digest = NewsDigest(
+        summary="当前窗口摘要",
+        items=[
+            NewsItem(
+                title="美国GDP增长2.4%，白宫称将评估伊朗制裁豁免",
+                source="金十数据",
+                published_at=now - timedelta(minutes=20),
+                credibility=0.95,
+                category="macro",
+                summary="美国GDP增长2.4%，白宫称将评估伊朗制裁豁免，WTI原油价格快速波动。",
+            ),
+            NewsItem(
+                title="普通技术分析复盘",
+                source="Blog",
+                published_at=now,
+                credibility=0.4,
+                category="macro",
+                summary="technical analysis recap",
+            ),
+        ],
+    )
+
+    enriched = store.update(digest, now=now)
+    records = json.loads(store.today_path(now).read_text(encoding="utf-8"))
+
+    assert len(records) == 1
+    assert records[0]["source"] == "金十数据"
+    assert "最近1小时快讯" in enriched.summary
+    assert "今日重点快讯记忆" in enriched.summary
+    assert "美国GDP增长2.4%" in enriched.summary
+    assert "daily_news_flash_context_attached" in enriched.warnings
 
 
 def test_trading_app_reads_cached_news_digest(tmp_path) -> None:

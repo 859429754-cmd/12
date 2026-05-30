@@ -23,6 +23,7 @@ export type StatusResponse = {
   latest_data_health?: DbRow | null;
   latest_ai_drift?: DbRow | null;
   latest_news_risk_review?: DbRow | null;
+  latest_ai_budget?: DbRow | null;
   latest_worker_heartbeats?: Record<string, DbRow | null>;
   latest_maintenance?: DbRow | null;
 };
@@ -109,6 +110,7 @@ export type SystemReadiness = {
   latest_data_health?: DbRow | null;
   latest_ai_drift?: DbRow | null;
   latest_news_risk_review?: DbRow | null;
+  latest_ai_budget?: DbRow | null;
   latest_worker_heartbeats?: Record<string, DbRow | null>;
   latest_maintenance?: DbRow | null;
   checks: ReadinessCheck[];

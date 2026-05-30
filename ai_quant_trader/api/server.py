@@ -259,6 +259,8 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         deepseek_ready = bool(os.getenv("DEEPSEEK_API_KEY"))
         execution_mode = execution_mode_from_config(ctx.config)
         is_mock = execution_mode == "mock"
+        ai_status = ctx.config.ai.model_dump(mode="json")
+        ai_status.pop("symbol_prompt_weights", None)
         return {
             "mode": "模拟运行" if is_mock else "真实运行",
             "dry_run": is_mock,
@@ -270,7 +272,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
             "major_news_only": state.major_news_only,
             "risk": ctx.config.risk.model_dump(mode="json"),
             "ai": {
-                **ctx.config.ai.model_dump(mode="json"),
+                **ai_status,
                 "api_key_configured": deepseek_ready,
                 "status_message": "DeepSeek 已接入" if deepseek_ready else "本地未配置 DeepSeek API，AI 将使用保守降级决策。",
             },
@@ -282,6 +284,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
             "latest_data_health": ctx.store.fetch_latest("data_health"),
             "latest_ai_drift": ctx.store.fetch_latest("ai_drift_checks"),
             "latest_news_risk_review": ctx.store.fetch_latest("news_risk_reviews"),
+            "latest_ai_budget": ctx.store.fetch_latest("ai_call_budget_events"),
             "latest_worker_heartbeats": _worker_heartbeat_rows(ctx),
             "latest_maintenance": ctx.store.fetch_latest("maintenance_runs"),
         }
@@ -306,7 +309,9 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         latest_order_lifecycle = ctx.store.fetch_latest("order_lifecycle")
         latest_data_health = ctx.store.fetch_latest("data_health")
         latest_ai_drift = ctx.store.fetch_latest("ai_drift_checks")
+        latest_ai_decision = ctx.store.fetch_latest("ai_decisions")
         latest_news_risk = ctx.store.fetch_latest("news_risk_reviews")
+        latest_ai_budget = ctx.store.fetch_latest("ai_call_budget_events")
         latest_worker_heartbeats = _worker_heartbeat_rows(ctx)
         latest_maintenance = ctx.store.fetch_latest("maintenance_runs")
         exchange_payload = (latest_exchange or {}).get("payload") or {}
@@ -315,6 +320,8 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         reconciliation_ok = execution_mode == "mock" or _latest_payload_status_fresh(ctx, latest_reconciliation, "ok")
         data_health_status = str(((latest_data_health or {}).get("payload") or {}).get("status") or "warn")
         ai_drift_status = str(((latest_ai_drift or {}).get("payload") or {}).get("status") or "warn")
+        deepseek_status, deepseek_detail = _deepseek_readiness_status(deepseek_ready, latest_ai_decision, execution_mode)
+        ai_budget_status, ai_budget_detail = _ai_budget_readiness_status(latest_ai_budget, execution_mode)
         worker_status, worker_detail = _worker_heartbeat_status(ctx, latest_worker_heartbeats)
         maintenance_status, maintenance_detail = _maintenance_status(latest_maintenance)
         checks = [
@@ -340,8 +347,15 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
             _readiness_check(
                 "deepseek",
                 "DeepSeek",
-                "ok" if deepseek_ready else "warn",
-                "DeepSeek API key is configured." if deepseek_ready else "DeepSeek API key is missing; AI decisions will degrade.",
+                deepseek_status,
+                deepseek_detail,
+            ),
+            _readiness_check(
+                "deepseek_budget",
+                "DeepSeek budget",
+                ai_budget_status,
+                ai_budget_detail,
+                age_minutes=_row_age_minutes(latest_ai_budget),
             ),
             _readiness_check(
                 "risk",
@@ -441,7 +455,9 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
             "latest_order_lifecycle": latest_order_lifecycle,
             "latest_data_health": latest_data_health,
             "latest_ai_drift": latest_ai_drift,
+            "latest_ai_decision": latest_ai_decision,
             "latest_news_risk_review": latest_news_risk,
+            "latest_ai_budget": latest_ai_budget,
             "latest_worker_heartbeats": latest_worker_heartbeats,
             "latest_maintenance": latest_maintenance,
             "checks": checks,
@@ -485,8 +501,8 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
                 "score_fields": [
                     "technical_signal_score",
                     "trend_confirmation_score",
-                    "range_safety_score",
-                    "news_safety_score",
+                    "range_risk_score",
+                    "news_risk_score",
                     "orderflow_confirmation_score",
                     "dense_zone_breakout_score",
                 ],
@@ -1888,6 +1904,60 @@ def _maintenance_status(row: dict[str, Any] | None) -> tuple[Literal["ok", "warn
     if warnings:
         return "warn", "Runtime maintenance warnings: " + ",".join(str(item) for item in warnings)
     return "ok", "Runtime maintenance completed without warnings."
+
+
+def _deepseek_readiness_status(
+    api_key_configured: bool,
+    latest_ai_decision: dict[str, Any] | None,
+    execution_mode: str,
+) -> tuple[Literal["ok", "warn", "block"], str]:
+    if not api_key_configured:
+        return "warn", "DeepSeek API key is missing; AI decisions will degrade."
+    if _latest_ai_decision_has_deepseek_error(latest_ai_decision):
+        status: Literal["ok", "warn", "block"] = "block" if execution_mode == "live" else "warn"
+        return status, "Latest AI decision used DeepSeek error fallback; live entries must fail closed until a successful AI decision is recorded."
+    return "ok", "DeepSeek API key is configured and no latest AI fallback error is recorded."
+
+
+def _ai_budget_readiness_status(
+    latest_ai_budget: dict[str, Any] | None,
+    execution_mode: str,
+) -> tuple[Literal["ok", "warn", "block"], str]:
+    if latest_ai_budget is None:
+        return "ok", "No DeepSeek budget events have been recorded yet."
+    payload = latest_ai_budget.get("payload") or {}
+    status = str(payload.get("status") or "unknown")
+    reason = str(payload.get("reason") or "")
+    if status == "failure":
+        level: Literal["ok", "warn", "block"] = "block" if execution_mode == "live" else "warn"
+        return level, f"Latest DeepSeek call failed; cooldown may block new AI calls: {reason}"
+    if status == "blocked":
+        if reason == "duplicate_event_key":
+            return "ok", "Latest DeepSeek call was skipped because the news event was already reviewed."
+        level = "block" if execution_mode == "live" else "warn"
+        return level, f"DeepSeek budget guard blocked the latest call: {reason}"
+    if status in {"attempt", "success"}:
+        return "ok", f"Latest DeepSeek budget event status: {status}."
+    return "warn", f"Unknown DeepSeek budget event status: {status}."
+
+
+def _latest_ai_decision_has_deepseek_error(row: dict[str, Any] | None) -> bool:
+    if row is None:
+        return False
+    payload = row.get("payload") or {}
+    candidates: list[Any] = [payload]
+    if isinstance(payload, dict):
+        candidates.extend([payload.get("ai"), payload.get("decision")])
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        reason_codes = candidate.get("reason_codes") or []
+        if any(str(reason).startswith(("deepseek_error:", "missing_deepseek_api_key")) for reason in reason_codes):
+            return True
+        risk_note = str(candidate.get("risk_note") or candidate.get("brief_reason") or "")
+        if "deepseek_error:" in risk_note or "missing_deepseek_api_key" in risk_note:
+            return True
+    return False
 
 
 def _latest_payload_status_fresh(ctx: ConsoleContext, row: dict[str, Any] | None, expected_status: str) -> bool:

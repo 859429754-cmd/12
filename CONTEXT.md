@@ -12,7 +12,7 @@
 - Frontend stack: React + TypeScript + Vite + Tailwind + lightweight-charts
 - Backend stack: Python 3.11+ / FastAPI / asyncio / Pydantic / SQLite WAL / ccxt async
 
-`.env.runtime` contains DeepSeek, Gate.io, DingTalk and other secrets. Never print full contents, commit it, or write it to normal logs.
+`.env.runtime` contains DeepSeek, Gate.io and legacy notification secrets. Never print full contents, commit it, or write it to normal logs.
 
 ## 1. Core Architecture
 
@@ -23,7 +23,7 @@ The system is an AI-assisted crypto quant trading system.
 - Default timeframe: 1h
 - Orderflow data: Binance, OKX, Bybit, Gate public read-only sources
 - News data: free public sources first, covering macro finance, politics, central banks, Fed, USD, oil, geopolitics, crypto industry
-- Interaction priority: Web console first; DingTalk mainly for push and emergency notification
+- Interaction priority: Web console first; legacy DingTalk command/push paths are disabled and must not be reintroduced without an explicit decision.
 - Storage: SQLite WAL + JSONL audit logs
 - AI: DeepSeek for news, market, orderflow, pattern, dense-zone and state synthesis
 
@@ -55,7 +55,7 @@ Important paths:
 - `ai_quant_trader/execution/gateio.py`: Gate.io real execution client
 - `ai_quant_trader/execution/gateway/`: mock/live gateway abstraction
 - `ai_quant_trader/features/`: dense zone, orderflow features, patterns
-- `ai_quant_trader/interaction/`: commands and DingTalk
+- `ai_quant_trader/interaction/`: legacy interaction surface; no active DingTalk command path in the current runtime
 - `ai_quant_trader/monitoring/price.py`: abnormal price wakeup monitor
 - `ai_quant_trader/optimizer/`: monthly review and parameter proposals
 - `ai_quant_trader/reporting/hourly.py`: hourly reports and push text
@@ -68,19 +68,20 @@ Important paths:
 
 ## 3. Current Trend Strategy
 
-The current production strategy is trend breakout:
+The current production strategy is ETH-first 1h trend breakout:
 
-- Trend filter: EMA 89
-- Keltner Channel: length 20, scalar 2.8
-- Volume filter: VMA 20
-- Risk ATR: ATR 14
-- ATR stop multiple: 3.0
-- Long: close > KC upper, close > EMA89, volume > VMA20 * 1.5
-- Short: close < KC lower, close < EMA89, volume > VMA20 * 1.5
-- Long exit: close breaks below KC middle
-- Short exit: close breaks above KC middle
+- Keltner Channel: middle EMA20, width ATR14 * 2.8
+- Volume filter: SMA(volume, 20) * 2.5
+- Momentum filter: KDJ(9, 3, 3)
+- EMA89: calculated for evidence/charting, but disabled as an entry gate by default
+- ATR stop multiple: 1.5 fixed from entry, not trailing
+- Long: previous close <= previous KC upper, current closed close > current KC upper, volume > VMA20 * 2.5, KDJ K > D and J >= 50
+- Short: previous close >= previous KC lower, current closed close < current KC lower, volume > VMA20 * 2.5, KDJ K < D and J <= 50
+- Long exit: reverse cross below KC middle
+- Short exit: reverse cross above KC middle
+- No same-direction add-on; reversal closes the old side before opening the new side
 
-Hard rule: do not introduce MACD, RSI, or Bollinger Bands as a pre-filter for this trend strategy. Future factor discovery is allowed, but must not silently change the current strategy definition.
+Hard rule: do not silently change this current ETH trend strategy definition. Future factor discovery is allowed only as a separate research path and must not replace the production contract without an explicit decision.
 
 ## 4. AI and Strategy Boundary
 
@@ -448,7 +449,7 @@ Do not assume these remain true. Re-run relevant checks after changes.
 - Enable live opening by default after cold start
 - Duplicate same-direction add when position exists
 - Hardcode ghost frontend symbols
-- Store full DingTalk/API secrets in logs or DB
+- Store full notification/API secrets in logs or DB
 - Call DeepSeek per candle for multi-year backtests
 - Ignore fee, slippage, failed fills, rate limits for prettier backtests
 - Expose unauthenticated console to public internet
@@ -466,7 +467,7 @@ Anything touching these must handle specific exceptions, log, and degrade clearl
 - File IO
 - Database
 - AI API
-- DingTalk API
+- Notification API
 - OHLCV/news/orderflow external data
 
 Trading-related exceptions must block new entries or degrade to read-only mode.

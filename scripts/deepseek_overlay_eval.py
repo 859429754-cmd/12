@@ -120,7 +120,7 @@ def build_config(base: TrendStrategyConfig, position_fraction: float) -> TrendSt
             "atr_length": 14,
             "atr_stop_multiple": 1.5,
             "vma_length": 20,
-            "volume_multiple": 2.0,
+            "volume_multiple": 2.5,
             "position_fraction": position_fraction,
             "use_ema_filter": False,
             "use_volume_filter": True,
@@ -1152,40 +1152,38 @@ def policy_raw_advice_4level_guarded(review: AiReview) -> float:
 
 
 def policy_raw_advice_5level_guarded(review: AiReview) -> float:
-    # Five execution sizes for raw DeepSeek advice: 100%, 80%, 50%, 25%, 0%.
-    # This keeps model output auditable while giving reduce a smoother risk curve.
+    # Current execution tiers: full/strong/normal/weak/block = 100%, 75%, 50%, 25%, 0%.
     risk = max(review.chop_risk_score, review.false_breakout_risk, review.event_risk_score)
     if review.veto_action == "allow":
         if risk >= 0.90 and review.confidence >= 0.75:
-            return 0.80
+            return 0.75
         return 1.0
     if review.veto_action == "reduce":
         if risk >= 0.80 and review.confidence >= 0.65:
             return 0.25
         if risk >= 0.70 and review.confidence >= 0.60:
             return 0.50
-        return 0.80
+        return 0.75
     if review.veto_action == "block":
         return 0.0
     return 0.0
 
 
 def policy_raw_advice_5_trade_levels_plus_block(review: AiReview) -> float:
-    # Five tradable sizes plus an explicit no-trade state:
-    # 100%, 80%, 50%, 25%, 10%, and block=0%.
+    # Legacy experiment kept aligned with the current five-tier execution contract.
     risk = max(review.chop_risk_score, review.false_breakout_risk, review.event_risk_score)
     if review.veto_action == "allow":
         if risk >= 0.90 and review.confidence >= 0.75:
-            return 0.80
+            return 0.75
         return 1.0
     if review.veto_action == "reduce":
         if risk >= 0.90 and review.confidence >= 0.75:
-            return 0.10
+            return 0.25
         if risk >= 0.80 and review.confidence >= 0.65:
             return 0.25
         if risk >= 0.70 and review.confidence >= 0.60:
             return 0.50
-        return 0.80
+        return 0.75
     if review.veto_action == "block":
         return 0.0
     return 0.0

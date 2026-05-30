@@ -4,24 +4,29 @@ from pathlib import Path
 
 
 SUSPICIOUS_MOJIBAKE = (
-    "妯",
-    "绛",
-    "暐",
-    "鍙",
-    "鎺",
-    "歿",
-    "乨",
-    "乵",
-    "乿",
-    "鐨",
-    "閽",
-    "拤",
+    "濡",
+    "缁",
+    "鏆",
+    "閸",
+    "閹",
+    "姝",
+    "涔",
+    "閻",
+    "闁",
+    "鎷",
+    "鏂",
+    "浠",
+    "鑷",
+    "鐩",
+    "澶",
+    "鍥",
 )
 
 
 def test_utf8_core_files_do_not_contain_common_mojibake() -> None:
     protected = [
         Path("ai_quant_trader/api/server.py"),
+        Path("ai_quant_trader/app.py"),
         Path("ai_quant_trader/brain/deepseek.py"),
         Path("ai_quant_trader/data/news.py"),
         Path("ai_quant_trader/data/news_memory.py"),

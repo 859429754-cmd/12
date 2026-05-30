@@ -107,6 +107,7 @@ def test_console_status_strategy_and_workbench(tmp_path: Path, monkeypatch) -> N
     assert "latest_data_health" in readiness_body
     assert "latest_ai_drift" in readiness_body
     assert "latest_news_risk_review" in readiness_body
+    assert "latest_ai_budget" in readiness_body
     assert "latest_worker_heartbeats" in readiness_body
     assert "latest_maintenance" in readiness_body
 
@@ -180,6 +181,73 @@ def test_readiness_blocks_failed_backup_integrity(tmp_path: Path, monkeypatch) -
     runtime_check = next(item for item in body["checks"] if item["id"] == "runtime_maintenance")
 
     assert runtime_check["status"] == "block"
+    assert body["overall"] == "block"
+
+
+def test_live_readiness_blocks_recent_deepseek_error_fallback(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "configured-placeholder")
+    db_path = tmp_path / "trader.sqlite3"
+    audit_path = tmp_path / "audit.jsonl"
+    config_path = tmp_path / "config.yaml"
+    write_config(config_path, db_path, audit_path)
+    config_text = config_path.read_text(encoding="utf-8").replace(
+        "runtime:\n  dry_run: true",
+        "runtime:\n  dry_run: false\n  execution_mode: live",
+    )
+    config_path.write_text(config_text, encoding="utf-8")
+    store = SQLiteStore(str(db_path), str(audit_path))
+    try:
+        store.insert(
+            "ai_decisions",
+            {
+                "symbol": "ETH/USDT:USDT",
+                "reason_codes": ["deepseek_error:HTTPError", "fallback_conservative"],
+                "brief_reason": "DeepSeek unavailable; using fallback.",
+            },
+            "ETH/USDT:USDT",
+        )
+    finally:
+        store.close()
+
+    client = TestClient(create_app(str(config_path)))
+    body = client.get("/api/system/readiness").json()
+    deepseek_check = next(item for item in body["checks"] if item["id"] == "deepseek")
+
+    assert deepseek_check["status"] == "block"
+    assert body["overall"] == "block"
+
+
+def test_live_readiness_blocks_recent_deepseek_budget_failure(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "configured-placeholder")
+    db_path = tmp_path / "trader.sqlite3"
+    audit_path = tmp_path / "audit.jsonl"
+    config_path = tmp_path / "config.yaml"
+    write_config(config_path, db_path, audit_path)
+    config_text = config_path.read_text(encoding="utf-8").replace(
+        "runtime:\n  dry_run: true",
+        "runtime:\n  dry_run: false\n  execution_mode: live",
+    )
+    config_path.write_text(config_text, encoding="utf-8")
+    store = SQLiteStore(str(db_path), str(audit_path))
+    try:
+        store.insert(
+            "ai_call_budget_events",
+            {
+                "symbol": "ETH/USDT:USDT",
+                "call_type": "trading_cycle",
+                "status": "failure",
+                "reason": "deepseek_error:HTTPError",
+            },
+            "ETH/USDT:USDT",
+        )
+    finally:
+        store.close()
+
+    client = TestClient(create_app(str(config_path)))
+    body = client.get("/api/system/readiness").json()
+    budget_check = next(item for item in body["checks"] if item["id"] == "deepseek_budget")
+
+    assert budget_check["status"] == "block"
     assert body["overall"] == "block"
 
 

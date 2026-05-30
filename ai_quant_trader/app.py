@@ -6,15 +6,29 @@ import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 
+from ai_quant_trader.brain.budget import DeepSeekBudgetGuard
 from ai_quant_trader.brain.deepseek import DeepSeekBrain
 from ai_quant_trader.brain.wakeup import WakeupEngine
 from ai_quant_trader.core.config import load_config
 from ai_quant_trader.core.control import RuntimeControlManager
 from ai_quant_trader.core.logging import setup_logging
-from ai_quant_trader.core.models import HealthStatus, NewsDigest, OrderRequest, PositionSnapshot, Side, SignalAction, StrategySignal
+from ai_quant_trader.core.models import (
+    AggregatedOrderflow,
+    AiDecision,
+    DenseZone,
+    HealthStatus,
+    NewsDigest,
+    OrderRequest,
+    PatternCandidate,
+    PositionSnapshot,
+    RegimePattern,
+    Side,
+    SignalAction,
+    StrategySignal,
+)
 from ai_quant_trader.data.market import MarketDataClient
 from ai_quant_trader.data.news import NewsCollector
-from ai_quant_trader.data.news_memory import NewsMemoryStore
+from ai_quant_trader.data.news_memory import DailyNewsFlashStore, NewsMemoryStore
 from ai_quant_trader.data.orderflow import MultiExchangeOrderflowClient
 from ai_quant_trader.execution.gateway import create_exchange_gateway, execution_mode_from_config
 from ai_quant_trader.execution.lifecycle import OrderLifecycleManager, OrderRejected, OrderSubmissionUncertain
@@ -68,10 +82,12 @@ class TradingApp:
             jin10_enabled=self.config.news.jin10_enabled,
         )
         self.news_memory = NewsMemoryStore()
+        self.daily_news = DailyNewsFlashStore()
         self.brain = DeepSeekBrain(
             base_url=self.config.ai.base_url,
             model=self.config.ai.decision_model,
         )
+        self.deepseek_budget = DeepSeekBudgetGuard.from_config(self.store, self.config.ai)
         self.risk = RiskManager(self.config.risk, self.state)
         self.execution = create_exchange_gateway(self.config, account_slot=TREND_ACCOUNT_SLOT)
         self.exchange_safety = ExchangeSafetyMonitor(self.config.risk.stale_data_seconds)
@@ -127,7 +143,15 @@ class TradingApp:
             regime_pattern = self.regime_patterns.analyze(symbol_cfg.symbol, candles, zone, pattern)
             signal = self.regime_patterns.enrich_signal(signal, regime_pattern)
             if self._ai_enabled_for_symbol(symbol_cfg.symbol):
-                ai = await self.brain.analyze_symbol(signal, aggregated, zone, pattern, news_digest, regime_pattern)
+                ai = await self._analyze_with_deepseek_budget(
+                    "trading_cycle",
+                    signal,
+                    aggregated,
+                    zone,
+                    pattern,
+                    news_digest,
+                    regime_pattern,
+                )
             else:
                 ai = self.brain.local_fallback_decision(
                     signal,
@@ -318,7 +342,7 @@ class TradingApp:
                     status=HealthStatus.WARN,
                     interval_seconds=interval,
                 )
-                logger.exception("鏂伴椈鍒锋柊浠诲姟澶辫触")
+                logger.exception("news_refresh_worker_failed")
             await asyncio.sleep(interval)
 
     async def _price_wakeup_loop(self, equity: float) -> None:
@@ -338,7 +362,7 @@ class TradingApp:
                         await self._handle_price_wakeup(event, equity)
                 except Exception:  # noqa: BLE001
                     failures.append(symbol_cfg.symbol)
-                    logger.exception("浠锋牸寮傚姩鐩戞帶澶辫触锛?s", symbol_cfg.symbol)
+                    logger.exception("price_monitor_worker_failed symbol=%s", symbol_cfg.symbol)
                     self.heartbeat.fail(
                         "price_monitor_worker",
                         reason="price_monitor_failed",
@@ -410,7 +434,15 @@ class TradingApp:
         pattern = self.patterns.detect(event.symbol, candles)
         regime_pattern = self.regime_patterns.analyze(event.symbol, candles, zone, pattern)
         signal = self.regime_patterns.enrich_signal(signal, regime_pattern)
-        ai = await self.brain.analyze_symbol(signal, aggregated, zone, pattern, news_digest, regime_pattern)
+        ai = await self._analyze_with_deepseek_budget(
+            "price_wakeup",
+            signal,
+            aggregated,
+            zone,
+            pattern,
+            news_digest,
+            regime_pattern,
+        )
         drift = self.ai_drift.evaluate(event.symbol, ai)
         data_health = self.data_health.evaluate_symbol(
             symbol=event.symbol,
@@ -437,6 +469,7 @@ class TradingApp:
         self.news.max_age = timedelta(hours=self.config.news.max_age_hours)
         digest = await self.news.collect()
         digest = self.news_memory.update(digest)
+        digest = self.daily_news.update(digest)
         digest = self._enrich_digest_with_recent_news_context(digest)
         self.store.insert("news_summaries", digest.model_dump(mode="json"))
         if notify:
@@ -532,10 +565,19 @@ class TradingApp:
             items=[],
             macro_risk_level="high",
             crypto_sentiment=aggregated.alignment_hint,
-            summary=f"{event.title}\n{event.summary}\n{self.news_memory.context_summary(days=2, limit=20)}",
+            summary=f"{event.title}\n{event.summary}\n{self.daily_news.context_summary(limit=30)}\n{self.news_memory.context_summary(days=2, limit=20)}",
             warnings=["major_news_risk_review_only_no_order"],
         )
-        ai = await self.brain.analyze_symbol(review_signal, aggregated, zone, pattern, event_digest, regime_pattern)
+        ai = await self._analyze_with_deepseek_budget(
+            "major_news_risk_review",
+            review_signal,
+            aggregated,
+            zone,
+            pattern,
+            event_digest,
+            regime_pattern,
+            event_key=self._news_risk_event_key(event),
+        )
         risk = self.risk.evaluate(review_signal, ai, equity=0.0, positions=[])
         payload = {
             "review_type": "major_news_risk_review",
@@ -572,6 +614,7 @@ class TradingApp:
         )
 
     def _enrich_digest_with_recent_news_context(self, digest: NewsDigest) -> NewsDigest:
+        digest = self.daily_news.enrich_digest(digest)
         context = self.news_memory.context_summary(days=2, limit=20)
         if not context or context in digest.summary:
             return digest
@@ -630,6 +673,7 @@ class TradingApp:
         self.state = self.control.load_state([symbol.symbol for symbol in self.config.symbols])
         self.risk.config = self.config.risk
         self.risk.state = self.state
+        self.deepseek_budget = DeepSeekBudgetGuard.from_config(self.store, self.config.ai)
         self._refresh_symbol_strategies()
         self.news.rss_sources = self.config.news.rss_sources
         self.news.scrape_sources = self.config.news.scrape_sources
@@ -734,7 +778,7 @@ class TradingApp:
             try:
                 return generate_custom_signal(active["id"], candles, position, symbol, timeframe, equity)
             except StrategyCodeError as exc:
-                logger.error("鑷畾涔夌瓥鐣ユ墽琛屽け璐ワ紝鍥為€€鍒伴粯璁よ秼鍔跨瓥鐣? %s", exc)
+                logger.error("custom_strategy_failed_fallback_to_trend: %s", exc)
         signal = self.trend_strategies[symbol].generate_signal(
             symbol,
             timeframe,
@@ -871,6 +915,50 @@ class TradingApp:
     def _ai_enabled_for_symbol(self, symbol: str) -> bool:
         configured = self.config.ai.ai_enabled_symbols
         return symbol in configured if configured else True
+
+    async def _analyze_with_deepseek_budget(
+        self,
+        call_type: str,
+        signal: StrategySignal,
+        orderflow: AggregatedOrderflow,
+        dense_zone: DenseZone,
+        pattern: PatternCandidate,
+        news: NewsDigest,
+        regime_pattern: RegimePattern | None = None,
+        *,
+        event_key: str | None = None,
+    ) -> AiDecision:
+        reservation = self.deepseek_budget.reserve(symbol=signal.symbol, call_type=call_type, event_key=event_key)
+        if not reservation.allowed:
+            reason = f"deepseek_budget_blocked:{reservation.reason}"
+            logger.warning(
+                "deepseek_budget_blocked",
+                extra={"symbol": signal.symbol, "call_type": call_type, "reason": reservation.reason},
+            )
+            return self.brain.local_fallback_decision(signal, orderflow, dense_zone, pattern, news, reason, regime_pattern)
+        try:
+            decision = await self.brain.analyze_symbol(signal, orderflow, dense_zone, pattern, news, regime_pattern)
+        except Exception as exc:  # noqa: BLE001
+            self.deepseek_budget.record_failure(
+                reservation.row_id,
+                reason="deepseek_exception",
+                error_type=type(exc).__name__,
+            )
+            raise
+        error_reasons = [
+            str(reason)
+            for reason in decision.reason_codes
+            if str(reason).startswith(("deepseek_error:", "missing_deepseek_api_key"))
+        ]
+        if error_reasons:
+            self.deepseek_budget.record_failure(
+                reservation.row_id,
+                reason=error_reasons[0],
+                error_type=error_reasons[0].split(":", 1)[-1],
+            )
+        else:
+            self.deepseek_budget.record_success(reservation.row_id)
+        return decision
 
     def _seconds_until_next_report(self) -> float:
         now = datetime.now(UTC)

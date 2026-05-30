@@ -1,0 +1,19 @@
+[Unit]
+Description=AI Quant Trader Order Status Worker
+After=network-online.target ai-quant-console.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/ai-quant-trader
+EnvironmentFile=-/root/ai-quant-trader/.env.runtime
+ExecStart=/root/ai-quant-trader/.venv/bin/python main.py --order-status-worker
+Restart=always
+RestartSec=10
+TimeoutStopSec=45
+KillSignal=SIGINT
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
