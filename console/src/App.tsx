@@ -184,7 +184,7 @@ export function App() {
   const showRightRail = workspace !== "dashboard";
 
   return (
-    <main className="grid h-screen grid-cols-[306px_minmax(0,1fr)] overflow-hidden bg-[#07111f] text-[#e5eefb]">
+    <main className="grid h-screen grid-cols-[252px_minmax(0,1fr)] overflow-hidden bg-[#07111f] text-[#e5eefb]">
       <ShellNav
         platform={platform}
         workspace={workspace}
@@ -210,7 +210,7 @@ export function App() {
         operationCode={operationCode}
         setOperationCode={setOperationCode}
       />
-      <div className={`grid min-h-0 flex-1 gap-5 overflow-hidden p-5 ${showRightRail ? "grid-cols-[minmax(0,1fr)_358px]" : "grid-cols-[minmax(0,1fr)]"}`}>
+      <div className={`grid min-h-0 flex-1 gap-4 overflow-hidden p-4 ${showRightRail ? "grid-cols-[minmax(0,1fr)_320px]" : "grid-cols-[minmax(0,1fr)]"}`}>
         <WorkspaceBody
           workspace={workspace}
           symbol={symbol}
@@ -242,6 +242,7 @@ export function App() {
             symbol={symbol}
             status={status}
             decisions={decisions}
+            positions={positions}
             orders={orders}
             news={news}
             denseZone={denseZone}
@@ -345,22 +346,22 @@ function ShellNav({
   ];
   return (
     <aside className="flex min-h-0 flex-col border-r border-[#1f2a3d] bg-[#08111f] shadow-[10px_0_30px_rgba(0,0,0,0.35)]">
-      <div className="flex h-[72px] shrink-0 items-center gap-3 border-b border-[#1f2a3d] px-6">
-        <div className="grid h-10 w-10 place-items-center rounded-xl bg-[#2454ff] text-lg font-black text-white shadow-lg shadow-blue-950/40">
+      <div className="flex h-16 shrink-0 items-center gap-2 border-b border-[#1f2a3d] px-4">
+        <div className="grid h-9 w-9 place-items-center rounded-xl bg-[#2454ff] text-base font-black text-white shadow-lg shadow-blue-950/40">
           Q
         </div>
-        <div>
-          <div className="text-xl font-bold tracking-tight text-[#dbeafe]">量化 AI 工作台</div>
-          <div className="text-[11px] text-[#94a3b8]">本地策略内核 / 智能体安全外壳</div>
+        <div className="min-w-0">
+          <div className="truncate text-base font-bold tracking-tight text-[#dbeafe]">量化 AI 工作台</div>
+          <div className="truncate text-[10px] text-[#94a3b8]">策略内核 / AI 风控</div>
         </div>
       </div>
-      <nav className="shrink-0 px-3 py-4">
+      <nav className="shrink-0 px-2 py-3">
         {workspaces.map((item) => {
           const active = workspace === item.id;
           return (
             <button
               key={item.id}
-              className={`mb-1 flex h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-sm transition ${
+              className={`mb-1 flex h-10 w-full items-center gap-2 rounded-xl px-3 text-left text-sm transition ${
                 active ? "bg-[#1d4ed8] text-white shadow-inner shadow-blue-950/30" : "text-[#94a3b8] hover:bg-[#111827] hover:text-[#e5eefb]"
               }`}
               onClick={() => setWorkspace(item.id)}
@@ -371,7 +372,7 @@ function ShellNav({
           );
         })}
       </nav>
-      <div className="min-h-0 flex-1 overflow-auto border-t border-[#1f2a3d] bg-[#07111f] p-3">
+      <div className="min-h-0 flex-1 overflow-auto border-t border-[#1f2a3d] bg-[#07111f] p-2">
         <LeftRail
           workspace={workspace}
           symbol={symbol}
@@ -414,7 +415,7 @@ function TopBar({
     setMenuOpen(false);
   };
   return (
-    <header className="relative flex h-[72px] shrink-0 items-center gap-4 border-b border-[#1f2a3d] bg-[#0b1220] px-6 shadow-sm shadow-black/30">
+    <header className="relative flex h-16 shrink-0 items-center gap-3 border-b border-[#1f2a3d] bg-[#0b1220] px-4 shadow-sm shadow-black/30">
       <button
         className={`grid h-10 w-10 place-items-center rounded-xl border border-[#263246] bg-[#111827] text-[#94a3b8] transition hover:border-[#3b82f6] hover:text-white ${
           menuOpen ? "border-[#3b82f6] text-white shadow-sm" : ""
@@ -459,7 +460,7 @@ function TopBar({
           </div>
         </div>
       ) : null}
-      <div className="min-w-[260px]">
+      <div className="min-w-[220px]">
         <div className="text-[11px] uppercase tracking-wide text-[#94a3b8]">工作区</div>
         <div className="text-lg font-semibold text-[#e5eefb]">{workspaceLabel(workspace, platform)}</div>
       </div>
@@ -768,7 +769,7 @@ function MarketWorkspace({
   const params = profile?.params || {};
   const timeframes = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"];
   return (
-    <section className="min-h-0 space-y-5 overflow-auto pr-1">
+    <section className="min-h-0 space-y-4 overflow-auto pr-1">
       <Surface
         title={<><BarChart3 size={13} /> 专业行情图表</>}
         action={
@@ -797,7 +798,7 @@ function MarketWorkspace({
           </div>
         }
       >
-        <div className="grid grid-cols-6 gap-3">
+        <div className="grid grid-cols-6 gap-2">
           <Metric label="最新价" value={num(latest?.close)} tone={changePct >= 0 ? "good" : "bad"} />
           <Metric label="涨跌幅" value={pct(changePct)} tone={changePct >= 0 ? "good" : "bad"} />
           <Metric label="最高" value={num(latest?.high)} />
@@ -814,9 +815,9 @@ function MarketWorkspace({
           <ChartChip label="240根高低" value={`${num(localLow)} - ${num(localHigh)}`} />
           {warning ? <span className="rounded-full border border-[#854d0e] bg-[#241806] px-3 py-1 text-[#facc15]">{warning}</span> : null}
         </div>
-      </Surface>
-      <Surface title={<><LineChart size={13} /> K线走势与指标叠加</>}>
-        <MarketChart candles={candles} profile={profile} orders={orders} decisions={decisions} denseZone={denseZone?.payload} height={620} />
+        <div className="mt-3">
+          <MarketChart candles={candles} profile={profile} orders={orders} decisions={decisions} denseZone={denseZone?.payload} height={700} />
+        </div>
         <div className="mt-3 flex flex-wrap gap-3 text-[11px] text-[#53627a]">
           <span><span className="text-[#0a9f5a]">■</span> 阳线 / 成交量</span>
           <span><span className="text-[#e11d48]">■</span> 阴线 / 成交量</span>
@@ -1309,9 +1310,9 @@ function DashboardWorkspace({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 2xl:grid-cols-[340px_minmax(420px,1fr)_340px]">
+      <div className="grid grid-cols-1 gap-4 2xl:grid-cols-[360px_minmax(520px,1fr)_360px]">
         <div className="grid min-w-0 gap-4">
-          <DashboardPanel title={<><Wallet size={14} /> 账户资金</>}>
+          <DashboardPanel title={<><Wallet size={14} /> 账户与持仓</>}>
             <div className="rounded-xl bg-[#0f172a] p-4 text-white">
               <div className="text-[11px] text-[#cbd5e1]">USDT 权益</div>
               <div className={`${mono} mt-2 text-3xl font-semibold`}>{num(account.total)}</div>
@@ -1322,10 +1323,7 @@ function DashboardWorkspace({
                 <PlainKV label="策略档案" value={profile?.profile_name || "--"} />
               </div>
             </div>
-          </DashboardPanel>
-
-          <DashboardPanel title={<><Power size={14} /> 当前持仓</>}>
-            <div className="flex items-center justify-between gap-3">
+            <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-[#263246] bg-[#101a2d] p-3">
               <div>
                 <div className="text-[11px] text-[#94a3b8]">标的 / 方向</div>
                 <div className="mt-1 text-xl font-semibold text-[#e5eefb]">
@@ -1336,7 +1334,7 @@ function DashboardWorkspace({
                 {position ? "持仓中" : "无敞口"}
               </span>
             </div>
-            <div className="mt-4 grid grid-cols-2 gap-2">
+            <div className="mt-3 grid grid-cols-2 gap-2">
               <HeroMetric label="数量" value={position ? num(position.qty, 6) : "--"} />
               <HeroMetric label="开仓价" value={position ? num(position.entryPrice) : "--"} />
               <HeroMetric label="标记价" value={position ? num(position.markPrice ?? latestCandle?.close) : "--"} />
@@ -1344,15 +1342,15 @@ function DashboardWorkspace({
               <HeroMetric label="浮盈亏" value={position ? `${num(position.pnl)} USDT` : "--"} tone={pnlTone(position?.pnl)} />
               <HeroMetric label="止损价" value={position?.stopLoss != null ? num(position.stopLoss) : "--"} />
             </div>
-          </DashboardPanel>
-
-          <DashboardPanel title={<><FlaskConical size={14} /> 密集区结构</>}>
-            <MiniDenseZone denseZone={denseZone?.payload} />
+            <div className="mt-3 rounded-xl border border-[#263246] bg-[#101a2d] p-3">
+              <BoundaryLine label="密集区位置" value={denseZoneLabel((latestDecision as Record<string, unknown>)?.dense_zone_position)} />
+              <BoundaryLine label="最近订单" value={orders[0] ? orderLifecycleSummary(orders[0].payload) : "暂无订单"} />
+            </div>
           </DashboardPanel>
         </div>
 
         <div className="grid min-w-0 gap-4">
-          <DashboardPanel title={<><BrainCircuit size={14} /> AI 决策与仓位</>} action={<span className="rounded-full bg-[#eef3ff] px-3 py-1 text-[11px] text-[#2454ff]">只缩放 / 否决</span>}>
+          <DashboardPanel title={<><BrainCircuit size={14} /> AI 决策与仓位</>} action={<span className="rounded-full border border-[#1d4ed8] bg-[#102a5c] px-3 py-1 text-[11px] text-[#bfdbfe]">只缩放 / 否决</span>}>
             <DecisionSummary data={latestDecision} />
             <DecisionNarrative data={latestDecision} />
           </DashboardPanel>
@@ -1395,7 +1393,13 @@ function DashboardWorkspace({
               )}
             </div>
           </DashboardPanel>
+        </div>
+      </div>
 
+      <details className="rounded-2xl border border-[#263246] bg-[#0b1220] p-4 text-xs text-[#94a3b8] shadow-[0_18px_44px_rgba(0,0,0,0.28)]">
+        <summary className="cursor-pointer font-semibold text-[#e5eefb]">展开完整生产就绪检查、执行链路与原始审计</summary>
+        <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+          <ReadinessPanel readiness={readiness} />
           <DashboardPanel title={<><Power size={14} /> 执行链路</>}>
             <div className="mb-3 rounded-xl border border-[#263246] bg-[#101a2d] p-3 text-xs">
               <BoundaryLine label="最近订单状态" value={orderLifecycleSummary(orderLifecyclePayload)} />
@@ -1408,13 +1412,6 @@ function DashboardWorkspace({
               )}
             </div>
           </DashboardPanel>
-        </div>
-      </div>
-
-      <details className="rounded-2xl border border-[#263246] bg-[#0b1220] p-4 text-xs text-[#94a3b8] shadow-[0_18px_44px_rgba(0,0,0,0.28)]">
-        <summary className="cursor-pointer font-semibold text-[#e5eefb]">展开完整生产就绪检查与原始审计</summary>
-        <div className="mt-4">
-          <ReadinessPanel readiness={readiness} />
         </div>
       </details>
     </section>
@@ -3247,6 +3244,7 @@ function RightRail({
   symbol,
   status,
   decisions,
+  positions,
   orders,
   news,
   denseZone,
@@ -3256,6 +3254,7 @@ function RightRail({
   symbol: string;
   status: StatusResponse | null;
   decisions: Array<DbRow>;
+  positions: Array<DbRow>;
   orders: Array<DbRow>;
   news: NewsResponse;
   denseZone: DbRow<DenseZonePayload> | null;
@@ -3264,21 +3263,15 @@ function RightRail({
 }) {
   const latestDecision = status?.latest_decisions?.[symbol]?.payload || decisions[0]?.payload || { state: "等待下一次AI判断" };
   const newsWarnings = (news.warnings || []).filter((item) => !isInternalNewsText(item));
-  const railNewsItems = visibleNewsItems(news).slice(0, 16);
+  const railNewsItems = visibleNewsItems(news).slice(0, 3);
+  const position = positionSnapshot(positions, symbol);
   return (
-    <aside className="flex min-h-0 flex-col gap-2 overflow-auto">
+    <aside className="flex min-h-0 flex-col gap-3 overflow-auto">
       <Surface title={<><BrainCircuit size={13} /> AI 决策</>}>
-        <DecisionSummary data={latestDecision} />
-        <DecisionNarrative data={latestDecision} />
-        <div className="mt-3">
-          <MiniDenseZone denseZone={denseZone?.payload} />
-        </div>
-        <details className="mt-3 rounded-xl border border-[#263246] bg-[#101a2d] p-3 text-xs">
-          <summary className="cursor-pointer font-semibold text-[#cbd5e1]">查看原始审计数据</summary>
-          <div className="mt-2">
-            <JsonBlock data={latestDecision} maxHeight="max-h-48" />
-          </div>
-        </details>
+        <DecisionRailSummary data={latestDecision} />
+      </Surface>
+      <Surface title={<><ShieldCheck size={13} /> 仓位档位</>}>
+        <AiSizingRail data={latestDecision} />
       </Surface>
       <Surface
         title={<><Newspaper size={13} /> 新闻快讯</>}
@@ -3298,20 +3291,14 @@ function RightRail({
           )}
         </div>
       </Surface>
-      <Surface title="最近事件">
-        <div className="space-y-1 text-[11px]">
-          {[...orders, ...decisions].slice(0, 24).map((row) => (
-            <div key={`${row.id}-${row.created_at}`} className="border-b border-[#dfe7f1] pb-1">
-              <span className={mono}>{row.created_at}</span> {row.symbol} {String(row.payload.action || row.payload.side || row.payload.status || "")}
-            </div>
-          ))}
-        </div>
+      <Surface title={<><Power size={13} /> 当前持仓</>}>
+        <PositionRailCard position={position} symbol={symbol} latestOrder={orders[0]} />
       </Surface>
     </aside>
   );
 }
 
-function DecisionSummary({ data }: { data: Record<string, unknown> }) {
+function DecisionSummary({ data, showSizing = true }: { data: Record<string, unknown>; showSizing?: boolean }) {
   const event = data.event && typeof data.event === "object" ? (data.event as Record<string, unknown>) : null;
   const payload = data.payload && typeof data.payload === "object" ? (data.payload as Record<string, unknown>) : data;
   const body = payload.ai && typeof payload.ai === "object" ? (payload.ai as Record<string, unknown>) : payload;
@@ -3341,7 +3328,104 @@ function DecisionSummary({ data }: { data: Record<string, unknown> }) {
       {scoreRows.map(([label, value]) => (
         <Metric key={label} label={label} value={confidencePct(value)} tone={Number(value) >= 0.7 ? "good" : Number(value) >= 0.45 ? "warn" : "bad"} />
       ))}
-      <AiSizingTierStrip activeTier={activeTier} activeScale={scale.scale} />
+      {showSizing ? <AiSizingTierStrip activeTier={activeTier} activeScale={scale.scale} /> : null}
+    </div>
+  );
+}
+
+function DecisionRailSummary({ data }: { data: Record<string, unknown> }) {
+  const event = data.event && typeof data.event === "object" ? (data.event as Record<string, unknown>) : null;
+  const payload = data.payload && typeof data.payload === "object" ? (data.payload as Record<string, unknown>) : data;
+  const body = payload.ai && typeof payload.ai === "object" ? (payload.ai as Record<string, unknown>) : payload;
+  const regime = String(body.regime || payload.regime || data.regime || event?.event_type || "--");
+  const direction = String(body.direction || payload.direction || data.direction || "--");
+  const action = String(body.action_suggestion || body.veto_action || payload.action || data.state || "--");
+  const confidence = body.confidence ?? payload.confidence ?? data.confidence ?? null;
+  const reason = String(payload.brief_reason || payload.reason || event?.summary || "等待下一次 AI 判断。");
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 gap-2">
+        <Metric label="行情" value={regimeLabel(regime)} />
+        <Metric label="方向" value={directionLabel(direction)} />
+        <Metric label="动作" value={actionLabel(action)} />
+        <Metric label="置信度" value={confidencePct(confidence)} />
+      </div>
+      <div className="grid gap-2 text-xs">
+        <BoundaryLine label="消息面" value={alignmentLabel(payload.news_alignment)} />
+        <BoundaryLine label="订单流" value={alignmentLabel(payload.orderflow_alignment)} />
+        <BoundaryLine label="密集区" value={denseZoneLabel(payload.dense_zone_position)} />
+      </div>
+      <div className="rounded-lg border border-[#263246] bg-[#0b1220] p-2 text-[11px] leading-relaxed text-[#94a3b8]">{reason}</div>
+    </div>
+  );
+}
+
+function AiSizingRail({ data }: { data: Record<string, unknown> }) {
+  const payload = data.payload && typeof data.payload === "object" ? (data.payload as Record<string, unknown>) : data;
+  const body = payload.ai && typeof payload.ai === "object" ? (payload.ai as Record<string, unknown>) : payload;
+  const risk = payload.risk && typeof payload.risk === "object" ? (payload.risk as Record<string, unknown>) : null;
+  const confidence = body.confidence ?? payload.confidence ?? data.confidence ?? null;
+  const scale = risk
+    ? { label: tierLabel(risk.position_tier), scale: positionScaleLabel(risk.position_scale) }
+    : aiScaleFromConfidence(confidence);
+  const activeTier = risk ? String(risk.position_tier || "block") : tierKeyFromConfidence(confidence);
+  const tiers = [
+    { key: "block", label: "阻断", scale: "0%" },
+    { key: "weak", label: "弱仓", scale: "25%" },
+    { key: "normal", label: "标准仓", scale: "50%" },
+    { key: "strong", label: "强仓", scale: "75%" },
+    { key: "full", label: "满仓", scale: "100%" },
+  ];
+  return (
+    <div className="space-y-2 text-xs">
+      <div className="rounded-xl border border-[#60a5fa] bg-[#102a5c] p-3">
+        <div className="text-[11px] text-[#bfdbfe]">当前 AI 建议仓位</div>
+        <div className={`${mono} mt-1 text-lg font-semibold text-white`}>{scale.label} / {scale.scale}</div>
+        <div className="mt-2 text-[11px] leading-5 text-[#bfdbfe]">AI 只能缩放或否决，本地策略决定方向。</div>
+      </div>
+      <div className="grid gap-1">
+        {tiers.map((tier) => {
+          const active = tier.key === activeTier;
+          return (
+            <div key={tier.key} className={`grid grid-cols-[58px_minmax(0,1fr)_42px] items-center gap-2 rounded-lg border px-2 py-1.5 ${active ? "border-[#60a5fa] bg-[#102a5c]" : "border-[#263246] bg-[#101a2d]"}`}>
+              <span className={active ? "font-semibold text-[#93c5fd]" : "text-[#94a3b8]"}>{tier.label}</span>
+              <div className="h-1.5 overflow-hidden rounded-full bg-[#1f2a3d]">
+                <div className={active ? "h-full rounded-full bg-[#60a5fa]" : "h-full rounded-full bg-[#334155]"} style={{ width: tier.scale }} />
+              </div>
+              <span className={`${mono} text-right ${active ? "text-[#bfdbfe]" : "text-[#94a3b8]"}`}>{tier.scale}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function PositionRailCard({ position, symbol, latestOrder }: { position: PositionSnapshot | null; symbol: string; latestOrder?: DbRow }) {
+  const orderPayload = latestOrder?.payload || {};
+  if (!position) {
+    return (
+      <div className="space-y-2 text-xs">
+        <div className="rounded-xl border border-[#14532d] bg-[#052e1a] p-3 text-[#22c55e]">
+          <div className="font-semibold">{shortSymbol(symbol)} 空仓</div>
+          <div className="mt-1 text-[11px] leading-5 text-[#86efac]">当前没有实盘持仓，等待策略信号与 AI 风控确认。</div>
+        </div>
+        <BoundaryLine label="最近订单" value={latestOrder ? `${orderStatusLabel(orderPayload.status)} ${sideLabel(orderPayload.side || orderPayload.action)}` : "无记录"} />
+      </div>
+    );
+  }
+  return (
+    <div className="grid gap-2 text-xs">
+      <Metric label="方向" value={positionSideLabel(position.side)} tone={String(position.side).toLowerCase().includes("short") ? "bad" : "good"} />
+      <div className="grid grid-cols-2 gap-2">
+        <Metric label="数量" value={num(position.qty, 6)} />
+        <Metric label="名义价值" value={num(position.notional)} />
+        <Metric label="开仓价" value={num(position.entryPrice)} />
+        <Metric label="标记价" value={num(position.markPrice)} />
+        <Metric label="浮盈亏" value={num(position.pnl)} tone={pnlTone(position.pnl)} />
+        <Metric label="止损价" value={num(position.stopLoss)} />
+      </div>
+      <BoundaryLine label="最近订单" value={latestOrder ? `${orderStatusLabel(orderPayload.status)} ${sideLabel(orderPayload.side || orderPayload.action)}` : "无记录"} />
     </div>
   );
 }
