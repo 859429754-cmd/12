@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from ai_quant_trader.api.server import create_app
 from ai_quant_trader.app import TradingApp
-from ai_quant_trader.core.models import OrderRequest, OrderResult, Side, SignalAction, StrategySignal
+from ai_quant_trader.core.models import OrderRequest, OrderResult, PositionSnapshot, Side, SignalAction, StrategySignal
 from ai_quant_trader.execution.gateio import GateExecutionClient
 from ai_quant_trader.execution.gateway.factory import create_exchange_gateway
 from ai_quant_trader.execution.gateway.gate_real import GateRealGateway
@@ -559,4 +559,38 @@ async def test_native_stop_cancel_failure_is_audited_without_clearing_state(tmp_
     assert latest["status"] == "cancel_failed"
     assert latest["error_type"] == "TimeoutError"
     assert app.trend_state.get("ETH/USDT:USDT").native_stop_order_id == "stop_123"
+    await app.close()
+
+
+@pytest.mark.asyncio
+async def test_order_status_worker_refreshes_live_reconciliation(tmp_path: Path) -> None:
+    class HealthyLiveGateway:
+        mode = "live"
+
+        async def fetch_balance_summary(self):
+            return {"ok": True, "usdt_total": 1000.0}
+
+        async def fetch_positions(self, symbols):
+            return [PositionSnapshot(symbol=symbol, side=Side.FLAT, qty=0.0, mark_price=0.0) for symbol in symbols]
+
+        async def fetch_open_orders(self, symbols):
+            return []
+
+        async def close(self):
+            return None
+
+    config_path = tmp_path / "config.yaml"
+    write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl", ["ETH/USDT:USDT"])
+    app = TradingApp(str(config_path))
+    app.config.runtime.execution_mode = "live"
+    app.config.runtime.dry_run = False
+    app.execution = HealthyLiveGateway()
+
+    state = await app._refresh_reconciliation_and_order_status_once(["ETH/USDT:USDT"])  # noqa: SLF001
+
+    reconciliation = app.store.fetch_latest("reconciliation_runs")["payload"]
+    exchange_health = app.store.fetch_latest("exchange_health")["payload"]
+    assert reconciliation["status"] == "ok"
+    assert exchange_health["reason"] == "exchange_reconciliation_ok"
+    assert state.can_open_new_entries is True
     await app.close()

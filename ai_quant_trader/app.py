@@ -387,14 +387,15 @@ class TradingApp:
             interval = self.config.runtime.price_monitor_interval_seconds
             try:
                 symbols = [symbol.symbol for symbol in self.config.symbols]
-                await self._refresh_order_status_once(symbols)
+                safety = await self._refresh_reconciliation_and_order_status_once(symbols)
                 latest_order = self.store.fetch_latest("order_lifecycle")
                 self.heartbeat.ok(
                     "order_status_worker",
-                    reason="order_status_refresh_ok",
+                    reason="order_status_and_reconciliation_refresh_ok",
                     interval_seconds=interval,
                     details={
                         "symbols": symbols,
+                        "exchange_safety": safety.status.value,
                         "latest_order_lifecycle_id": latest_order.get("id") if latest_order else None,
                     },
                 )
@@ -410,6 +411,19 @@ class TradingApp:
                 if execution_mode_from_config(self.config) == "live":
                     raise
             await asyncio.sleep(interval)
+
+    async def _refresh_reconciliation_and_order_status_once(self, symbols: list[str]):
+        """Refresh private exchange truth used by live readiness.
+
+        The order-status worker is the only high-frequency private worker that
+        is always expected in live deployments. It must refresh both order
+        lifecycle state and account reconciliation; otherwise live readiness can
+        become stale between hourly trading cycles.
+        """
+        state = await self._refresh_exchange_safety(symbols)
+        if execution_mode_from_config(self.config) != "live":
+            await self._refresh_order_status_once(symbols)
+        return state
 
     def _wakeup_allowed(self, symbol: str) -> bool:
         last = self._price_wakeup_cooldown.get(symbol)
