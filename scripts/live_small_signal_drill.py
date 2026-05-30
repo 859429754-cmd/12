@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ai_quant_trader.brain.deepseek import DeepSeekBrain
 from ai_quant_trader.core.config import load_config
+from ai_quant_trader.core.control import RuntimeControlManager
 from ai_quant_trader.core.models import NewsDigest, OrderRequest, PositionSnapshot, Side, SignalAction, StrategySignal, VetoAction
 from ai_quant_trader.data.market import MarketDataClient
 from ai_quant_trader.data.orderflow import MultiExchangeOrderflowClient
@@ -22,6 +23,7 @@ from ai_quant_trader.features.dense_zone import DenseZoneAnalyzer
 from ai_quant_trader.features.orderflow import OrderflowAggregator
 from ai_quant_trader.features.patterns import PatternDetector
 from ai_quant_trader.features.regime import RegimePatternAnalyzer
+from ai_quant_trader.risk.manager import RiskManager
 from ai_quant_trader.storage.sqlite import SQLiteStore
 from ai_quant_trader.strategy.indicators import atr
 
@@ -55,6 +57,8 @@ async def run_drill(args: argparse.Namespace) -> dict[str, Any]:
     gateway = create_exchange_gateway("live", account_slot="trend")
     store = SQLiteStore(config.runtime.database_path, config.runtime.audit_log_path)
     lifecycle = OrderLifecycleManager(store, gateway_mode="live")
+    runtime_state = RuntimeControlManager(store, config_path=args.config).load_state([symbol])
+    risk_manager = RiskManager(config.risk, runtime_state)
     try:
         candles = await market.fetch_ohlcv(symbol, args.timeframe, limit=max(args.limit, 240), source=args.source)
         current_price = float(candles["close"].iloc[-1])
@@ -68,6 +72,18 @@ async def run_drill(args: argparse.Namespace) -> dict[str, Any]:
         if position.side != Side.FLAT or abs(position.qty) > 0:
             raise RuntimeError(f"Refusing live drill: existing position detected for {symbol}.")
 
+        balance = await gateway.fetch_balance_summary()
+        equity = float(balance.get("usdt_total") or balance.get("total_equity") or balance.get("usdt_free") or 0.0)
+        if equity <= 0:
+            raise RuntimeError("Refusing live drill: unable to read positive live equity.")
+
+        min_contracts = await gateway.minimum_order_amount(symbol, current_price)
+        contract_size = await gateway.contract_size(symbol)
+        base_amount = float(min_contracts) * float(contract_size)
+        notional = base_amount * current_price
+        if notional > args.max_notional_usdt:
+            raise RuntimeError(f"Minimum order notional {notional:.2f} exceeds cap {args.max_notional_usdt:.2f}.")
+
         orderflow_rows = await orderflow_client.fetch_summaries(symbol)
         orderflow = OrderflowAggregator(config.orderflow.weights).aggregate(symbol, orderflow_rows)
         dense_zone = DenseZoneAnalyzer().calculate(symbol, candles)
@@ -80,6 +96,7 @@ async def run_drill(args: argparse.Namespace) -> dict[str, Any]:
             timeframe=args.timeframe,
             action=action,
             current_price=current_price,
+            suggested_qty=base_amount,
             signal_strength=args.signal_strength,
             technical_evidence={
                 "drill": True,
@@ -99,12 +116,26 @@ async def run_drill(args: argparse.Namespace) -> dict[str, Any]:
         if ai.veto_action == VetoAction.BLOCK and not args.allow_ai_block_override:
             raise RuntimeError("DeepSeek blocked the fake signal. Re-run with --allow-ai-block-override for execution-path drill.")
 
-        min_contracts = await gateway.minimum_order_amount(symbol, current_price)
-        contract_size = await gateway.contract_size(symbol)
-        base_amount = float(min_contracts) * float(contract_size)
-        notional = base_amount * current_price
-        if notional > args.max_notional_usdt:
-            raise RuntimeError(f"Minimum order notional {notional:.2f} exceeds cap {args.max_notional_usdt:.2f}.")
+        risk = risk_manager.evaluate(signal, ai, equity, positions)
+        if risk.allowed and 0 < risk.position_scale < 1 and risk.clipped_qty < base_amount:
+            adjusted_target_qty = base_amount / risk.position_scale
+            signal = signal.model_copy(
+                update={
+                    "suggested_qty": adjusted_target_qty,
+                    "technical_evidence": {
+                        **signal.technical_evidence,
+                        "minimum_live_drill_target_adjusted": True,
+                        "risk_position_tier": risk.position_tier,
+                    },
+                }
+            )
+            risk = risk_manager.evaluate(signal, ai, equity, positions)
+        if not risk.allowed:
+            raise RuntimeError(f"RiskManager blocked the live drill: {risk.reason}.")
+        if risk.clipped_qty + 1e-12 < base_amount:
+            raise RuntimeError(
+                f"RiskManager clipped qty {risk.clipped_qty:.8f} below exchange minimum {base_amount:.8f}."
+            )
 
         entry_request = OrderRequest(
             symbol=symbol,
@@ -178,6 +209,16 @@ async def run_drill(args: argparse.Namespace) -> dict[str, Any]:
                 "veto_action": ai.veto_action,
                 "action_suggestion": ai.action_suggestion,
                 "brief_reason": ai.brief_reason,
+            },
+            "risk": {
+                "allowed": risk.allowed,
+                "reason": risk.reason,
+                "position_tier": risk.position_tier,
+                "position_scale": risk.position_scale,
+                "decision_score": risk.decision_score,
+                "target_notional": risk.target_notional,
+                "clipped_qty": risk.clipped_qty,
+                "warnings": risk.warnings[:5],
             },
             "inputs": {
                 "orderflow_alignment": orderflow.alignment_hint,
