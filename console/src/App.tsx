@@ -163,6 +163,8 @@ export function App() {
     }
   };
 
+  const showRightRail = workspace !== "dashboard";
+
   return (
     <main className="grid h-screen grid-cols-[306px_minmax(0,1fr)] overflow-hidden bg-[#eef2f7] text-[#172033]">
       <ShellNav
@@ -188,7 +190,7 @@ export function App() {
         refresh={load}
         warning={warning}
       />
-      <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_358px] gap-5 overflow-hidden p-5">
+      <div className={`grid min-h-0 flex-1 gap-5 overflow-hidden p-5 ${showRightRail ? "grid-cols-[minmax(0,1fr)_358px]" : "grid-cols-[minmax(0,1fr)]"}`}>
         <WorkspaceBody
           workspace={workspace}
           symbol={symbol}
@@ -212,19 +214,21 @@ export function App() {
           readiness={readiness}
         busy={busy}
         postAction={postAction}
-        decisions={decisions}
-        platform={platform}
-      />
-        <RightRail
-          symbol={symbol}
-          status={status}
           decisions={decisions}
-          orders={orders}
-          news={news}
-          denseZone={denseZone}
-          busy={busy}
-          postAction={postAction}
-        />
+          platform={platform}
+      />
+        {showRightRail ? (
+          <RightRail
+            symbol={symbol}
+            status={status}
+            decisions={decisions}
+            orders={orders}
+            news={news}
+            denseZone={denseZone}
+            busy={busy}
+            postAction={postAction}
+          />
+        ) : null}
       </div>
       </section>
     </main>
@@ -482,7 +486,9 @@ function LeftRail({
   message: string;
   postAction: (path: string, body: Record<string, unknown>) => Promise<void>;
 }) {
-  const usdt = balance?.USDT && typeof balance.USDT === "object" ? (balance.USDT as Record<string, unknown>) : {};
+  const rawBalance = objectPayload(balance?.raw);
+  const directUsdt = objectPayload(balance?.USDT);
+  const usdt = Object.keys(directUsdt).length ? directUsdt : objectPayload(rawBalance.USDT);
   return (
     <aside className="flex min-h-0 flex-col gap-2 overflow-auto">
       <Surface title={<><ShieldCheck size={13} /> 策略档案</>}>
@@ -518,8 +524,8 @@ function LeftRail({
 
       <Surface title={<><Wallet size={13} /> 账户</>}>
         <div className="grid grid-cols-2 gap-2">
-          <Metric label="USDT 总额" value={num(balance?.total_usdt ?? usdt.total)} />
-          <Metric label="USDT 可用" value={num(balance?.free_usdt ?? usdt.free)} />
+          <Metric label="USDT 总额" value={num(balance?.usdt_total ?? balance?.total_usdt ?? usdt.total)} />
+          <Metric label="USDT 可用" value={num(balance?.usdt_free ?? balance?.free_usdt ?? usdt.free)} />
           <Metric label="风控上限" value={`${num(status?.risk?.max_total_leverage || 4, 1)}x`} />
           <Metric label="交易模式" value={status?.trade_mode || "--"} />
         </div>
@@ -595,7 +601,24 @@ function WorkspaceBody({
     return <StrategyWorkspace symbol={symbol} setSymbol={setSymbol} symbols={symbols} platform={platform} profile={selectedProfile} />;
   }
   if (workspace === "dashboard") {
-    return <DashboardWorkspace symbol={symbol} status={platform} candles={candles} warning={warning} readiness={readiness} />;
+    return (
+      <DashboardWorkspace
+        symbol={symbol}
+        platform={platform}
+        runtimeStatus={runtimeStatus}
+        balance={balance}
+        positions={positions}
+        orders={orders}
+        decisions={decisions}
+        denseZone={denseZone}
+        news={news}
+        candles={candles}
+        warning={warning}
+        readiness={readiness}
+        busy={busy}
+        postAction={postAction}
+      />
+    );
   }
   if (workspace === "ai") {
     return <AiBrainWorkspace symbol={symbol} status={runtimeStatus} platform={platform} profile={selectedProfile} decisions={decisions} />;
@@ -1152,67 +1175,294 @@ function paramPathLabel(path: string) {
 
 function DashboardWorkspace({
   symbol,
-  status,
+  platform,
+  runtimeStatus,
+  balance,
+  positions,
+  orders,
+  decisions,
+  denseZone,
+  news,
   candles,
   warning,
   readiness,
+  busy,
+  postAction,
 }: {
   symbol: string;
-  status: PlatformOverview | null;
+  platform: PlatformOverview | null;
+  runtimeStatus: StatusResponse | null;
+  balance: Record<string, unknown> | null;
+  positions: Array<DbRow>;
+  orders: Array<DbRow>;
+  decisions: Array<DbRow>;
+  denseZone: DbRow<DenseZonePayload> | null;
+  news: NewsResponse;
   candles: Candle[];
   warning: string;
   readiness: SystemReadiness | null;
+  busy: boolean;
+  postAction: (path: string, body: Record<string, unknown>) => Promise<void>;
 }) {
-  const profile = status?.strategy_profiles.find((item) => item.symbol === symbol);
-  const activeProfiles = status?.strategy_profiles.filter((item) => item.enabled).length || 0;
-  const liveProfiles = status?.strategy_profiles.filter((item) => item.live_ready).length || 0;
+  const profile = platform?.strategy_profiles.find((item) => item.symbol === symbol);
+  const position = positionSnapshot(positions, symbol);
+  const latestDecision = runtimeStatus?.latest_decisions?.[symbol]?.payload || decisions[0]?.payload || { state: "等待下一次AI判断" };
+  const latestCandle = candles.at(-1);
+  const account = accountSnapshot(balance);
+  const newsItems = (news.timeline || news.items.map((item) => item.payload)).slice(0, 8);
+  const readinessOverall = readiness?.overall || "warn";
+  const blockedChecks = (readiness?.checks || []).filter((check) => check.status === "block");
+  const warnChecks = (readiness?.checks || []).filter((check) => check.status === "warn");
+  const exchangePayload = readiness?.exchange_safety?.payload || {};
+  const reconciliationPayload = readiness?.latest_reconciliation?.payload || {};
+  const mode = runtimeStatus?.execution_mode || platform?.platform.execution_mode || readiness?.execution_mode || "mock";
   return (
-    <section className="min-h-0 space-y-5 overflow-auto pr-1">
-      <Surface title={<><ServerCog size={13} /> 量化系统运行总览</>}>
-        <div className="grid grid-cols-6 gap-3">
-          <Metric label="平台外壳" value={platformShellLabel(status?.platform.shell)} />
-          <Metric label="交易内核" value={platformCoreLabel(status?.platform.core)} />
-          <Metric label="执行模式" value={executionModeLabel(status?.platform.execution_mode)} />
-          <Metric label="策略档案" value={`${activeProfiles}/${status?.strategy_profiles.length || 0}`} />
-          <Metric label="实盘就绪" value={String(liveProfiles)} tone={liveProfiles ? "warn" : "good"} />
-          <Metric label="K线数量" value={num(candles.length, 0)} />
+    <section className="min-h-0 space-y-4 overflow-auto pr-1">
+      <Surface
+        title={<><ServerCog size={13} /> 实盘值班台</>}
+        action={<LiveOpsBadge readiness={readinessOverall} mode={mode} />}
+      >
+        <div className="grid grid-cols-2 gap-3 xl:grid-cols-4 2xl:grid-cols-8">
+          <Metric label="账户权益" value={`${num(account.total)} USDT`} tone={account.total != null ? "good" : "warn"} />
+          <Metric label="可用余额" value={`${num(account.free)} USDT`} />
+          <Metric label="当前持仓" value={position ? positionSideLabel(position.side) : "空仓"} tone={position ? "warn" : "good"} />
+          <Metric label="未实现盈亏" value={position ? `${num(position.pnl)} USDT` : "--"} tone={pnlTone(position?.pnl)} />
+          <Metric label="AI动作" value={dashboardActionLabel(latestDecision)} />
+          <Metric label="AI仓位档" value={dashboardTierLabel(latestDecision)} />
+          <Metric label="交易所安全" value={exchangePayload.can_open_new_entries ? "可开仓" : "禁止新开仓"} tone={exchangePayload.can_open_new_entries ? "good" : "bad"} />
+          <Metric label="最新价格" value={latestCandle ? num(latestCandle.close) : "--"} />
         </div>
-        <div className="mt-4 grid grid-cols-4 gap-3">
-          <Metric label="当前标的" value={shortSymbol(symbol)} />
-          <Metric label="当前档案" value={profile?.profile_name || "--"} />
-          <Metric label="名义仓位" value={`${num(profile?.backtest_defaults?.notional_multiple, 2)}x`} />
-          <Metric label="数据状态" value={warning || "健康"} tone={warning ? "warn" : "good"} />
+        <div className="mt-3 grid grid-cols-2 gap-3 xl:grid-cols-5">
+          <Metric label="策略档案" value={profile?.profile_name || "--"} />
+          <Metric label="执行模式" value={executionModeLabel(mode)} tone={mode === "live" ? "warn" : "default"} />
+          <Metric label="开仓授权" value={runtimeStatus?.enabled_symbols?.includes(symbol) || profile?.opening_authorized ? "已授权" : "未授权"} tone={runtimeStatus?.enabled_symbols?.includes(symbol) || profile?.opening_authorized ? "good" : "bad"} />
+          <Metric label="对账状态" value={reconciliationStatusLabel(reconciliationPayload.status)} tone={reconciliationPayload.status === "ok" ? "good" : "warn"} />
+          <Metric label="数据状态" value={warning || "K线健康"} tone={warning ? "warn" : "good"} />
         </div>
       </Surface>
-      <ReadinessPanel readiness={readiness} />
-      <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
-        <Surface title={<><FlaskConical size={13} /> 平台迁移地图</>}>
-          <div className="space-y-2 text-xs text-[#53627a]">
-            <RoadmapItem title="总览" body="集中展示账户、策略、任务、数据健康与风险状态。" done />
-            <RoadmapItem title="策略 / 回测" body="策略档案、回测运行、参数寻优、交割单留痕。" done />
-            <RoadmapItem title="AI 大脑" body="DeepSeek 五档仓位、新闻、订单流、形态审计记录。" />
-            <RoadmapItem title="Agent 网关" body="参考 QuantDinger /api/agent/v1，默认只读和纸面回测。" />
-            <RoadmapItem title="交易执行" body="所有真实订单仍必须通过本地 Gateway + RiskManager。" done />
+
+      <div className="grid grid-cols-1 gap-4 2xl:grid-cols-[minmax(360px,0.85fr)_minmax(440px,1fr)_minmax(380px,0.9fr)]">
+        <Surface title={<><Wallet size={13} /> 账户与持仓</>}>
+          <div className="grid gap-3">
+            <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-4">
+              <div className="text-[11px] text-[#64748b]">资金摘要</div>
+              <div className={`${mono} mt-2 text-2xl font-semibold text-[#172033]`}>{num(account.total)} USDT</div>
+              <div className="mt-3 grid gap-2 text-xs text-[#53627a]">
+                <BoundaryLine label="可用" value={`${num(account.free)} USDT`} />
+                <BoundaryLine label="已用保证金" value={`${num(account.used)} USDT`} />
+                <BoundaryLine label="风控上限" value={`${num(runtimeStatus?.risk?.max_total_leverage || 4, 1)}x`} />
+              </div>
+            </div>
+            <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-[11px] text-[#64748b]">当前持仓</div>
+                  <div className="mt-1 text-lg font-semibold text-[#172033]">{position ? `${shortSymbol(symbol)} ${positionSideLabel(position.side)}` : `${shortSymbol(symbol)} 空仓`}</div>
+                </div>
+                <span className={`rounded-full px-3 py-1 text-[11px] ${position ? "bg-[#fff7e6] text-[#b7791f]" : "bg-[#e7f8ee] text-[#0a9f5a]"}`}>{position ? "持仓中" : "无风险敞口"}</span>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <Metric label="数量" value={position ? num(position.qty, 6) : "--"} />
+                <Metric label="开仓价" value={position ? num(position.entryPrice) : "--"} />
+                <Metric label="标记价" value={position ? num(position.markPrice ?? latestCandle?.close) : "--"} />
+                <Metric label="名义价值" value={position ? `${num(position.notional)} USDT` : "--"} />
+                <Metric label="盈亏" value={position ? `${num(position.pnl)} USDT` : "--"} tone={pnlTone(position?.pnl)} />
+              </div>
+            </div>
           </div>
         </Surface>
-        <Surface title={<><ShieldCheck size={13} /> 不可绕过的交易内核</>}>
-          <div className="grid gap-2 text-xs">
-            <BoundaryLine label="策略核心" value="本地 ETH 肯特纳通道 + 成交量 + KDJ 趋势引擎" />
-            <BoundaryLine label="AI核心" value="DeepSeek 五档仓位叠加判断" />
-            <BoundaryLine label="执行核心" value="Gate.io 网关，必须经过风控管理器" />
-            <BoundaryLine label="参数变更" value="只能创建提案，审批后生效" />
-            <BoundaryLine label="实盘下单" value="禁止任何界面绕过 Gateway 与 RiskManager" />
+
+        <Surface title={<><BrainCircuit size={13} /> AI 实盘决策</>}>
+          <DecisionSummary data={latestDecision} />
+          <DecisionNarrative data={latestDecision} />
+        </Surface>
+
+        <Surface
+          title={<><Newspaper size={13} /> 最新新闻与消息面</>}
+          action={<button className={button} disabled={busy} onClick={() => postAction("/api/news/refresh", { operator_id: "console" })}>刷新</button>}
+        >
+          {news.warnings?.length ? (
+            <div className="mb-3 rounded-xl border border-[#f3d18a] bg-[#fff7e6] p-3 text-xs text-[#b7791f]">{news.warnings.join("; ")}</div>
+          ) : null}
+          <div className="grid max-h-[520px] gap-2 overflow-auto">
+            {newsItems.length ? newsItems.slice(0, 6).map((item, idx) => <DashboardNewsItem key={idx} item={item} />) : (
+              <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs text-[#53627a]">暂无新闻快讯。</div>
+            )}
           </div>
-          <details className="mt-3 rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs">
-            <summary className="cursor-pointer font-semibold text-[#53627a]">查看执行契约原始审计数据</summary>
-            <div className="mt-2">
-              <JsonBlock data={profile?.execution_contract || {}} maxHeight="max-h-40" />
-            </div>
-          </details>
         </Surface>
       </div>
+
+      <div className="grid grid-cols-1 gap-4 2xl:grid-cols-[390px_390px_minmax(0,1fr)]">
+          <Surface title={<><ShieldCheck size={13} /> 实盘阻断项</>}>
+            <div className="space-y-2 text-xs">
+              {blockedChecks.length || warnChecks.length ? (
+                [...blockedChecks, ...warnChecks].slice(0, 8).map((check) => (
+                  <div key={check.id} className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="font-semibold text-[#172033]">{readinessCheckLabel(check.label)}</span>
+                      <span className={`rounded-full px-2 py-1 text-[10px] ${readinessToneClass(check.status)}`}>{readinessLabel(check.status)}</span>
+                    </div>
+                    <div className="mt-2 leading-relaxed text-[#53627a]">{readinessDetail(check.detail)}</div>
+                  </div>
+                ))
+              ) : (
+                <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-[#0a9f5a]">当前没有阻断项。</div>
+              )}
+            </div>
+          </Surface>
+          <Surface title={<><FlaskConical size={13} /> 密集区结构</>}>
+            <MiniDenseZone denseZone={denseZone?.payload} />
+          </Surface>
+
+        <Surface title={<><Power size={13} /> 最近订单与审计</>}>
+          <div className="grid gap-3 xl:grid-cols-2">
+            {orders.length ? orders.slice(0, 4).map((row) => <CompactOrderCard key={`${row.id}-${row.created_at}`} row={row} />) : (
+              <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs text-[#53627a]">暂无订单记录。</div>
+            )}
+          </div>
+        </Surface>
+      </div>
+
+      <details className="rounded-xl border border-[#d9e2ef] bg-white p-4 text-xs text-[#53627a]">
+        <summary className="cursor-pointer font-semibold text-[#172033]">展开完整生产就绪检查</summary>
+        <div className="mt-4">
+          <ReadinessPanel readiness={readiness} />
+        </div>
+      </details>
     </section>
   );
+}
+
+function LiveOpsBadge({ readiness, mode }: { readiness: string; mode: string }) {
+  const tone = readiness === "ok" ? "bg-[#e7f8ee] text-[#0a9f5a]" : readiness === "block" ? "bg-[#fff1f2] text-[#e11d48]" : "bg-[#fff7e6] text-[#b7791f]";
+  return <span className={`rounded-full px-3 py-1 text-[11px] ${tone}`}>{executionModeLabel(mode)} / {readinessLabel(readiness)}</span>;
+}
+
+function DashboardNewsItem({ item }: { item: Record<string, unknown> }) {
+  return (
+    <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs">
+      <div className="line-clamp-3 font-medium leading-5 text-[#172033]">{String(item.title || item.headline || item.summary || "--")}</div>
+      <div className="mt-2 flex items-center justify-between gap-3 text-[11px] text-[#53627a]">
+        <span>{String(item.source || "新闻源")}</span>
+        <span className={mono}>{String(item.published_at || item.time || "")}</span>
+      </div>
+    </div>
+  );
+}
+
+function CompactOrderCard({ row }: { row: DbRow }) {
+  const payload = row.payload || {};
+  const side = String(payload.side || payload.action || "--");
+  const status = String(payload.status || "--");
+  return (
+    <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs">
+      <div className="flex items-center justify-between gap-3">
+        <span className="font-semibold text-[#172033]">{shortSymbol(String(row.symbol || payload.symbol || "--"))}</span>
+        <span className={mono}>{row.created_at}</span>
+      </div>
+      <div className="mt-2 grid grid-cols-4 gap-2">
+        <Metric label="方向" value={sideLabel(side)} />
+        <Metric label="数量" value={num(payload.amount ?? payload.qty, 6)} />
+        <Metric label="价格" value={num(payload.price ?? payload.average)} />
+        <Metric label="状态" value={orderStatusLabel(status)} />
+      </div>
+    </div>
+  );
+}
+
+type PositionSnapshot = {
+  side: string;
+  qty: number | null;
+  entryPrice: number | null;
+  markPrice: number | null;
+  pnl: number | null;
+  notional: number | null;
+};
+
+function positionSnapshot(positions: Array<DbRow>, symbol: string): PositionSnapshot | null {
+  const row = positions.find((item) => String(item.symbol || item.payload?.symbol || "") === symbol) || positions[0];
+  if (!row) return null;
+  const payload = row.payload || {};
+  const raw = objectPayload(payload.raw);
+  const info = objectPayload(raw.info);
+  const qty = numberValue(payload.qty, payload.amount, payload.contracts, payload.size, raw.contracts, raw.size, info.size);
+  if (qty != null && Math.abs(qty) === 0) return null;
+  const side = String(payload.side || raw.side || (qty != null && qty < 0 ? "short" : qty != null && qty > 0 ? "long" : "--"));
+  const entryPrice = numberValue(payload.entry_price, payload.entryPrice, raw.entryPrice, raw.entry_price, info.entry_price);
+  const markPrice = numberValue(payload.mark_price, payload.markPrice, raw.markPrice, raw.mark_price, info.mark_price);
+  const pnl = numberValue(payload.unrealized_pnl, payload.unrealised_pnl, raw.unrealizedPnl, raw.unrealized_pnl, raw.unrealised_pnl, info.unrealised_pnl);
+  const notional = numberValue(payload.notional, payload.contract_value, raw.notional, raw.contract_value, qty != null && markPrice != null ? Math.abs(qty * markPrice) : null);
+  return { side, qty, entryPrice, markPrice, pnl, notional };
+}
+
+function accountSnapshot(balance: Record<string, unknown> | null) {
+  const payload = balance || {};
+  const raw = objectPayload(payload.raw);
+  const rawUsdt = objectPayload(raw.USDT);
+  const total = numberValue(payload.usdt_total, payload.total_usdt, rawUsdt.total, objectPayload(payload.total).USDT);
+  const free = numberValue(payload.usdt_free, payload.free_usdt, rawUsdt.free, objectPayload(payload.free).USDT);
+  const used = numberValue(payload.usdt_used, payload.used_usdt, rawUsdt.used, objectPayload(payload.used).USDT);
+  return { total, free, used };
+}
+
+function objectPayload(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function numberValue(...values: unknown[]): number | null {
+  for (const value of values) {
+    const number = Number(value);
+    if (Number.isFinite(number)) return number;
+  }
+  return null;
+}
+
+function pnlTone(value: unknown): "default" | "good" | "bad" | "warn" {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "default";
+  return number >= 0 ? "good" : "bad";
+}
+
+function positionSideLabel(value: unknown) {
+  const text = String(value || "--").toLowerCase();
+  if (["long", "buy"].includes(text)) return "多仓";
+  if (["short", "sell"].includes(text)) return "空仓";
+  return text;
+}
+
+function sideLabel(value: unknown) {
+  const text = String(value || "--").toLowerCase();
+  if (text === "buy") return "买入";
+  if (text === "sell") return "卖出";
+  if (text === "long") return "做多";
+  if (text === "short") return "做空";
+  return text;
+}
+
+function orderStatusLabel(value: unknown) {
+  const text = String(value || "--");
+  const labels: Record<string, string> = {
+    open: "挂单中",
+    closed: "已成交",
+    canceled: "已撤销",
+    cancelled: "已撤销",
+    rejected: "拒单",
+    unknown: "未知",
+  };
+  return labels[text] || text;
+}
+
+function dashboardActionLabel(data: Record<string, unknown>) {
+  const payload = data.payload && typeof data.payload === "object" ? (data.payload as Record<string, unknown>) : data;
+  const body = payload.ai && typeof payload.ai === "object" ? (payload.ai as Record<string, unknown>) : payload;
+  return actionLabel(body.action_suggestion || body.veto_action || payload.action || data.state || "--");
+}
+
+function dashboardTierLabel(data: Record<string, unknown>) {
+  const payload = data.payload && typeof data.payload === "object" ? (data.payload as Record<string, unknown>) : data;
+  const risk = payload.risk && typeof payload.risk === "object" ? (payload.risk as Record<string, unknown>) : null;
+  if (risk) return `${tierLabel(risk.position_tier)} / ${positionScaleLabel(risk.position_scale)}`;
+  return aiScaleFromConfidence(payload.confidence || data.confidence).label;
 }
 
 function ReadinessPanel({ readiness }: { readiness: SystemReadiness | null }) {

@@ -19,8 +19,8 @@ export const errText = (error: unknown): string => (error instanceof Error ? err
 
 export function Surface({ title, action, children }: { title: ReactNode; action?: ReactNode; children: ReactNode }) {
   return (
-    <section className="min-w-0 rounded-2xl border border-[#d9e2ef] bg-white shadow-[0_12px_35px_rgba(26,42,68,0.06)]">
-      <div className="flex h-12 items-center justify-between border-b border-[#e6edf5] px-4 text-[12px] font-semibold uppercase tracking-wide text-[#53627a]">
+    <section className="min-w-0 rounded-xl border border-[#d9e2ef] bg-white shadow-[0_10px_26px_rgba(26,42,68,0.055)]">
+      <div className="flex h-11 items-center justify-between border-b border-[#e6edf5] px-4 text-[12px] font-semibold text-[#53627a]">
         <div className="flex items-center gap-2">{title}</div>
         {action}
       </div>
@@ -33,8 +33,8 @@ export function Metric({ label, value, tone = "default" }: { label: string; valu
   const toneClass =
     tone === "good" ? "text-[#0a9f5a]" : tone === "bad" ? "text-[#e11d48]" : tone === "warn" ? "text-[#b7791f]" : "text-[#172033]";
   return (
-    <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3">
-      <div className="text-[10px] uppercase text-[#7b8798]">{label}</div>
+    <div className="rounded-lg border border-[#dfe7f1] bg-[#f8fbff] p-3">
+      <div className="text-[11px] text-[#7b8798]">{label}</div>
       <div className={`${mono} mt-1 truncate text-sm font-semibold ${toneClass}`}>{value}</div>
     </div>
   );
