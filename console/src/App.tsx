@@ -99,8 +99,6 @@ export function App() {
         nextOrders,
         nextDecisions,
         nextDenseZone,
-        nextNews,
-        nextCandles,
       ] =
         await Promise.all([
           api<StatusResponse>("/api/status", { retries: 1 }),
@@ -114,11 +112,6 @@ export function App() {
           api<ApiList>(`/api/orders?limit=80&symbol=${encodeURIComponent(symbol)}`, { retries: 1 }),
           api<ApiList>(`/api/decisions?limit=80&symbol=${encodeURIComponent(symbol)}`, { retries: 1 }),
           safe(api<{ item: DbRow<DenseZonePayload> | null }>(`/api/dense-zones/latest?symbol=${encodeURIComponent(symbol)}`, { retries: 1 }), { item: null }),
-          api<NewsResponse>("/api/news/latest?limit=24", { retries: 1 }),
-          api<CandleResponse>(
-            `/api/market/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${timeframe}&limit=5000&source=${source}`,
-            { retries: 1, timeoutMs: 15000 },
-          ),
         ]);
       setStatus(nextStatus);
       setPlatform(nextPlatform);
@@ -131,9 +124,22 @@ export function App() {
       setOrders(nextOrders.items || []);
       setDecisions(nextDecisions.items || []);
       setDenseZone(nextDenseZone.item || null);
-      setNews(nextNews);
-      setCandles(nextCandles.items || []);
-      setWarning(nextCandles.warning || "");
+      void Promise.all([
+        safe(api<NewsResponse>("/api/news/latest?limit=24", { retries: 0, timeoutMs: 5000 }), { items: [], timeline: [], warnings: ["新闻接口暂时未返回，已保留上一轮界面状态。"] }),
+        safe(
+          api<CandleResponse>(
+            `/api/market/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${timeframe}&limit=5000&source=${source}`,
+            { retries: 0, timeoutMs: 12000 },
+          ),
+          { items: [], warning: "K线接口暂时未返回，已保留上一轮界面状态。" },
+        ),
+      ]).then(([nextNews, nextCandles]) => {
+        setNews(nextNews);
+        if (nextCandles.items?.length) {
+          setCandles(nextCandles.items || []);
+        }
+        setWarning(nextCandles.warning || "");
+      });
     } catch (error) {
       setWarning(errText(error));
     }
@@ -271,7 +277,7 @@ function workspaceLabel(id: WorkspaceId, platform: PlatformOverview | null) {
     market: "行情图表",
     strategy: "策略与回测",
     ai: "AI 大脑",
-    agent: "Agent 网关",
+    agent: "智能体网关",
     execution: "交易执行",
     data: "数据健康",
   };
@@ -328,14 +334,14 @@ function ShellNav({
   message: string;
   postAction: (path: string, body: Record<string, unknown>) => Promise<void>;
 }) {
-  const workspaces = platform?.workspaces || [
-    { id: "dashboard" as WorkspaceId, label: "Dashboard" },
-    { id: "market" as WorkspaceId, label: "Market" },
-    { id: "strategy" as WorkspaceId, label: "Strategy" },
-    { id: "ai" as WorkspaceId, label: "AI Brain" },
-    { id: "agent" as WorkspaceId, label: "Agent Gateway" },
-    { id: "execution" as WorkspaceId, label: "Execution" },
-    { id: "data" as WorkspaceId, label: "Data Health" },
+  const workspaces = platform?.workspaces?.length ? platform.workspaces : [
+    { id: "dashboard" as WorkspaceId, label: "总览" },
+    { id: "market" as WorkspaceId, label: "行情图表" },
+    { id: "strategy" as WorkspaceId, label: "策略与回测" },
+    { id: "ai" as WorkspaceId, label: "AI 大脑" },
+    { id: "agent" as WorkspaceId, label: "智能体网关" },
+    { id: "execution" as WorkspaceId, label: "交易执行" },
+    { id: "data" as WorkspaceId, label: "数据健康" },
   ];
   return (
     <aside className="flex min-h-0 flex-col border-r border-[#d9e2ef] bg-white shadow-[10px_0_30px_rgba(26,42,68,0.08)]">
@@ -345,7 +351,7 @@ function ShellNav({
         </div>
         <div>
           <div className="text-xl font-bold tracking-tight text-[#2454ff]">量化 AI 工作台</div>
-          <div className="text-[11px] text-[#7b8798]">本地策略内核 / Agent 安全外壳</div>
+          <div className="text-[11px] text-[#7b8798]">本地策略内核 / 智能体安全外壳</div>
         </div>
       </div>
       <nav className="shrink-0 px-3 py-4">
@@ -557,7 +563,7 @@ function LeftRail({
           <Metric label="USDT 总额" value={num(balance?.usdt_total ?? balance?.total_usdt ?? usdt.total)} />
           <Metric label="USDT 可用" value={num(balance?.usdt_free ?? balance?.free_usdt ?? usdt.free)} />
           <Metric label="风控上限" value={`${num(status?.risk?.max_total_leverage || 4, 1)}x`} />
-          <Metric label="交易模式" value={status?.trade_mode || "--"} />
+          <Metric label="交易模式" value={tradeModeLabel(status?.trade_mode)} />
         </div>
       </Surface>
 
@@ -1239,95 +1245,116 @@ function DashboardWorkspace({
   const latestDecision = runtimeStatus?.latest_decisions?.[symbol]?.payload || decisions[0]?.payload || { state: "等待下一次AI判断" };
   const latestCandle = candles.at(-1);
   const account = accountSnapshot(balance);
-  const newsItems = (news.timeline || news.items.map((item) => item.payload)).slice(0, 8);
+  const newsItems = (news.timeline || news.items.map((item) => item.payload)).filter((item) => !isInternalNewsItem(item)).slice(0, 8);
+  const newsWarnings = (news.warnings || []).filter((item) => !isInternalNewsText(item));
   const readinessOverall = readiness?.overall || "warn";
   const blockedChecks = (readiness?.checks || []).filter((check) => check.status === "block");
   const warnChecks = (readiness?.checks || []).filter((check) => check.status === "warn");
   const exchangePayload = readiness?.exchange_safety?.payload || {};
   const reconciliationPayload = readiness?.latest_reconciliation?.payload || {};
+  const dataHealthPayload = readiness?.latest_data_health?.payload || {};
+  const orderLifecyclePayload = readiness?.latest_order_lifecycle?.payload || {};
   const mode = runtimeStatus?.execution_mode || platform?.platform.execution_mode || readiness?.execution_mode || "mock";
+  const openingAuthorized = runtimeStatus?.enabled_symbols?.includes(symbol) || Boolean(profile?.opening_authorized);
+  const liveReady = profile?.live_ready || readiness?.overall === "ok";
+  const aiReady = readiness?.deepseek_ready || Boolean(runtimeStatus?.ai?.enabled);
+  const newsAge = news.age_minutes != null ? `${num(news.age_minutes, 1)} 分钟` : "等待刷新";
+  const latestPrice = latestCandle ? num(latestCandle.close) : "--";
   return (
     <section className="min-h-0 space-y-4 overflow-auto pr-1">
-      <Surface
-        title={<><ServerCog size={13} /> 实盘值班台</>}
-        action={<LiveOpsBadge readiness={readinessOverall} mode={mode} />}
-      >
-        <div className="grid grid-cols-2 gap-3 xl:grid-cols-4 2xl:grid-cols-8">
-          <Metric label="账户权益" value={`${num(account.total)} USDT`} tone={account.total != null ? "good" : "warn"} />
-          <Metric label="可用余额" value={`${num(account.free)} USDT`} />
-          <Metric label="当前持仓" value={position ? positionSideLabel(position.side) : "空仓"} tone={position ? "warn" : "good"} />
-          <Metric label="未实现盈亏" value={position ? `${num(position.pnl)} USDT` : "--"} tone={pnlTone(position?.pnl)} />
-          <Metric label="AI动作" value={dashboardActionLabel(latestDecision)} />
-          <Metric label="AI仓位档" value={dashboardTierLabel(latestDecision)} />
-          <Metric label="交易所安全" value={exchangePayload.can_open_new_entries ? "可开仓" : "禁止新开仓"} tone={exchangePayload.can_open_new_entries ? "good" : "bad"} />
-          <Metric label="最新价格" value={latestCandle ? num(latestCandle.close) : "--"} />
-        </div>
-        <div className="mt-3 grid grid-cols-2 gap-3 xl:grid-cols-5">
-          <Metric label="策略档案" value={profile?.profile_name || "--"} />
-          <Metric label="执行模式" value={executionModeLabel(mode)} tone={mode === "live" ? "warn" : "default"} />
-          <Metric label="开仓授权" value={runtimeStatus?.enabled_symbols?.includes(symbol) || profile?.opening_authorized ? "已授权" : "未授权"} tone={runtimeStatus?.enabled_symbols?.includes(symbol) || profile?.opening_authorized ? "good" : "bad"} />
-          <Metric label="对账状态" value={reconciliationStatusLabel(reconciliationPayload.status)} tone={reconciliationPayload.status === "ok" ? "good" : "warn"} />
-          <Metric label="数据状态" value={warning || "K线健康"} tone={warning ? "warn" : "good"} />
-        </div>
-      </Surface>
-
-      <div className="grid grid-cols-1 gap-4 2xl:grid-cols-[minmax(360px,0.85fr)_minmax(440px,1fr)_minmax(380px,0.9fr)]">
-        <Surface title={<><Wallet size={13} /> 账户与持仓</>}>
-          <div className="grid gap-3">
-            <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-4">
-              <div className="text-[11px] text-[#64748b]">资金摘要</div>
-              <div className={`${mono} mt-2 text-2xl font-semibold text-[#172033]`}>{num(account.total)} USDT</div>
-              <div className="mt-3 grid gap-2 text-xs text-[#53627a]">
-                <BoundaryLine label="可用" value={`${num(account.free)} USDT`} />
-                <BoundaryLine label="已用保证金" value={`${num(account.used)} USDT`} />
-                <BoundaryLine label="风控上限" value={`${num(runtimeStatus?.risk?.max_total_leverage || 4, 1)}x`} />
-              </div>
+      <div className="rounded-2xl border border-[#d8e2ef] bg-white p-4 shadow-[0_16px_42px_rgba(26,42,68,0.08)]">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2 text-[12px] font-semibold text-[#2454ff]">
+              <ServerCog size={14} />
+              AI 量化实盘指挥台
             </div>
-            <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-4">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <div className="text-[11px] text-[#64748b]">当前持仓</div>
-                  <div className="mt-1 text-lg font-semibold text-[#172033]">{position ? `${shortSymbol(symbol)} ${positionSideLabel(position.side)}` : `${shortSymbol(symbol)} 空仓`}</div>
-                </div>
-                <span className={`rounded-full px-3 py-1 text-[11px] ${position ? "bg-[#fff7e6] text-[#b7791f]" : "bg-[#e7f8ee] text-[#0a9f5a]"}`}>{position ? "持仓中" : "无风险敞口"}</span>
-              </div>
-              <div className="mt-3 grid grid-cols-2 gap-2">
-                <Metric label="数量" value={position ? num(position.qty, 6) : "--"} />
-                <Metric label="开仓价" value={position ? num(position.entryPrice) : "--"} />
-                <Metric label="标记价" value={position ? num(position.markPrice ?? latestCandle?.close) : "--"} />
-                <Metric label="名义价值" value={position ? `${num(position.notional)} USDT` : "--"} />
-                <Metric label="盈亏" value={position ? `${num(position.pnl)} USDT` : "--"} tone={pnlTone(position?.pnl)} />
-              </div>
+            <div className="mt-2 flex flex-wrap items-end gap-x-4 gap-y-2">
+              <h1 className="text-2xl font-semibold tracking-tight text-[#101828]">{shortSymbol(symbol)} 趋势策略</h1>
+              <span className={`${mono} rounded-full border border-[#d9e2ef] bg-[#f8fbff] px-3 py-1 text-xs text-[#53627a]`}>
+                最新价 {latestPrice}
+              </span>
+              <LiveOpsBadge readiness={readinessOverall} mode={mode} />
             </div>
           </div>
-        </Surface>
-
-        <Surface title={<><BrainCircuit size={13} /> AI 实盘决策</>}>
-          <DecisionSummary data={latestDecision} />
-          <DecisionNarrative data={latestDecision} />
-        </Surface>
-
-        <Surface
-          title={<><Newspaper size={13} /> 最新新闻与消息面</>}
-          action={<button className={button} disabled={busy} onClick={() => postAction("/api/news/refresh", { operator_id: "console" })}>刷新</button>}
-        >
-          {news.warnings?.length ? (
-            <div className="mb-3 rounded-xl border border-[#f3d18a] bg-[#fff7e6] p-3 text-xs text-[#b7791f]">{news.warnings.join("; ")}</div>
-          ) : null}
-          <div className="grid max-h-[520px] gap-2 overflow-auto">
-            {newsItems.length ? newsItems.slice(0, 6).map((item, idx) => <DashboardNewsItem key={idx} item={item} />) : (
-              <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs text-[#53627a]">暂无新闻快讯。</div>
-            )}
+          <div className="grid min-w-[520px] grid-cols-4 gap-2 max-xl:min-w-0 max-xl:w-full">
+            <DashboardStatusPill label="开仓授权" value={openingAuthorized ? "已授权" : "未授权"} tone={openingAuthorized ? "good" : "bad"} />
+            <DashboardStatusPill label="交易所" value={exchangePayload.can_open_new_entries ? "可开仓" : "禁止开仓"} tone={exchangePayload.can_open_new_entries ? "good" : "bad"} />
+            <DashboardStatusPill label="DeepSeek" value={aiReady ? "已配置" : "降级"} tone={aiReady ? "good" : "warn"} />
+            <DashboardStatusPill label="新闻缓存" value={newsAge} tone={newsWarnings.length ? "warn" : "good"} />
           </div>
-        </Surface>
+        </div>
+
+        <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4 2xl:grid-cols-8">
+          <HeroMetric label="账户权益" value={`${num(account.total)} USDT`} tone={account.total != null ? "good" : "warn"} />
+          <HeroMetric label="可用余额" value={`${num(account.free)} USDT`} />
+          <HeroMetric label="持仓状态" value={position ? positionSideLabel(position.side) : "空仓"} tone={position ? "warn" : "good"} />
+          <HeroMetric label="浮动盈亏" value={position ? `${num(position.pnl)} USDT` : "--"} tone={pnlTone(position?.pnl)} />
+          <HeroMetric label="AI动作" value={dashboardActionLabel(latestDecision)} />
+          <HeroMetric label="仓位档" value={dashboardTierLabel(latestDecision)} />
+          <HeroMetric label="对账状态" value={reconciliationStatusLabel(reconciliationPayload.status)} tone={reconciliationPayload.status === "ok" ? "good" : "warn"} />
+          <HeroMetric label="K线数据" value={warning || `${num(candles.length, 0)} 根`} tone={warning ? "warn" : "good"} />
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 2xl:grid-cols-[390px_390px_minmax(0,1fr)]">
-          <Surface title={<><ShieldCheck size={13} /> 实盘阻断项</>}>
-            <div className="space-y-2 text-xs">
+      <div className="grid grid-cols-1 gap-4 2xl:grid-cols-[340px_minmax(420px,1fr)_340px]">
+        <div className="grid min-w-0 gap-4">
+          <DashboardPanel title={<><Wallet size={14} /> 账户资金</>}>
+            <div className="rounded-xl bg-[#0f172a] p-4 text-white">
+              <div className="text-[11px] text-[#cbd5e1]">USDT 权益</div>
+              <div className={`${mono} mt-2 text-3xl font-semibold`}>{num(account.total)}</div>
+              <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                <PlainKV label="可用" value={`${num(account.free)} USDT`} />
+                <PlainKV label="已用" value={`${num(account.used)} USDT`} />
+                <PlainKV label="风控上限" value={`${num(runtimeStatus?.risk?.max_total_leverage || 4, 1)}x`} />
+                <PlainKV label="策略档案" value={profile?.profile_name || "--"} />
+              </div>
+            </div>
+          </DashboardPanel>
+
+          <DashboardPanel title={<><Power size={14} /> 当前持仓</>}>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-[11px] text-[#7b8798]">标的 / 方向</div>
+                <div className="mt-1 text-xl font-semibold text-[#101828]">
+                  {position ? `${shortSymbol(symbol)} ${positionSideLabel(position.side)}` : `${shortSymbol(symbol)} 空仓`}
+                </div>
+              </div>
+              <span className={`rounded-full px-3 py-1 text-[11px] font-medium ${position ? "bg-[#fff7e6] text-[#b7791f]" : "bg-[#e7f8ee] text-[#0a9f5a]"}`}>
+                {position ? "持仓中" : "无敞口"}
+              </span>
+            </div>
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <HeroMetric label="数量" value={position ? num(position.qty, 6) : "--"} />
+              <HeroMetric label="开仓价" value={position ? num(position.entryPrice) : "--"} />
+              <HeroMetric label="标记价" value={position ? num(position.markPrice ?? latestCandle?.close) : "--"} />
+              <HeroMetric label="名义价值" value={position ? `${num(position.notional)} USDT` : "--"} />
+              <HeroMetric label="浮盈亏" value={position ? `${num(position.pnl)} USDT` : "--"} tone={pnlTone(position?.pnl)} />
+              <HeroMetric label="止损价" value={position?.stopLoss != null ? num(position.stopLoss) : "--"} />
+            </div>
+          </DashboardPanel>
+
+          <DashboardPanel title={<><FlaskConical size={14} /> 密集区结构</>}>
+            <MiniDenseZone denseZone={denseZone?.payload} />
+          </DashboardPanel>
+        </div>
+
+        <div className="grid min-w-0 gap-4">
+          <DashboardPanel title={<><BrainCircuit size={14} /> AI 决策与仓位</>} action={<span className="rounded-full bg-[#eef3ff] px-3 py-1 text-[11px] text-[#2454ff]">只缩放 / 否决</span>}>
+            <DecisionSummary data={latestDecision} />
+            <DecisionNarrative data={latestDecision} />
+          </DashboardPanel>
+
+          <DashboardPanel title={<><ShieldCheck size={14} /> 实盘安全闸</>} action={<span className={`rounded-full px-3 py-1 text-[11px] ${readinessToneClass(readinessOverall)}`}>{readinessLabel(readinessOverall)}</span>}>
+            <div className="grid gap-2 md:grid-cols-3">
+              <HealthMini label="交易所对账" value={reconciliationStatusLabel(reconciliationPayload.status)} ok={reconciliationPayload.status === "ok"} />
+              <HealthMini label="数据新鲜度" value={healthStatusLabel(dataHealthPayload.status)} ok={dataHealthPayload.status === "ok"} />
+              <HealthMini label="实盘准备" value={liveReady ? "就绪" : "待复核"} ok={Boolean(liveReady)} />
+            </div>
+            <div className="mt-3 grid gap-2">
               {blockedChecks.length || warnChecks.length ? (
-                [...blockedChecks, ...warnChecks].slice(0, 8).map((check) => (
-                  <div key={check.id} className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3">
+                [...blockedChecks, ...warnChecks].slice(0, 4).map((check) => (
+                  <div key={check.id} className="rounded-xl border border-[#e3eaf3] bg-[#f8fbff] p-3 text-xs">
                     <div className="flex items-center justify-between gap-3">
                       <span className="font-semibold text-[#172033]">{readinessCheckLabel(check.label)}</span>
                       <span className={`rounded-full px-2 py-1 text-[10px] ${readinessToneClass(check.status)}`}>{readinessLabel(check.status)}</span>
@@ -1336,30 +1363,104 @@ function DashboardWorkspace({
                   </div>
                 ))
               ) : (
-                <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-[#0a9f5a]">当前没有阻断项。</div>
+                <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs text-[#0a9f5a]">当前没有阻断项。</div>
               )}
             </div>
-          </Surface>
-          <Surface title={<><FlaskConical size={13} /> 密集区结构</>}>
-            <MiniDenseZone denseZone={denseZone?.payload} />
-          </Surface>
+          </DashboardPanel>
+        </div>
 
-        <Surface title={<><Power size={13} /> 最近订单与审计</>}>
-          <div className="grid gap-3 xl:grid-cols-2">
-            {orders.length ? orders.slice(0, 4).map((row) => <CompactOrderCard key={`${row.id}-${row.created_at}`} row={row} />) : (
-              <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs text-[#53627a]">暂无订单记录。</div>
-            )}
-          </div>
-        </Surface>
+        <div className="grid min-w-0 gap-4">
+          <DashboardPanel
+            title={<><Newspaper size={14} /> 新闻快讯</>}
+            action={<button className={button} disabled={busy} onClick={() => postAction("/api/news/refresh", { operator_id: "console" })}>刷新</button>}
+          >
+            {newsWarnings.length ? (
+              <div className="mb-3 rounded-xl border border-[#f3d18a] bg-[#fff7e6] p-3 text-xs text-[#b7791f]">{newsWarnings.join("; ")}</div>
+            ) : null}
+            <div className="grid max-h-[500px] gap-2 overflow-auto pr-1">
+              {newsItems.length ? newsItems.slice(0, 7).map((item, idx) => <DashboardNewsItem key={idx} item={item} />) : (
+                <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs text-[#53627a]">暂无新闻快讯。</div>
+              )}
+            </div>
+          </DashboardPanel>
+
+          <DashboardPanel title={<><Power size={14} /> 执行链路</>}>
+            <div className="mb-3 rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs">
+              <BoundaryLine label="最近订单状态" value={orderLifecycleSummary(orderLifecyclePayload)} />
+              <BoundaryLine label="新开仓状态" value={exchangePayload.can_open_new_entries ? "允许" : "禁止"} />
+              <BoundaryLine label="人工处理" value={exchangeSafetyReason(exchangePayload.manual_action)} />
+            </div>
+            <div className="grid gap-2">
+              {orders.length ? orders.slice(0, 4).map((row) => <CompactOrderCard key={`${row.id}-${row.created_at}`} row={row} />) : (
+                <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs text-[#53627a]">暂无订单记录。</div>
+              )}
+            </div>
+          </DashboardPanel>
+        </div>
       </div>
 
-      <details className="rounded-xl border border-[#d9e2ef] bg-white p-4 text-xs text-[#53627a]">
-        <summary className="cursor-pointer font-semibold text-[#172033]">展开完整生产就绪检查</summary>
+      <details className="rounded-2xl border border-[#d9e2ef] bg-white p-4 text-xs text-[#53627a] shadow-[0_10px_26px_rgba(26,42,68,0.055)]">
+        <summary className="cursor-pointer font-semibold text-[#172033]">展开完整生产就绪检查与原始审计</summary>
         <div className="mt-4">
           <ReadinessPanel readiness={readiness} />
         </div>
       </details>
     </section>
+  );
+}
+
+function DashboardPanel({ title, action, children }: { title: ReactNode; action?: ReactNode; children: ReactNode }) {
+  return (
+    <section className="min-w-0 rounded-2xl border border-[#d9e2ef] bg-white shadow-[0_10px_26px_rgba(26,42,68,0.055)]">
+      <div className="flex min-h-12 items-center justify-between gap-3 border-b border-[#e6edf5] px-4 py-3 text-sm font-semibold text-[#172033]">
+        <div className="flex items-center gap-2">{title}</div>
+        {action}
+      </div>
+      <div className="p-4">{children}</div>
+    </section>
+  );
+}
+
+function DashboardStatusPill({ label, value, tone = "default" }: { label: string; value: string; tone?: "default" | "good" | "bad" | "warn" }) {
+  const toneClass =
+    tone === "good" ? "border-[#bfead0] bg-[#e7f8ee] text-[#0a9f5a]" :
+    tone === "bad" ? "border-[#fecdd3] bg-[#fff1f2] text-[#e11d48]" :
+    tone === "warn" ? "border-[#f3d18a] bg-[#fff7e6] text-[#b7791f]" :
+    "border-[#d9e2ef] bg-[#f8fbff] text-[#53627a]";
+  return (
+    <div className={`rounded-xl border px-3 py-2 ${toneClass}`}>
+      <div className="text-[10px] opacity-80">{label}</div>
+      <div className={`${mono} mt-1 truncate text-xs font-semibold`}>{value}</div>
+    </div>
+  );
+}
+
+function HeroMetric({ label, value, tone = "default" }: { label: string; value: string; tone?: "default" | "good" | "bad" | "warn" }) {
+  const toneClass =
+    tone === "good" ? "text-[#0a9f5a]" : tone === "bad" ? "text-[#e11d48]" : tone === "warn" ? "text-[#b7791f]" : "text-[#101828]";
+  return (
+    <div className="min-w-0 rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3">
+      <div className="text-[11px] text-[#7b8798]">{label}</div>
+      <div className={`${mono} mt-1 truncate text-sm font-semibold ${toneClass}`}>{value}</div>
+    </div>
+  );
+}
+
+function PlainKV({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg bg-white/10 px-3 py-2">
+      <div className="text-[10px] text-[#cbd5e1]">{label}</div>
+      <div className={`${mono} mt-1 truncate font-semibold text-white`}>{value}</div>
+    </div>
+  );
+}
+
+function HealthMini({ label, value, ok }: { label: string; value: string; ok: boolean }) {
+  return (
+    <div className={`rounded-xl border p-3 text-xs ${ok ? "border-[#bfead0] bg-[#e7f8ee] text-[#0a9f5a]" : "border-[#f3d18a] bg-[#fff7e6] text-[#b7791f]"}`}>
+      <div className="text-[10px] opacity-80">{label}</div>
+      <div className={`${mono} mt-1 font-semibold`}>{value}</div>
+    </div>
   );
 }
 
@@ -1378,6 +1479,22 @@ function DashboardNewsItem({ item }: { item: Record<string, unknown> }) {
       </div>
     </div>
   );
+}
+
+function isInternalNewsItem(item: Record<string, unknown>) {
+  const text = String(item.title || item.headline || item.summary || item.message || "").toLowerCase();
+  return isInternalNewsText(text);
+}
+
+function isInternalNewsText(value: unknown) {
+  const text = String(value || "").toLowerCase();
+  return [
+    "daily_news_flash_context_attached",
+    "news_context_48h_attached",
+    "rss_error",
+    "readtimeout",
+    "httperror",
+  ].some((needle) => text.includes(needle));
 }
 
 function CompactOrderCard({ row }: { row: DbRow }) {
@@ -1407,6 +1524,7 @@ type PositionSnapshot = {
   markPrice: number | null;
   pnl: number | null;
   notional: number | null;
+  stopLoss: number | null;
 };
 
 function positionSnapshot(positions: Array<DbRow>, symbol: string): PositionSnapshot | null {
@@ -1422,7 +1540,8 @@ function positionSnapshot(positions: Array<DbRow>, symbol: string): PositionSnap
   const markPrice = numberValue(payload.mark_price, payload.markPrice, raw.markPrice, raw.mark_price, info.mark_price);
   const pnl = numberValue(payload.unrealized_pnl, payload.unrealised_pnl, raw.unrealizedPnl, raw.unrealized_pnl, raw.unrealised_pnl, info.unrealised_pnl);
   const notional = numberValue(payload.notional, payload.contract_value, raw.notional, raw.contract_value, qty != null && markPrice != null ? Math.abs(qty * markPrice) : null);
-  return { side, qty, entryPrice, markPrice, pnl, notional };
+  const stopLoss = numberValue(payload.stop_loss, payload.stopLoss, payload.sl_price, raw.stop_loss, raw.stopLoss, info.stop_loss);
+  return { side, qty, entryPrice, markPrice, pnl, notional, stopLoss };
 }
 
 function accountSnapshot(balance: Record<string, unknown> | null) {
@@ -1474,9 +1593,18 @@ function orderStatusLabel(value: unknown) {
   const labels: Record<string, string> = {
     open: "挂单中",
     closed: "已成交",
+    filled: "已成交",
+    partially_filled: "部分成交",
+    submitted: "已提交",
+    accepted: "已接收",
+    intent_recorded: "意图已记录",
+    submitting: "提交中",
+    cancel_pending: "撤单中",
     canceled: "已撤销",
     cancelled: "已撤销",
+    cancel_failed: "撤单失败",
     rejected: "拒单",
+    blocked: "阻断",
     unknown: "未知",
   };
   return labels[text] || text;
@@ -1582,6 +1710,8 @@ function healthStatusLabel(status: unknown) {
 function exchangeSafetyReason(value: unknown) {
   const text = String(value || "Mock 模式无需私有对账；实盘模式必须先完成 Gate 持仓、余额、挂单与止损对账。");
   return text
+    .replace("No manual action required.", "当前无需人工处理。")
+    .replace("no_manual_action_required", "当前无需人工处理。")
     .replace("exchange_reconciliation_not_run", "尚未完成交易所私有状态对账。")
     .replace("exchange_private_state_stale_over_5m", "交易所私有状态超过 5 分钟不可验证，禁止新开仓。")
     .replace("exchange_reconciliation_required", "交易所状态与本地状态需要人工复核。")
@@ -2270,7 +2400,7 @@ function AiBrainWorkspace({
         <Surface title={<><ShieldCheck size={13} /> AI 不可越权边界</>}>
           <div className="grid grid-cols-2 gap-3 text-xs text-[#53627a]">
             <Guardrail title="不能绕过策略信号" body="当前真实执行仍以本地趋势策略触发为入口，AI 只能确认、降仓或否决。" />
-            <Guardrail title="不能绕过授权" body="冷启动暂停、逐标的授权、同向持仓禁止重复加仓都在 RiskManager 层强制执行。" />
+            <Guardrail title="不能绕过授权" body="冷启动暂停、逐标的授权、同向持仓禁止重复加仓都在本地风控层强制执行。" />
             <Guardrail title="不能突破杠杆上限" body="总名义仓位必须被裁剪到权益乘以全局杠杆上限以内。" />
             <Guardrail title="不能直接晋升参数" body="回测或 AI 建议必须经过验证，不能直接改实盘策略参数。" />
           </div>
@@ -2378,12 +2508,12 @@ function AgentGatewayWorkspace({ platform }: { platform: PlatformOverview | null
   return (
     <section className="min-h-0 space-y-5 overflow-auto pr-1">
       <Surface
-        title={<><KeyRound size={13} /> Agent 网关控制台</>}
+        title={<><KeyRound size={13} /> 智能体网关控制台</>}
         action={<button className={button} disabled={probing} onClick={probeHealth}>{probing ? "探测中" : "探测健康接口"}</button>}
       >
         <div className="grid grid-cols-6 gap-3">
           <Metric label="版本" value={gateway?.version || "agent/v1"} />
-          <Metric label="Token" value={gateway?.enabled ? "已配置" : "未配置"} tone={gateway?.enabled ? "warn" : "good"} />
+          <Metric label="访问令牌" value={gateway?.enabled ? "已配置" : "未配置"} tone={gateway?.enabled ? "warn" : "good"} />
           <Metric label="权限范围" value={(gateway?.scopes || ["R", "B"]).join("/")} tone="good" />
           <Metric label="纸面模式" value={gateway?.paper_only ? "强制" : "未知"} tone="good" />
           <Metric label="实盘交易" value={gateway?.live_trading || "拒绝"} tone="good" />
@@ -2391,7 +2521,7 @@ function AgentGatewayWorkspace({ platform }: { platform: PlatformOverview | null
         </div>
         {probe ? (
           <div className="mt-3 rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs text-[#53627a]">
-            健康接口返回：{probe.message}。浏览器端不保存 Agent Token；如果这里返回 503/401，说明网关未配置或未授权，属于安全阻断。
+            健康接口返回：{probe.message}。浏览器端不保存智能体访问令牌；如果这里返回 503/401，说明网关未配置或未授权，属于安全阻断。
           </div>
         ) : null}
       </Surface>
@@ -2399,23 +2529,23 @@ function AgentGatewayWorkspace({ platform }: { platform: PlatformOverview | null
       <div className="grid grid-cols-4 gap-3">
         <AgentCapability title="读取行情" scope="R" status="允许" body="读取市场、策略档案、任务状态。" tone="good" />
         <AgentCapability title="纸面回测" scope="B" status="允许" body="必须带幂等键，不触碰交易所。" tone="good" />
-        <AgentCapability title="读取密钥" scope="-" status="拒绝" body="密钥只在服务端环境，不能经 Agent 暴露。" tone="bad" />
-        <AgentCapability title="真实下单" scope="-" status="拒绝" body="Agent 默认永远不能直接实盘交易。" tone="bad" />
+        <AgentCapability title="读取密钥" scope="-" status="拒绝" body="密钥只在服务端环境，不能经智能体暴露。" tone="bad" />
+        <AgentCapability title="真实下单" scope="-" status="拒绝" body="智能体默认永远不能直接实盘交易。" tone="bad" />
       </div>
 
       <div className="grid min-h-0 grid-cols-[minmax(0,1fr)_420px] gap-5 overflow-hidden">
-        <Surface title={<><ServerCog size={13} /> Agent API 清单</>}>
+        <Surface title={<><ServerCog size={13} /> 智能体 API 清单</>}>
           <div className="grid gap-2">
             <EndpointRow method="GET" path="/api/agent/v1/health" scope="R" note="健康检查；需要 Bearer Token。" />
             <EndpointRow method="GET" path="/api/agent/v1/strategy-profiles" scope="R" note="读取策略档案；只读。" />
             <EndpointRow method="POST" path="/api/agent/v1/backtests" scope="B" note="启动纸面回测；必须带 Idempotency-Key。" />
-            <EndpointRow method="GET" path="/api/agent/v1/backtests/{job_id}" scope="R" note="读取 Agent 创建的回测任务。" />
+            <EndpointRow method="GET" path="/api/agent/v1/backtests/{job_id}" scope="R" note="读取智能体创建的回测任务。" />
           </div>
           <div className="mt-4 grid grid-cols-2 gap-3">
-            <Guardrail title="Token 不进前端" body="浏览器界面只显示是否配置，不显示、不输入、不缓存 Agent Token。" />
-            <Guardrail title="幂等键必需" body="Agent 启动回测必须带 Idempotency-Key，避免网络重试造成重复任务。" />
-            <Guardrail title="审计必需" body="每个 Agent 调用写入 agent_audit_events，记录路由、权限、任务、幂等尾号。" />
-            <Guardrail title="实盘隔离" body="Agent 路由没有下单能力；真实交易仍只走控制台核心执行链路。" />
+            <Guardrail title="令牌不进前端" body="浏览器界面只显示是否配置，不显示、不输入、不缓存智能体访问令牌。" />
+            <Guardrail title="幂等键必需" body="智能体启动回测必须带 Idempotency-Key，避免网络重试造成重复任务。" />
+            <Guardrail title="审计必需" body="每个智能体调用写入 agent_audit_events，记录路由、权限、任务、幂等尾号。" />
+            <Guardrail title="实盘隔离" body="智能体路由没有下单能力；真实交易仍只走控制台核心执行链路。" />
           </div>
         </Surface>
 
@@ -2534,11 +2664,11 @@ function ExecutionWorkspace({
           <Metric label="最大名义" value={num(maxNotional)} />
         </div>
         <div className="mt-4 grid grid-cols-5 gap-3">
-          <ExecutionStep title="控制台/Agent" body="只能提交动作请求，不能直接碰交易所密钥。" done />
+          <ExecutionStep title="控制台/智能体" body="只能提交动作请求，不能直接碰交易所密钥。" done />
           <ExecutionStep title="策略信号" body="必须来自本地策略引擎，AI 不能凭空开仓。" done />
           <ExecutionStep title="AI 五档" body="只允许确认、降仓、阻断，不允许突破硬风控。" done />
-          <ExecutionStep title="RiskManager" body="授权、同向持仓、杠杆上限、置信度统一裁剪。" done />
-          <ExecutionStep title="Gateway" body={executionMode === "live" ? "Gate.io 真实网关" : "本地 Mock 网关"} done={executionMode === "mock"} warn={executionMode === "live"} />
+          <ExecutionStep title="本地风控" body="授权、同向持仓、杠杆上限、置信度统一裁剪。" done />
+          <ExecutionStep title="交易网关" body={executionMode === "live" ? "Gate.io 真实网关" : "本地 Mock 网关"} done={executionMode === "mock"} warn={executionMode === "live"} />
         </div>
       </Surface>
 
@@ -2549,7 +2679,7 @@ function ExecutionWorkspace({
               title="趋势策略运行"
               account={trendChannel?.account_label || "账号1：趋势策略 API"}
               status={trendChannel?.live_ready ? "实盘就绪" : trendChannel?.executable ? "可运行" : "阻断"}
-              body="当前 ETH 趋势引擎入口。策略信号触发后，DeepSeek 五档仓位确认，再进入 RiskManager 和趋势账号 Gateway。"
+              body="当前 ETH 趋势引擎入口。策略信号触发后，DeepSeek 五档仓位确认，再进入本地风控和趋势账号交易网关。"
               enabled={Boolean(trendChannel?.executable)}
               liveReady={Boolean(trendChannel?.live_ready)}
               details={[
@@ -2562,7 +2692,7 @@ function ExecutionWorkspace({
               title="震荡策略运行"
               account={rangeChannel?.account_label || "账号2：震荡策略 API"}
               status="模块预留"
-              body="预留给箱体/均值回归/网格策略。未完成回测、风控和账户 Gateway 绑定前，不能实盘执行。"
+              body="预留给箱体/均值回归/网格策略。未完成回测、风控和账户交易网关绑定前，不能实盘执行。"
               details={[
                 `账户 ${rangeChannel?.account_configured ? "已配置" : "未配置"}`,
                 "策略 未接入",
@@ -2596,22 +2726,22 @@ function ExecutionWorkspace({
             <button className={danger} disabled={busy} onClick={() => postAction("/api/control/panic-close", { operator_id: "console", symbols: [] })}>
               暂停开仓并一键全平
             </button>
-            <div className="text-[11px] leading-5 text-[#53627a]">这里不提供手动开仓入口。真实开仓必须由策略信号、AI、RiskManager 和 Gateway 串联通过。</div>
+            <div className="text-[11px] leading-5 text-[#53627a]">这里不提供手动开仓入口。真实开仓必须由策略信号、AI、本地风控和交易网关串联通过。</div>
           </div>
         </Surface>
         <Surface title={<><ServerCog size={13} /> 网关边界</>}>
           <div className="grid gap-2 text-xs text-[#53627a]">
             <BoundaryLine label="业务层" value="不写 dry_run 分支" />
-            <BoundaryLine label="模拟运行" value="MockExchangeGateway 本地记账" />
-            <BoundaryLine label="真实运行" value="GateRealGateway 固定 dry_run=false" />
-            <BoundaryLine label="Agent" value="默认只读/纸面回测" />
+            <BoundaryLine label="模拟运行" value="本地模拟网关，本地记账" />
+            <BoundaryLine label="真实运行" value="Gate.io 真实网关，固定 dry_run=false" />
+            <BoundaryLine label="智能体" value="默认只读/纸面回测" />
           </div>
         </Surface>
         <Surface title={<><Database size={13} /> 审计要求</>}>
           <div className="grid gap-2 text-xs text-[#53627a]">
             <BoundaryLine label="订单" value="orders 表留痕" />
             <BoundaryLine label="AI" value="ai_decisions 表留痕" />
-            <BoundaryLine label="风控" value="RiskDecision 原因可追踪" />
+            <BoundaryLine label="风控" value="本地风控结论可追踪" />
             <BoundaryLine label="密钥" value="不得进入日志/页面" />
           </div>
         </Surface>
@@ -2895,12 +3025,14 @@ function DataWorkspace({
   orders: Array<DbRow>;
 }) {
   const latestCandle = candles.at(-1);
-  const latestNews = (news.timeline || news.items.map((item) => item.payload)).at(0);
-  const newsWarn = (news.warnings || []).length > 0;
+  const visibleNewsItems = (news.timeline || news.items.map((item) => item.payload)).filter((item) => !isInternalNewsItem(item));
+  const latestNews = visibleNewsItems.at(0);
+  const newsWarnings = (news.warnings || []).filter((item) => !isInternalNewsText(item));
+  const newsWarn = newsWarnings.length > 0;
   const aiConfigured = Boolean(status?.ai?.api_key_configured);
   const gatewayOk = Boolean(balance?.ok ?? true);
   const marketOk = candles.length > 0 && !warning;
-  const newsOk = !newsWarn && (news.timeline?.length || news.items.length) > 0;
+  const newsOk = !newsWarn && visibleNewsItems.length > 0;
   const riskOk = Boolean(riskSummary) && Number(riskSummary?.max_total_leverage || status?.risk?.max_total_leverage || 0) > 0;
   return (
     <section className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-5 overflow-hidden">
@@ -2909,7 +3041,7 @@ function DataWorkspace({
           <Metric label="K线源" value={marketOk ? "健康" : "告警"} tone={marketOk ? "good" : "warn"} />
           <Metric label="新闻源" value={newsOk ? "健康" : "需检查"} tone={newsOk ? "good" : "warn"} />
           <Metric label="DeepSeek" value={aiConfigured ? "已配置" : "未配置"} tone={aiConfigured ? "good" : "warn"} />
-          <Metric label="Gateway" value={gatewayOk ? "可用" : "异常"} tone={gatewayOk ? "good" : "bad"} />
+          <Metric label="交易网关" value={gatewayOk ? "可用" : "异常"} tone={gatewayOk ? "good" : "bad"} />
           <Metric label="风控配置" value={riskOk ? "有效" : "缺失"} tone={riskOk ? "good" : "bad"} />
           <Metric label="审计记录" value={`${orders.length} 单`} />
         </div>
@@ -2935,10 +3067,10 @@ function DataWorkspace({
               status={newsOk ? "健康" : "需检查"}
               tone={newsOk ? "good" : "warn"}
               rows={[
-                ["快讯数量", num(news.timeline?.length || news.items.length, 0)],
+                ["快讯数量", num(visibleNewsItems.length, 0)],
                 ["缓存年龄", news.age_minutes == null ? "--" : `${num(news.age_minutes, 1)} 分钟`],
                 ["最新消息", String(latestNews?.title || latestNews?.headline || latestNews?.summary || "--").slice(0, 48)],
-                ["告警", news.warnings?.join("; ") || "无"],
+                ["告警", newsWarnings.join("; ") || "无"],
               ]}
             />
             <HealthCard
@@ -2969,7 +3101,7 @@ function DataWorkspace({
         <Surface title={<><ShieldCheck size={13} /> 本地核心状态</>}>
           <div className="grid grid-cols-1 gap-3 2xl:grid-cols-3">
             <HealthCard
-              title="RiskManager"
+              title="本地风控"
               status={riskOk ? "有效" : "异常"}
               tone={riskOk ? "good" : "bad"}
               rows={[
@@ -3054,6 +3186,7 @@ function RightRail({
   postAction: (path: string, body: Record<string, unknown>) => Promise<void>;
 }) {
   const latestDecision = status?.latest_decisions?.[symbol]?.payload || decisions[0]?.payload || { state: "等待下一次AI判断" };
+  const newsWarnings = (news.warnings || []).filter((item) => !isInternalNewsText(item));
   return (
     <aside className="flex min-h-0 flex-col gap-2 overflow-auto">
       <Surface title={<><BrainCircuit size={13} /> AI 决策</>}>
@@ -3073,11 +3206,11 @@ function RightRail({
         title={<><Newspaper size={13} /> 新闻快讯</>}
         action={<button className={button} disabled={busy} onClick={() => postAction("/api/news/refresh", { operator_id: "console" })}>刷新</button>}
       >
-        {news.warnings?.length ? (
-          <div className="mb-2 rounded-xl border border-[#f3d18a] bg-[#fff7e6] p-2 text-[11px] text-[#b7791f]">{news.warnings.join("; ")}</div>
+        {newsWarnings.length ? (
+          <div className="mb-2 rounded-xl border border-[#f3d18a] bg-[#fff7e6] p-2 text-[11px] text-[#b7791f]">{newsWarnings.join("; ")}</div>
         ) : null}
         <div className="space-y-2">
-          {(news.timeline || news.items.map((item) => item.payload)).slice(0, 16).map((item, idx) => (
+          {(news.timeline || news.items.map((item) => item.payload)).filter((item) => !isInternalNewsItem(item)).slice(0, 16).map((item, idx) => (
             <div key={idx} className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs">
               <div className="font-medium text-[#172033]">{String(item.title || item.headline || item.summary || "--")}</div>
               <div className="mt-1 text-[11px] text-[#53627a]">{String(item.published_at || item.time || item.source || "")}</div>
@@ -3129,7 +3262,7 @@ function DecisionSummary({ data }: { data: Record<string, unknown> }) {
       ))}
       <div className="col-span-5 rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs">
         <div className="mb-2 flex items-center justify-between">
-          <span className="font-semibold text-[#172033]">RiskManager 五档映射</span>
+          <span className="font-semibold text-[#172033]">本地风控五档映射</span>
           <span className={`${mono} text-[#2454ff]`}>{scale.label} / {scale.scale}</span>
         </div>
         <div className="h-2 overflow-hidden rounded-full bg-[#dfe7f1]">
