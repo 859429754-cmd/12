@@ -49,3 +49,67 @@ button:disabled {
   width: 100%;
   height: 100%;
 }
+
+/* Dark-console audit guard.
+   Legacy QuantDinger-style cards still carry older light utility tokens in
+   secondary panels. Keep this as a console-level safety net so future UI slices
+   cannot reintroduce white information cards without an explicit override. */
+#root .bg-white,
+#root [class*="bg-[#f8fbff]"],
+#root [class*="bg-[#f7f9fc]"],
+#root [class*="from-white"],
+#root [class*="to-white"] {
+  background-color: #0b1220 !important;
+  color: #dbeafe;
+}
+
+#root [class*="bg-[#eef3ff]"],
+#root [class*="bg-[#eef2f7]"],
+#root [class*="bg-[#eaf0ff]"],
+#root [class*="bg-[#eaf1ff]"] {
+  background-color: #102a5c !important;
+  color: #bfdbfe !important;
+}
+
+#root [class*="bg-[#e7f8ee]"] {
+  background-color: #052e1a !important;
+  color: #22c55e !important;
+}
+
+#root [class*="bg-[#fff8ed]"],
+#root [class*="bg-[#fff7e6]"] {
+  background-color: #241806 !important;
+  color: #facc15 !important;
+}
+
+#root [class*="bg-[#fff1f2]"] {
+  background-color: #2a0f14 !important;
+  color: #fb7185 !important;
+}
+
+#root [class*="border-[#dfe7f1]"],
+#root [class*="border-[#d9e2ef]"],
+#root [class*="border-[#d8e1ee]"],
+#root [class*="border-[#e6edf5]"],
+#root [class*="border-[#edf2f7]"],
+#root [class*="border-[#ffdca8]"],
+#root [class*="border-[#ffd1d6]"] {
+  border-color: #263246 !important;
+}
+
+#root [class*="text-[#172033]"],
+#root [class*="text-[#1f2937]"],
+#root [class*="text-[#2f3b52]"] {
+  color: #e5eefb !important;
+}
+
+#root [class*="text-[#53627a]"],
+#root [class*="text-[#64748b]"],
+#root [class*="text-[#7b8798]"] {
+  color: #94a3b8 !important;
+}
+
+#root thead[class*="bg-[#f8fbff]"],
+#root tr[class*="hover:bg-[#f8fbff]"]:hover {
+  background-color: #111827 !important;
+}

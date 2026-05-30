@@ -1460,7 +1460,7 @@ function HeroMetric({ label, value, tone = "default" }: { label: string; value: 
 
 function PlainKV({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg bg-white/10 px-3 py-2">
+    <div className="rounded-lg border border-[#1e293b] bg-[#0f172a] px-3 py-2">
       <div className="text-[10px] text-[#cbd5e1]">{label}</div>
       <div className={`${mono} mt-1 truncate font-semibold text-white`}>{value}</div>
     </div>
@@ -1843,9 +1843,9 @@ function readinessLabel(status: string) {
 }
 
 function readinessToneClass(status: string) {
-  if (status === "ok") return "bg-[#e7f8ee] text-[#0a9f5a]";
-  if (status === "block") return "bg-[#fff1f2] text-[#e11d48]";
-  return "bg-[#fff7e6] text-[#b7791f]";
+  if (status === "ok") return "border border-[#14532d] bg-[#052e1a] text-[#22c55e]";
+  if (status === "block") return "border border-[#7f1d1d] bg-[#2a0f14] text-[#fb7185]";
+  return "border border-[#854d0e] bg-[#241806] text-[#facc15]";
 }
 
 function readinessCheckLabel(label: string) {
