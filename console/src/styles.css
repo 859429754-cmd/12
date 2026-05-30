@@ -15,8 +15,8 @@ body,
 
 body {
   margin: 0;
-  background: #eef2f7;
-  color: #172033;
+  background: #07111f;
+  color: #e5eefb;
 }
 
 button,
@@ -37,11 +37,11 @@ button:disabled {
 }
 
 ::-webkit-scrollbar-track {
-  background: #eef2f7;
+  background: #07111f;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #cbd6e5;
+  background: #334155;
   border-radius: 999px;
 }
 

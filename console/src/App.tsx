@@ -125,7 +125,7 @@ export function App() {
       setDecisions(nextDecisions.items || []);
       setDenseZone(nextDenseZone.item || null);
       void Promise.all([
-        safe(api<NewsResponse>("/api/news/latest?limit=24", { retries: 0, timeoutMs: 5000 }), { items: [], timeline: [], warnings: ["新闻接口暂时未返回，已保留上一轮界面状态。"] }),
+        safe(api<NewsResponse>("/api/news/latest?limit=3", { retries: 0, timeoutMs: 15000 }), { items: [], timeline: [], warnings: ["新闻接口暂时未返回，已保留上一轮界面状态。"] }),
         safe(
           api<CandleResponse>(
             `/api/market/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${timeframe}&limit=5000&source=${source}`,
@@ -184,7 +184,7 @@ export function App() {
   const showRightRail = workspace !== "dashboard";
 
   return (
-    <main className="grid h-screen grid-cols-[306px_minmax(0,1fr)] overflow-hidden bg-[#eef2f7] text-[#172033]">
+    <main className="grid h-screen grid-cols-[306px_minmax(0,1fr)] overflow-hidden bg-[#07111f] text-[#e5eefb]">
       <ShellNav
         platform={platform}
         workspace={workspace}
@@ -344,14 +344,14 @@ function ShellNav({
     { id: "data" as WorkspaceId, label: "数据健康" },
   ];
   return (
-    <aside className="flex min-h-0 flex-col border-r border-[#d9e2ef] bg-white shadow-[10px_0_30px_rgba(26,42,68,0.08)]">
-      <div className="flex h-[72px] shrink-0 items-center gap-3 border-b border-[#e3eaf3] px-6">
-        <div className="grid h-10 w-10 place-items-center rounded-xl bg-[#2454ff] text-lg font-black text-white shadow-lg shadow-blue-200">
+    <aside className="flex min-h-0 flex-col border-r border-[#1f2a3d] bg-[#08111f] shadow-[10px_0_30px_rgba(0,0,0,0.35)]">
+      <div className="flex h-[72px] shrink-0 items-center gap-3 border-b border-[#1f2a3d] px-6">
+        <div className="grid h-10 w-10 place-items-center rounded-xl bg-[#2454ff] text-lg font-black text-white shadow-lg shadow-blue-950/40">
           Q
         </div>
         <div>
-          <div className="text-xl font-bold tracking-tight text-[#2454ff]">量化 AI 工作台</div>
-          <div className="text-[11px] text-[#7b8798]">本地策略内核 / 智能体安全外壳</div>
+          <div className="text-xl font-bold tracking-tight text-[#dbeafe]">量化 AI 工作台</div>
+          <div className="text-[11px] text-[#94a3b8]">本地策略内核 / 智能体安全外壳</div>
         </div>
       </div>
       <nav className="shrink-0 px-3 py-4">
@@ -361,7 +361,7 @@ function ShellNav({
             <button
               key={item.id}
               className={`mb-1 flex h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-sm transition ${
-                active ? "bg-[#eef3ff] text-[#2454ff] shadow-inner" : "text-[#5b6778] hover:bg-[#f4f7fb] hover:text-[#172033]"
+                active ? "bg-[#1d4ed8] text-white shadow-inner shadow-blue-950/30" : "text-[#94a3b8] hover:bg-[#111827] hover:text-[#e5eefb]"
               }`}
               onClick={() => setWorkspace(item.id)}
             >
@@ -371,7 +371,7 @@ function ShellNav({
           );
         })}
       </nav>
-      <div className="min-h-0 flex-1 overflow-auto border-t border-[#e3eaf3] bg-[#f8fbff] p-3">
+      <div className="min-h-0 flex-1 overflow-auto border-t border-[#1f2a3d] bg-[#07111f] p-3">
         <LeftRail
           workspace={workspace}
           symbol={symbol}
@@ -414,10 +414,10 @@ function TopBar({
     setMenuOpen(false);
   };
   return (
-    <header className="relative flex h-[72px] shrink-0 items-center gap-4 border-b border-[#d9e2ef] bg-white px-6 shadow-sm">
+    <header className="relative flex h-[72px] shrink-0 items-center gap-4 border-b border-[#1f2a3d] bg-[#0b1220] px-6 shadow-sm shadow-black/30">
       <button
-        className={`grid h-10 w-10 place-items-center rounded-xl border border-[#d9e2ef] bg-[#f8fbff] text-[#5b6778] transition hover:border-[#2454ff] hover:text-[#2454ff] ${
-          menuOpen ? "border-[#2454ff] text-[#2454ff] shadow-sm" : ""
+        className={`grid h-10 w-10 place-items-center rounded-xl border border-[#263246] bg-[#111827] text-[#94a3b8] transition hover:border-[#3b82f6] hover:text-white ${
+          menuOpen ? "border-[#3b82f6] text-white shadow-sm" : ""
         }`}
         aria-label="打开工作台菜单"
         aria-expanded={menuOpen}
@@ -426,14 +426,14 @@ function TopBar({
         <Menu size={18} />
       </button>
       {menuOpen ? (
-        <div className="absolute left-6 top-[58px] z-30 w-72 rounded-2xl border border-[#d9e2ef] bg-white p-3 shadow-2xl shadow-slate-200">
-          <div className="mb-2 px-2 text-[11px] font-semibold text-[#7b8798]">工作台菜单</div>
+        <div className="absolute left-6 top-[58px] z-30 w-72 rounded-2xl border border-[#263246] bg-[#0b1220] p-3 shadow-2xl shadow-black/50">
+          <div className="mb-2 px-2 text-[11px] font-semibold text-[#94a3b8]">工作台菜单</div>
           <div className="grid gap-1">
             {WORKSPACE_IDS.map((id) => (
               <button
                 key={id}
                 className={`flex h-10 items-center gap-3 rounded-xl px-3 text-left text-sm transition ${
-                  workspace === id ? "bg-[#eef3ff] text-[#2454ff]" : "text-[#53627a] hover:bg-[#f4f7fb] hover:text-[#172033]"
+                  workspace === id ? "bg-[#1d4ed8] text-white" : "text-[#94a3b8] hover:bg-[#111827] hover:text-[#e5eefb]"
                 }`}
                 onClick={() => switchWorkspace(id)}
               >
@@ -442,7 +442,7 @@ function TopBar({
               </button>
             ))}
           </div>
-          <div className="mt-3 border-t border-[#e3eaf3] pt-3">
+          <div className="mt-3 border-t border-[#1f2a3d] pt-3">
             <button
               className={`${button} h-10 w-full justify-center`}
               onClick={() => {
@@ -453,28 +453,28 @@ function TopBar({
               <RefreshCcw size={13} />
               刷新全部数据
             </button>
-            <div className="mt-2 rounded-xl bg-[#f8fbff] px-3 py-2 text-[11px] text-[#7b8798]">
+            <div className="mt-2 rounded-xl bg-[#111827] px-3 py-2 text-[11px] text-[#94a3b8]">
               本地控制台：127.0.0.1:8090
             </div>
           </div>
         </div>
       ) : null}
       <div className="min-w-[260px]">
-        <div className="text-[11px] uppercase tracking-wide text-[#7b8798]">工作区</div>
-        <div className="text-lg font-semibold text-[#172033]">{workspaceLabel(workspace, platform)}</div>
+        <div className="text-[11px] uppercase tracking-wide text-[#94a3b8]">工作区</div>
+        <div className="text-lg font-semibold text-[#e5eefb]">{workspaceLabel(workspace, platform)}</div>
       </div>
       <div className="hidden items-center gap-2 lg:flex">
         <StatusPill label="外壳" value={platformShellLabel(platform?.platform.shell)} />
         <StatusPill label="内核" value={platformCoreLabel(platform?.platform.core)} />
         <StatusPill label="模式" value={executionModeLabel(status?.execution_mode)} />
       </div>
-      <div className="ml-auto flex min-w-0 items-center gap-3 text-[11px] text-[#7b8798]">
+      <div className="ml-auto flex min-w-0 items-center gap-3 text-[11px] text-[#94a3b8]">
         {warning ? <span className="max-w-[440px] truncate rounded-full bg-[#fff7e6] px-3 py-2 text-[#b7791f]">{warning}</span> : null}
-        <label className="flex h-10 items-center gap-2 rounded-xl border border-[#d9e2ef] bg-[#f8fbff] px-2 sm:px-3">
+        <label className="flex h-10 items-center gap-2 rounded-xl border border-[#263246] bg-[#111827] px-2 sm:px-3">
           <KeyRound size={13} />
           <span className="hidden whitespace-nowrap sm:inline">操作验证码</span>
           <input
-            className={`${input} h-7 w-20 border-0 bg-white px-2 py-0 text-xs`}
+            className={`${input} h-7 w-20 border-0 bg-[#0b1220] px-2 py-0 text-xs`}
             type="password"
             value={operationCode}
             placeholder="yx"
@@ -495,9 +495,9 @@ function TopBar({
 
 function StatusPill({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-xl border border-[#d9e2ef] bg-[#f8fbff] px-3 py-2">
-      <div className="text-[10px] uppercase text-[#7b8798]">{label}</div>
-      <div className={`${mono} max-w-36 truncate text-xs font-semibold text-[#172033]`}>{value}</div>
+    <div className="rounded-xl border border-[#263246] bg-[#111827] px-3 py-2">
+      <div className="text-[10px] uppercase text-[#94a3b8]">{label}</div>
+      <div className={`${mono} max-w-36 truncate text-xs font-semibold text-[#e5eefb]`}>{value}</div>
     </div>
   );
 }
@@ -1259,7 +1259,7 @@ function DashboardWorkspace({
   const latestDecision = runtimeStatus?.latest_decisions?.[symbol]?.payload || decisions[0]?.payload || { state: "等待下一次AI判断" };
   const latestCandle = candles.at(-1);
   const account = accountSnapshot(balance);
-  const newsItems = (news.timeline || news.items.map((item) => item.payload)).filter((item) => !isInternalNewsItem(item)).slice(0, 8);
+  const newsItems = visibleNewsItems(news).slice(0, 8);
   const newsWarnings = (news.warnings || []).filter((item) => !isInternalNewsText(item));
   const readinessOverall = readiness?.overall || "warn";
   const blockedChecks = (readiness?.checks || []).filter((check) => check.status === "block");
@@ -1276,16 +1276,16 @@ function DashboardWorkspace({
   const latestPrice = latestCandle ? num(latestCandle.close) : "--";
   return (
     <section className="min-h-0 space-y-4 overflow-auto pr-1">
-      <div className="rounded-2xl border border-[#d8e2ef] bg-white p-4 shadow-[0_16px_42px_rgba(26,42,68,0.08)]">
+      <div className="rounded-2xl border border-[#263246] bg-[#0b1220] p-4 shadow-[0_18px_44px_rgba(0,0,0,0.30)]">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <div className="flex items-center gap-2 text-[12px] font-semibold text-[#2454ff]">
+            <div className="flex items-center gap-2 text-[12px] font-semibold text-[#60a5fa]">
               <ServerCog size={14} />
               AI 量化实盘指挥台
             </div>
             <div className="mt-2 flex flex-wrap items-end gap-x-4 gap-y-2">
-              <h1 className="text-2xl font-semibold tracking-tight text-[#101828]">{shortSymbol(symbol)} 趋势策略</h1>
-              <span className={`${mono} rounded-full border border-[#d9e2ef] bg-[#f8fbff] px-3 py-1 text-xs text-[#53627a]`}>
+              <h1 className="text-2xl font-semibold tracking-tight text-[#f8fafc]">{shortSymbol(symbol)} 趋势策略</h1>
+              <span className={`${mono} rounded-full border border-[#263246] bg-[#101a2d] px-3 py-1 text-xs text-[#cbd5e1]`}>
                 最新价 {latestPrice}
               </span>
               <LiveOpsBadge readiness={readinessOverall} mode={mode} />
@@ -1299,9 +1299,7 @@ function DashboardWorkspace({
           </div>
         </div>
 
-        <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4 2xl:grid-cols-8">
-          <HeroMetric label="账户权益" value={`${num(account.total)} USDT`} tone={account.total != null ? "good" : "warn"} />
-          <HeroMetric label="可用余额" value={`${num(account.free)} USDT`} />
+        <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-3 2xl:grid-cols-6">
           <HeroMetric label="持仓状态" value={position ? positionSideLabel(position.side) : "空仓"} tone={position ? "warn" : "good"} />
           <HeroMetric label="浮动盈亏" value={position ? `${num(position.pnl)} USDT` : "--"} tone={pnlTone(position?.pnl)} />
           <HeroMetric label="AI动作" value={dashboardActionLabel(latestDecision)} />
@@ -1329,12 +1327,12 @@ function DashboardWorkspace({
           <DashboardPanel title={<><Power size={14} /> 当前持仓</>}>
             <div className="flex items-center justify-between gap-3">
               <div>
-                <div className="text-[11px] text-[#7b8798]">标的 / 方向</div>
-                <div className="mt-1 text-xl font-semibold text-[#101828]">
+                <div className="text-[11px] text-[#94a3b8]">标的 / 方向</div>
+                <div className="mt-1 text-xl font-semibold text-[#e5eefb]">
                   {position ? `${shortSymbol(symbol)} ${positionSideLabel(position.side)}` : `${shortSymbol(symbol)} 空仓`}
                 </div>
               </div>
-              <span className={`rounded-full px-3 py-1 text-[11px] font-medium ${position ? "bg-[#fff7e6] text-[#b7791f]" : "bg-[#e7f8ee] text-[#0a9f5a]"}`}>
+              <span className={`rounded-full px-3 py-1 text-[11px] font-medium ${position ? "bg-[#241806] text-[#facc15]" : "bg-[#052e1a] text-[#22c55e]"}`}>
                 {position ? "持仓中" : "无敞口"}
               </span>
             </div>
@@ -1368,16 +1366,16 @@ function DashboardWorkspace({
             <div className="mt-3 grid gap-2">
               {blockedChecks.length || warnChecks.length ? (
                 [...blockedChecks, ...warnChecks].slice(0, 4).map((check) => (
-                  <div key={check.id} className="rounded-xl border border-[#e3eaf3] bg-[#f8fbff] p-3 text-xs">
+                  <div key={check.id} className="rounded-xl border border-[#263246] bg-[#101a2d] p-3 text-xs">
                     <div className="flex items-center justify-between gap-3">
-                      <span className="font-semibold text-[#172033]">{readinessCheckLabel(check.label)}</span>
+                      <span className="font-semibold text-[#e5eefb]">{readinessCheckLabel(check.label)}</span>
                       <span className={`rounded-full px-2 py-1 text-[10px] ${readinessToneClass(check.status)}`}>{readinessLabel(check.status)}</span>
                     </div>
-                    <div className="mt-2 leading-relaxed text-[#53627a]">{readinessDetail(check.detail)}</div>
+                    <div className="mt-2 leading-relaxed text-[#94a3b8]">{readinessDetail(check.detail)}</div>
                   </div>
                 ))
               ) : (
-                <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs text-[#0a9f5a]">当前没有阻断项。</div>
+                <div className="rounded-xl border border-[#14532d] bg-[#052e1a] p-3 text-xs text-[#22c55e]">当前没有阻断项。</div>
               )}
             </div>
           </DashboardPanel>
@@ -1389,32 +1387,32 @@ function DashboardWorkspace({
             action={<button className={button} disabled={busy} onClick={() => postAction("/api/news/refresh", { operator_id: "console" })}>刷新</button>}
           >
             {newsWarnings.length ? (
-              <div className="mb-3 rounded-xl border border-[#f3d18a] bg-[#fff7e6] p-3 text-xs text-[#b7791f]">{newsWarnings.join("; ")}</div>
+              <div className="mb-3 rounded-xl border border-[#854d0e] bg-[#241806] p-3 text-xs text-[#facc15]">{newsWarnings.join("; ")}</div>
             ) : null}
             <div className="grid max-h-[500px] gap-2 overflow-auto pr-1">
               {newsItems.length ? newsItems.slice(0, 7).map((item, idx) => <DashboardNewsItem key={idx} item={item} />) : (
-                <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs text-[#53627a]">暂无新闻快讯。</div>
+                <div className="rounded-xl border border-[#263246] bg-[#101a2d] p-3 text-xs text-[#94a3b8]">暂无新闻快讯。</div>
               )}
             </div>
           </DashboardPanel>
 
           <DashboardPanel title={<><Power size={14} /> 执行链路</>}>
-            <div className="mb-3 rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs">
+            <div className="mb-3 rounded-xl border border-[#263246] bg-[#101a2d] p-3 text-xs">
               <BoundaryLine label="最近订单状态" value={orderLifecycleSummary(orderLifecyclePayload)} />
               <BoundaryLine label="新开仓状态" value={exchangePayload.can_open_new_entries ? "允许" : "禁止"} />
               <BoundaryLine label="人工处理" value={exchangeSafetyReason(exchangePayload.manual_action)} />
             </div>
             <div className="grid gap-2">
               {orders.length ? orders.slice(0, 4).map((row) => <CompactOrderCard key={`${row.id}-${row.created_at}`} row={row} />) : (
-                <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs text-[#53627a]">暂无订单记录。</div>
+                <div className="rounded-xl border border-[#263246] bg-[#101a2d] p-3 text-xs text-[#94a3b8]">暂无订单记录。</div>
               )}
             </div>
           </DashboardPanel>
         </div>
       </div>
 
-      <details className="rounded-2xl border border-[#d9e2ef] bg-white p-4 text-xs text-[#53627a] shadow-[0_10px_26px_rgba(26,42,68,0.055)]">
-        <summary className="cursor-pointer font-semibold text-[#172033]">展开完整生产就绪检查与原始审计</summary>
+      <details className="rounded-2xl border border-[#263246] bg-[#0b1220] p-4 text-xs text-[#94a3b8] shadow-[0_18px_44px_rgba(0,0,0,0.28)]">
+        <summary className="cursor-pointer font-semibold text-[#e5eefb]">展开完整生产就绪检查与原始审计</summary>
         <div className="mt-4">
           <ReadinessPanel readiness={readiness} />
         </div>
@@ -1425,8 +1423,8 @@ function DashboardWorkspace({
 
 function DashboardPanel({ title, action, children }: { title: ReactNode; action?: ReactNode; children: ReactNode }) {
   return (
-    <section className="min-w-0 rounded-2xl border border-[#d9e2ef] bg-white shadow-[0_10px_26px_rgba(26,42,68,0.055)]">
-      <div className="flex min-h-12 items-center justify-between gap-3 border-b border-[#e6edf5] px-4 py-3 text-sm font-semibold text-[#172033]">
+    <section className="min-w-0 rounded-2xl border border-[#263246] bg-[#0b1220] shadow-[0_18px_44px_rgba(0,0,0,0.28)]">
+      <div className="flex min-h-12 items-center justify-between gap-3 border-b border-[#1f2a3d] px-4 py-3 text-sm font-semibold text-[#e5eefb]">
         <div className="flex items-center gap-2">{title}</div>
         {action}
       </div>
@@ -1437,10 +1435,10 @@ function DashboardPanel({ title, action, children }: { title: ReactNode; action?
 
 function DashboardStatusPill({ label, value, tone = "default" }: { label: string; value: string; tone?: "default" | "good" | "bad" | "warn" }) {
   const toneClass =
-    tone === "good" ? "border-[#bfead0] bg-[#e7f8ee] text-[#0a9f5a]" :
-    tone === "bad" ? "border-[#fecdd3] bg-[#fff1f2] text-[#e11d48]" :
-    tone === "warn" ? "border-[#f3d18a] bg-[#fff7e6] text-[#b7791f]" :
-    "border-[#d9e2ef] bg-[#f8fbff] text-[#53627a]";
+    tone === "good" ? "border-[#14532d] bg-[#052e1a] text-[#22c55e]" :
+    tone === "bad" ? "border-[#7f1d1d] bg-[#2a0f14] text-[#fb7185]" :
+    tone === "warn" ? "border-[#854d0e] bg-[#241806] text-[#facc15]" :
+    "border-[#263246] bg-[#101a2d] text-[#cbd5e1]";
   return (
     <div className={`rounded-xl border px-3 py-2 ${toneClass}`}>
       <div className="text-[10px] opacity-80">{label}</div>
@@ -1451,10 +1449,10 @@ function DashboardStatusPill({ label, value, tone = "default" }: { label: string
 
 function HeroMetric({ label, value, tone = "default" }: { label: string; value: string; tone?: "default" | "good" | "bad" | "warn" }) {
   const toneClass =
-    tone === "good" ? "text-[#0a9f5a]" : tone === "bad" ? "text-[#e11d48]" : tone === "warn" ? "text-[#b7791f]" : "text-[#101828]";
+    tone === "good" ? "text-[#22c55e]" : tone === "bad" ? "text-[#fb7185]" : tone === "warn" ? "text-[#facc15]" : "text-[#e5eefb]";
   return (
-    <div className="min-w-0 rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3">
-      <div className="text-[11px] text-[#7b8798]">{label}</div>
+    <div className="min-w-0 rounded-xl border border-[#263246] bg-[#101a2d] p-3">
+      <div className="text-[11px] text-[#94a3b8]">{label}</div>
       <div className={`${mono} mt-1 truncate text-sm font-semibold ${toneClass}`}>{value}</div>
     </div>
   );
@@ -1471,7 +1469,7 @@ function PlainKV({ label, value }: { label: string; value: string }) {
 
 function HealthMini({ label, value, ok }: { label: string; value: string; ok: boolean }) {
   return (
-    <div className={`rounded-xl border p-3 text-xs ${ok ? "border-[#bfead0] bg-[#e7f8ee] text-[#0a9f5a]" : "border-[#f3d18a] bg-[#fff7e6] text-[#b7791f]"}`}>
+    <div className={`rounded-xl border p-3 text-xs ${ok ? "border-[#14532d] bg-[#052e1a] text-[#22c55e]" : "border-[#854d0e] bg-[#241806] text-[#facc15]"}`}>
       <div className="text-[10px] opacity-80">{label}</div>
       <div className={`${mono} mt-1 font-semibold`}>{value}</div>
     </div>
@@ -1479,24 +1477,85 @@ function HealthMini({ label, value, ok }: { label: string; value: string; ok: bo
 }
 
 function LiveOpsBadge({ readiness, mode }: { readiness: string; mode: string }) {
-  const tone = readiness === "ok" ? "bg-[#e7f8ee] text-[#0a9f5a]" : readiness === "block" ? "bg-[#fff1f2] text-[#e11d48]" : "bg-[#fff7e6] text-[#b7791f]";
+  const tone = readiness === "ok" ? "bg-[#052e1a] text-[#22c55e]" : readiness === "block" ? "bg-[#2a0f14] text-[#fb7185]" : "bg-[#241806] text-[#facc15]";
   return <span className={`rounded-full px-3 py-1 text-[11px] ${tone}`}>{executionModeLabel(mode)} / {readinessLabel(readiness)}</span>;
 }
 
 function DashboardNewsItem({ item }: { item: Record<string, unknown> }) {
+  const title = cleanNewsText(item.title || item.headline || item.summary || "--");
+  const source = cleanNewsText(item.source || "新闻源");
   return (
-    <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs">
-      <div className="line-clamp-3 font-medium leading-5 text-[#172033]">{String(item.title || item.headline || item.summary || "--")}</div>
-      <div className="mt-2 flex items-center justify-between gap-3 text-[11px] text-[#53627a]">
-        <span>{String(item.source || "新闻源")}</span>
+    <div className="rounded-xl border border-[#263246] bg-[#101a2d] p-3 text-xs">
+      <div className="line-clamp-3 font-medium leading-5 text-[#e5eefb]">{title}</div>
+      <div className="mt-2 flex items-center justify-between gap-3 text-[11px] text-[#94a3b8]">
+        <span>{source}</span>
         <span className={mono}>{String(item.published_at || item.time || "")}</span>
       </div>
     </div>
   );
 }
 
+function visibleNewsItems(news: NewsResponse): Array<Record<string, unknown>> {
+  const candidates: Array<Record<string, unknown>> = [];
+  const pushRecord = (value: unknown) => {
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      candidates.push(value as Record<string, unknown>);
+    }
+  };
+  const pushPayload = (value: unknown) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return;
+    const record = value as Record<string, unknown>;
+    const nestedTimeline = Array.isArray(record.timeline) ? record.timeline : [];
+    const nestedItems = Array.isArray(record.items) ? record.items : [];
+    if (nestedTimeline.length || nestedItems.length) {
+      [...nestedTimeline, ...nestedItems].forEach(pushRecord);
+      return;
+    }
+    pushRecord(record);
+  };
+
+  (news.timeline || []).forEach(pushPayload);
+  (news.items || []).forEach((row) => pushPayload(row.payload));
+  const seen = new Set<string>();
+  return candidates
+    .map(normalizeNewsItem)
+    .filter((item) => !isInternalNewsItem(item))
+    .filter((item) => {
+      const key = `${item.published_at || item.time || ""}:${item.title || item.headline || item.summary || ""}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function normalizeNewsItem(item: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...item,
+    title: cleanNewsText(item.title || item.headline || item.summary || ""),
+    headline: cleanNewsText(item.headline || item.title || item.summary || ""),
+    summary: cleanNewsText(item.summary || item.title || item.headline || ""),
+    source: cleanNewsText(item.source || "新闻源"),
+  };
+}
+
+function cleanNewsText(value: unknown) {
+  const text = String(value || "");
+  if (!looksLikeMojibake(text)) return text;
+  try {
+    const bytes = Uint8Array.from(Array.from(text, (char) => char.charCodeAt(0) & 0xff));
+    const decoded = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+    return decoded.length > text.length * 0.5 ? decoded : text;
+  } catch {
+    return text;
+  }
+}
+
+function looksLikeMojibake(text: string) {
+  return /[ãÃÂâ][\u0080-\u00ff]?|é[\u0080-\u00ff]|å[\u0080-\u00ff]|ä[\u0080-\u00ff]|ç[\u0080-\u00ff]/.test(text);
+}
+
 function isInternalNewsItem(item: Record<string, unknown>) {
-  const text = String(item.title || item.headline || item.summary || item.message || "").toLowerCase();
+  const text = cleanNewsText(item.title || item.headline || item.summary || item.message || "").toLowerCase();
   return isInternalNewsText(text);
 }
 
@@ -1508,6 +1567,10 @@ function isInternalNewsText(value: unknown) {
     "rss_error",
     "readtimeout",
     "httperror",
+    "vip超大",
+    "抵扣1000",
+    "交易权益",
+    "速成手册",
   ].some((needle) => text.includes(needle));
 }
 
@@ -1516,9 +1579,9 @@ function CompactOrderCard({ row }: { row: DbRow }) {
   const side = String(payload.side || payload.action || "--");
   const status = String(payload.status || "--");
   return (
-    <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs">
+    <div className="rounded-xl border border-[#263246] bg-[#101a2d] p-3 text-xs">
       <div className="flex items-center justify-between gap-3">
-        <span className="font-semibold text-[#172033]">{shortSymbol(String(row.symbol || payload.symbol || "--"))}</span>
+        <span className="font-semibold text-[#e5eefb]">{shortSymbol(String(row.symbol || payload.symbol || "--"))}</span>
         <span className={mono}>{row.created_at}</span>
       </div>
       <div className="mt-2 grid grid-cols-4 gap-2">
@@ -3039,14 +3102,14 @@ function DataWorkspace({
   orders: Array<DbRow>;
 }) {
   const latestCandle = candles.at(-1);
-  const visibleNewsItems = (news.timeline || news.items.map((item) => item.payload)).filter((item) => !isInternalNewsItem(item));
-  const latestNews = visibleNewsItems.at(0);
+  const visibleItems = visibleNewsItems(news);
+  const latestNews = visibleItems.at(0);
   const newsWarnings = (news.warnings || []).filter((item) => !isInternalNewsText(item));
   const newsWarn = newsWarnings.length > 0;
   const aiConfigured = Boolean(status?.ai?.api_key_configured);
   const gatewayOk = Boolean(balance?.ok ?? true);
   const marketOk = candles.length > 0 && !warning;
-  const newsOk = !newsWarn && visibleNewsItems.length > 0;
+  const newsOk = !newsWarn && visibleItems.length > 0;
   const riskOk = Boolean(riskSummary) && Number(riskSummary?.max_total_leverage || status?.risk?.max_total_leverage || 0) > 0;
   return (
     <section className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-5 overflow-hidden">
@@ -3081,7 +3144,7 @@ function DataWorkspace({
               status={newsOk ? "健康" : "需检查"}
               tone={newsOk ? "good" : "warn"}
               rows={[
-                ["快讯数量", num(visibleNewsItems.length, 0)],
+                ["快讯数量", num(visibleItems.length, 0)],
                 ["缓存年龄", news.age_minutes == null ? "--" : `${num(news.age_minutes, 1)} 分钟`],
                 ["最新消息", String(latestNews?.title || latestNews?.headline || latestNews?.summary || "--").slice(0, 48)],
                 ["告警", newsWarnings.join("; ") || "无"],
@@ -3201,6 +3264,7 @@ function RightRail({
 }) {
   const latestDecision = status?.latest_decisions?.[symbol]?.payload || decisions[0]?.payload || { state: "等待下一次AI判断" };
   const newsWarnings = (news.warnings || []).filter((item) => !isInternalNewsText(item));
+  const railNewsItems = visibleNewsItems(news).slice(0, 16);
   return (
     <aside className="flex min-h-0 flex-col gap-2 overflow-auto">
       <Surface title={<><BrainCircuit size={13} /> AI 决策</>}>
@@ -3209,8 +3273,8 @@ function RightRail({
         <div className="mt-3">
           <MiniDenseZone denseZone={denseZone?.payload} />
         </div>
-        <details className="mt-3 rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs">
-          <summary className="cursor-pointer font-semibold text-[#53627a]">查看原始审计数据</summary>
+        <details className="mt-3 rounded-xl border border-[#263246] bg-[#101a2d] p-3 text-xs">
+          <summary className="cursor-pointer font-semibold text-[#cbd5e1]">查看原始审计数据</summary>
           <div className="mt-2">
             <JsonBlock data={latestDecision} maxHeight="max-h-48" />
           </div>
@@ -3221,15 +3285,17 @@ function RightRail({
         action={<button className={button} disabled={busy} onClick={() => postAction("/api/news/refresh", { operator_id: "console" })}>刷新</button>}
       >
         {newsWarnings.length ? (
-          <div className="mb-2 rounded-xl border border-[#f3d18a] bg-[#fff7e6] p-2 text-[11px] text-[#b7791f]">{newsWarnings.join("; ")}</div>
+          <div className="mb-2 rounded-xl border border-[#854d0e] bg-[#241806] p-2 text-[11px] text-[#facc15]">{newsWarnings.join("; ")}</div>
         ) : null}
         <div className="space-y-2">
-          {(news.timeline || news.items.map((item) => item.payload)).filter((item) => !isInternalNewsItem(item)).slice(0, 16).map((item, idx) => (
-            <div key={idx} className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs">
-              <div className="font-medium text-[#172033]">{String(item.title || item.headline || item.summary || "--")}</div>
-              <div className="mt-1 text-[11px] text-[#53627a]">{String(item.published_at || item.time || item.source || "")}</div>
+          {railNewsItems.length ? railNewsItems.map((item, idx) => (
+            <div key={idx} className="rounded-xl border border-[#263246] bg-[#101a2d] p-3 text-xs">
+              <div className="font-medium text-[#e5eefb]">{String(item.title || item.headline || item.summary || "--")}</div>
+              <div className="mt-1 text-[11px] text-[#94a3b8]">{String(item.published_at || item.time || item.source || "")}</div>
             </div>
-          ))}
+          )) : (
+            <div className="rounded-xl border border-[#263246] bg-[#101a2d] p-3 text-xs text-[#94a3b8]">暂无新闻快讯。</div>
+          )}
         </div>
       </Surface>
       <Surface title="最近事件">

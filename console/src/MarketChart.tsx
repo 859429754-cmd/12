@@ -47,10 +47,10 @@ export function MarketChart({
     if (!rootRef.current) return;
     const chart = createChart(rootRef.current, {
       height,
-      layout: { background: { type: ColorType.Solid, color: "#ffffff" }, textColor: "#53627a" },
-      grid: { vertLines: { color: "#eef2f7" }, horzLines: { color: "#eef2f7" } },
-      rightPriceScale: { borderColor: "#d9e2ef", scaleMargins: { top: 0.08, bottom: 0.22 } },
-      timeScale: { borderColor: "#d9e2ef", timeVisible: true, secondsVisible: false },
+      layout: { background: { type: ColorType.Solid, color: "#07111f" }, textColor: "#94a3b8" },
+      grid: { vertLines: { color: "#142033" }, horzLines: { color: "#142033" } },
+      rightPriceScale: { borderColor: "#263246", scaleMargins: { top: 0.08, bottom: 0.22 } },
+      timeScale: { borderColor: "#263246", timeVisible: true, secondsVisible: false },
       crosshair: { mode: 1 },
     });
     const candlesSeries = chart.addCandlestickSeries({
@@ -67,10 +67,10 @@ export function MarketChart({
       color: "#cbd6e5",
     });
     volumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.78, bottom: 0 } });
-    const emaSeries = chart.addLineSeries({ color: "#1f2937", lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
-    const kcMidSeries = chart.addLineSeries({ color: "#64748b", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
-    const kcUpperSeries = chart.addLineSeries({ color: "#2454ff", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
-    const kcLowerSeries = chart.addLineSeries({ color: "#2454ff", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+    const emaSeries = chart.addLineSeries({ color: "#e5e7eb", lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
+    const kcMidSeries = chart.addLineSeries({ color: "#94a3b8", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+    const kcUpperSeries = chart.addLineSeries({ color: "#3b82f6", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+    const kcLowerSeries = chart.addLineSeries({ color: "#3b82f6", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
     chart.subscribeCrosshairMove((param) => {
       const timestamp = Number(param.time);
       if (!Number.isFinite(timestamp)) {
@@ -148,7 +148,7 @@ export function MarketChart({
   }, [candles, decisions, denseZone, orders, profile, range, showAi, showDense, showEma, showKc, showOrders, showVolume]);
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-[#d9e2ef] bg-[#0b1220] shadow-[0_18px_48px_rgba(15,23,42,0.16)]">
+    <div className="overflow-hidden rounded-2xl border border-[#263246] bg-[#07111f] shadow-[0_22px_56px_rgba(0,0,0,0.38)]">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#1e293b] bg-[#0f172a] px-3 py-2 text-xs text-[#cbd5e1]">
         <div className="flex flex-wrap items-center gap-3">
           <span className="font-semibold text-white">专业K线</span>
@@ -171,13 +171,13 @@ export function MarketChart({
           <ChartButton active={showDense} onClick={() => setShowDense((value) => !value)}>密集区</ChartButton>
         </div>
       </div>
-      <div className="relative bg-white">
+      <div className="relative bg-[#07111f]">
         {candles.length ? null : (
-          <div className="absolute inset-0 z-10 grid place-items-center bg-white/80 text-sm text-[#53627a]">等待K线数据加载</div>
+          <div className="absolute inset-0 z-10 grid place-items-center bg-[#07111f]/85 text-sm text-[#94a3b8]">等待K线数据加载</div>
         )}
         <div ref={rootRef} style={{ height }} className="w-full" />
       </div>
-      <div className="grid gap-2 border-t border-[#e2e8f0] bg-[#f8fbff] px-3 py-2 text-[11px] text-[#53627a] md:grid-cols-3">
+      <div className="grid gap-2 border-t border-[#1f2a3d] bg-[#0b1220] px-3 py-2 text-[11px] text-[#94a3b8] md:grid-cols-3">
         <div>图例：KC 上下轨蓝色，中轨灰色；订单箭头和 AI 圆点可独立开关。</div>
         <div>当前显示：{rangeLabel(range)} / {candles.length} 根K线</div>
         <div>密集区价格线来自本地结构分析，不能替代交易所真实挂单深度。</div>
