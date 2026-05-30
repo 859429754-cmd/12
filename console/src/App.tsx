@@ -469,7 +469,7 @@ function TopBar({
         <StatusPill label="模式" value={executionModeLabel(status?.execution_mode)} />
       </div>
       <div className="ml-auto flex min-w-0 items-center gap-3 text-[11px] text-[#94a3b8]">
-        {warning ? <span className="max-w-[440px] truncate rounded-full bg-[#fff7e6] px-3 py-2 text-[#b7791f]">{warning}</span> : null}
+        {warning ? <span className="max-w-[440px] truncate rounded-full border border-[#854d0e] bg-[#241806] px-3 py-2 text-[#facc15]">{warning}</span> : null}
         <label className="flex h-10 items-center gap-2 rounded-xl border border-[#263246] bg-[#111827] px-2 sm:px-3">
           <KeyRound size={13} />
           <span className="hidden whitespace-nowrap sm:inline">操作验证码</span>
@@ -482,7 +482,7 @@ function TopBar({
             onChange={(event) => setOperationCode(event.target.value)}
           />
         </label>
-        <span className={`rounded-full px-3 py-2 ${status?.opening_paused ? "bg-[#fff7e6] text-[#b7791f]" : "bg-[#e7f8ee] text-[#0a9f5a]"}`}>
+        <span className={`rounded-full border px-3 py-2 ${status?.opening_paused ? "border-[#854d0e] bg-[#241806] text-[#facc15]" : "border-[#14532d] bg-[#052e1a] text-[#22c55e]"}`}>
           {status?.opening_paused ? "开仓已暂停" : "允许开仓"}
         </span>
         <button className={button} onClick={refresh}>
@@ -540,7 +540,7 @@ function LeftRail({
           ))}
         </select>
         {isDashboard ? (
-          <div className="rounded-xl border border-[#dfe7f1] bg-white p-3 text-xs text-[#53627a]">
+          <div className="rounded-xl border border-[#263246] bg-[#101a2d] p-3 text-xs text-[#94a3b8]">
             <BoundaryLine label="策略" value={profile?.enabled ? "运行中" : "研究中"} />
             <BoundaryLine label="授权" value={profile?.opening_authorized ? "已授权" : "未授权"} />
             <BoundaryLine label="模式" value={executionModeLabel(status?.execution_mode)} />
@@ -567,7 +567,7 @@ function LeftRail({
             关闭报告
           </button>
         </div>
-        {message ? <div className="mt-2 rounded-xl border border-[#dfe7f1] bg-white p-2 text-[11px] text-[#53627a]">{message}</div> : null}
+        {message ? <div className="mt-2 rounded-xl border border-[#263246] bg-[#101a2d] p-2 text-[11px] text-[#cbd5e1]">{message}</div> : null}
       </Surface>
 
       {!isDashboard ? (
@@ -812,7 +812,7 @@ function MarketWorkspace({
           <ChartChip label="VOL" value={String(params.volume_multiple || "--")} />
           <ChartChip label="KDJ" value={String(params.kdj_length || "--")} />
           <ChartChip label="240根高低" value={`${num(localLow)} - ${num(localHigh)}`} />
-          {warning ? <span className="rounded-full bg-[#fff7e6] px-3 py-1 text-[#b7791f]">{warning}</span> : null}
+          {warning ? <span className="rounded-full border border-[#854d0e] bg-[#241806] px-3 py-1 text-[#facc15]">{warning}</span> : null}
         </div>
       </Surface>
       <Surface title={<><LineChart size={13} /> K线走势与指标叠加</>}>
@@ -840,7 +840,7 @@ function MarketWorkspace({
 
 function ChartChip({ label, value }: { label: string; value: string }) {
   return (
-    <span className="rounded-full border border-[#dfe7f1] bg-[#f8fbff] px-3 py-1">
+    <span className="rounded-full border border-[#263246] bg-[#101a2d] px-3 py-1 text-[#cbd5e1]">
       {label}: <span className={mono}>{value}</span>
     </span>
   );
@@ -850,7 +850,7 @@ function DenseZonePanel({ denseZone }: { denseZone?: DenseZonePayload }) {
   if (!denseZone) {
     return (
       <Surface title={<><ShieldCheck size={13} /> 密集区结构</>}>
-        <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs text-[#53627a]">
+        <div className="rounded-xl border border-[#263246] bg-[#101a2d] p-3 text-xs text-[#94a3b8]">
           暂无密集区记录。等待下一次交易循环或 AI 扫描后，图表会自动叠加 POC、上下沿和相邻密集区。
         </div>
       </Surface>
@@ -3022,20 +3022,20 @@ function AccountSlotCard({
 }
 
 function ExecutionStep({ title, body, done = false, warn = false }: { title: string; body: string; done?: boolean; warn?: boolean }) {
-  const tone = warn ? "text-[#b7791f]" : done ? "text-[#0a9f5a]" : "text-[#53627a]";
+  const tone = warn ? "text-[#facc15]" : done ? "text-[#22c55e]" : "text-[#94a3b8]";
   return (
-    <div className="rounded-2xl border border-[#dfe7f1] bg-[#f8fbff] p-3">
+    <div className="rounded-2xl border border-[#263246] bg-[#101a2d] p-3">
       <div className={`text-sm font-semibold ${tone}`}>{title}</div>
-      <div className="mt-2 text-xs leading-5 text-[#53627a]">{body}</div>
+      <div className="mt-2 text-xs leading-5 text-[#94a3b8]">{body}</div>
     </div>
   );
 }
 
 function BoundaryLine({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex justify-between gap-3 rounded-xl border border-[#dfe7f1] bg-[#f8fbff] px-3 py-2">
+    <div className="flex justify-between gap-3 rounded-xl border border-[#263246] bg-[#101a2d] px-3 py-2 text-[#94a3b8]">
       <span>{label}</span>
-      <span className="font-medium text-[#172033]">{value}</span>
+      <span className="font-medium text-[#e5eefb]">{value}</span>
     </div>
   );
 }
@@ -3355,27 +3355,27 @@ function AiSizingTierStrip({ activeTier, activeScale }: { activeTier: string; ac
     { key: "full", label: "满仓", scale: "100%", body: "强趋势且风险项全部通过。" },
   ];
   return (
-    <div className="col-span-5 rounded-xl border border-[#cfe0ff] bg-gradient-to-br from-[#f8fbff] to-white p-3 text-xs shadow-inner">
+    <div className="col-span-5 rounded-xl border border-[#263246] bg-gradient-to-br from-[#0b1220] to-[#111827] p-3 text-xs shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div>
-          <div className="font-semibold text-[#172033]">ETH 实盘五档映射</div>
-          <div className="mt-1 text-[11px] text-[#64748b]">AI 只负责缩放和否决，方向必须来自本地策略信号。</div>
+          <div className="font-semibold text-[#e5eefb]">ETH 实盘五档映射</div>
+          <div className="mt-1 text-[11px] text-[#94a3b8]">AI 只负责缩放和否决，方向必须来自本地策略信号。</div>
         </div>
-        <span className={`${mono} rounded-full bg-[#2454ff] px-3 py-1 text-white`}>当前 {tierLabel(activeTier)} / {activeScale}</span>
+        <span className={`${mono} rounded-full border border-[#60a5fa] bg-[#1d4ed8] px-3 py-1 text-white`}>当前 {tierLabel(activeTier)} / {activeScale}</span>
       </div>
       <div className="grid gap-2 md:grid-cols-5">
         {tiers.map((tier) => {
           const active = tier.key === activeTier;
           return (
-            <div key={tier.key} className={`rounded-xl border p-3 transition-all duration-200 ${active ? "border-[#2454ff] bg-[#eef3ff] shadow-[0_10px_22px_rgba(36,84,255,0.16)]" : "border-[#dfe7f1] bg-white"}`}>
+            <div key={tier.key} className={`rounded-xl border p-3 transition-all duration-200 ${active ? "border-[#60a5fa] bg-[#102a5c] shadow-[0_12px_28px_rgba(37,99,235,0.22)]" : "border-[#263246] bg-[#101a2d]"}`}>
               <div className="flex items-center justify-between gap-2">
-                <span className={`font-semibold ${active ? "text-[#2454ff]" : "text-[#172033]"}`}>{tier.label}</span>
-                <span className={`${mono} text-[11px] ${active ? "text-[#2454ff]" : "text-[#64748b]"}`}>{tier.scale}</span>
+                <span className={`font-semibold ${active ? "text-[#93c5fd]" : "text-[#e5eefb]"}`}>{tier.label}</span>
+                <span className={`${mono} text-[11px] ${active ? "text-[#bfdbfe]" : "text-[#94a3b8]"}`}>{tier.scale}</span>
               </div>
-              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[#e6edf5]">
-                <div className={`h-full rounded-full ${active ? "bg-[#2454ff]" : "bg-[#cbd6e5]"}`} style={{ width: tier.scale }} />
+              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[#1f2a3d]">
+                <div className={`h-full rounded-full ${active ? "bg-[#60a5fa]" : "bg-[#334155]"}`} style={{ width: tier.scale }} />
               </div>
-              <div className="mt-2 min-h-8 text-[11px] leading-4 text-[#53627a]">{tier.body}</div>
+              <div className="mt-2 min-h-8 text-[11px] leading-4 text-[#94a3b8]">{tier.body}</div>
             </div>
           );
         })}
@@ -3396,13 +3396,13 @@ function DecisionNarrative({ data }: { data: Record<string, unknown> }) {
   ];
   const reason = String(payload.brief_reason || payload.reason || event?.summary || "等待下一次 AI 判断。");
   return (
-    <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs">
+    <div className="rounded-xl border border-[#263246] bg-[#101a2d] p-3 text-xs text-[#cbd5e1]">
       <div className="grid gap-2">
         {rows.map(([label, value]) => (
           <BoundaryLine key={label} label={label} value={value} />
         ))}
       </div>
-      <div className="mt-3 rounded-lg bg-white p-2 text-[11px] leading-relaxed text-[#53627a]">{reason}</div>
+      <div className="mt-3 rounded-lg border border-[#263246] bg-[#0b1220] p-2 text-[11px] leading-relaxed text-[#94a3b8]">{reason}</div>
     </div>
   );
 }
@@ -3489,11 +3489,11 @@ function patternLabel(value: unknown) {
 
 function MiniDenseZone({ denseZone }: { denseZone?: DenseZonePayload }) {
   if (!denseZone) {
-    return <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs text-[#53627a]">密集区：等待本地结构分析。</div>;
+    return <div className="rounded-xl border border-[#263246] bg-[#101a2d] p-3 text-xs text-[#94a3b8]">密集区：等待本地结构分析。</div>;
   }
   return (
-    <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs">
-      <div className="mb-2 font-semibold text-[#172033]">本地密集区</div>
+    <div className="rounded-xl border border-[#263246] bg-[#101a2d] p-3 text-xs">
+      <div className="mb-2 font-semibold text-[#e5eefb]">本地密集区</div>
       <div className="grid gap-2">
         <BoundaryLine label="上沿" value={num(denseZone.zone_high ?? denseZone.vah)} />
         <BoundaryLine label="POC/中位" value={num(denseZone.zone_mid ?? denseZone.poc)} />

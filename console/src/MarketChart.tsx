@@ -35,6 +35,8 @@ export function MarketChart({
   const [showOrders, setShowOrders] = useState(true);
   const [showAi, setShowAi] = useState(true);
   const [showDense, setShowDense] = useState(true);
+  const [expanded, setExpanded] = useState(false);
+  const effectiveHeight = expanded ? Math.max(620, window.innerHeight - 190) : height;
   const focus = hoverCandle || candles.at(-1) || null;
   const prev = useMemo(() => {
     if (!focus) return null;
@@ -46,7 +48,7 @@ export function MarketChart({
   useEffect(() => {
     if (!rootRef.current) return;
     const chart = createChart(rootRef.current, {
-      height,
+      height: effectiveHeight,
       layout: { background: { type: ColorType.Solid, color: "#07111f" }, textColor: "#94a3b8" },
       grid: { vertLines: { color: "#142033" }, horzLines: { color: "#142033" } },
       rightPriceScale: { borderColor: "#263246", scaleMargins: { top: 0.08, bottom: 0.22 } },
@@ -102,7 +104,7 @@ export function MarketChart({
       kcLowerRef.current = null;
       denseLinesRef.current = [];
     };
-  }, [height]);
+  }, [effectiveHeight]);
 
   useEffect(() => {
     const candleSeries = candleRef.current;
@@ -145,10 +147,10 @@ export function MarketChart({
     }
     denseLinesRef.current = showDense ? denseZoneLines(denseZone).map((item) => candleSeries.createPriceLine(item)) : [];
     applyVisibleRange(chartRef.current, candleData, range);
-  }, [candles, decisions, denseZone, orders, profile, range, showAi, showDense, showEma, showKc, showOrders, showVolume]);
+  }, [candles, decisions, denseZone, effectiveHeight, orders, profile, range, showAi, showDense, showEma, showKc, showOrders, showVolume]);
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-[#263246] bg-[#07111f] shadow-[0_22px_56px_rgba(0,0,0,0.38)]">
+    <div className={`${expanded ? "fixed inset-4 z-50 flex flex-col" : ""} overflow-hidden rounded-2xl border border-[#263246] bg-[#07111f] shadow-[0_22px_56px_rgba(0,0,0,0.38)]`}>
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#1e293b] bg-[#0f172a] px-3 py-2 text-xs text-[#cbd5e1]">
         <div className="flex flex-wrap items-center gap-3">
           <span className="font-semibold text-white">专业K线</span>
@@ -169,13 +171,14 @@ export function MarketChart({
           <ChartButton active={showOrders} onClick={() => setShowOrders((value) => !value)}>订单</ChartButton>
           <ChartButton active={showAi} onClick={() => setShowAi((value) => !value)}>AI</ChartButton>
           <ChartButton active={showDense} onClick={() => setShowDense((value) => !value)}>密集区</ChartButton>
+          <ChartButton active={expanded} onClick={() => setExpanded((value) => !value)}>{expanded ? "退出全屏" : "全屏"}</ChartButton>
         </div>
       </div>
-      <div className="relative bg-[#07111f]">
+      <div className="relative flex-1 bg-[#07111f]">
         {candles.length ? null : (
           <div className="absolute inset-0 z-10 grid place-items-center bg-[#07111f]/85 text-sm text-[#94a3b8]">等待K线数据加载</div>
         )}
-        <div ref={rootRef} style={{ height }} className="w-full" />
+        <div ref={rootRef} style={{ height: effectiveHeight }} className="w-full" />
       </div>
       <div className="grid gap-2 border-t border-[#1f2a3d] bg-[#0b1220] px-3 py-2 text-[11px] text-[#94a3b8] md:grid-cols-3">
         <div>图例：KC 上下轨蓝色，中轨灰色；订单箭头和 AI 圆点可独立开关。</div>
