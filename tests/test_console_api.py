@@ -280,6 +280,25 @@ def test_console_basic_auth_accepts_valid_credentials(tmp_path: Path, monkeypatc
     assert response.json()["execution_mode"] == "mock"
 
 
+def test_console_operation_code_blocks_mutating_requests_when_enabled(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("CONSOLE_REQUIRE_OPERATION_CODE", "1")
+    monkeypatch.setenv("CONSOLE_OPERATION_CODE", "yx")
+    config_path = tmp_path / "config.yaml"
+    write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl", ["ETH/USDT:USDT"])
+    client = TestClient(create_app(str(config_path)))
+
+    body = {"operator_id": "tester", "symbols": ["ETH/USDT:USDT"]}
+    blocked = client.post("/api/control/authorize", json=body)
+    assert blocked.status_code == 403
+    assert blocked.json()["detail"] == "operation_code_required"
+
+    wrong = client.post("/api/control/authorize", json=body, headers={"X-Operation-Code": "wrong"})
+    assert wrong.status_code == 403
+
+    ok = client.post("/api/control/authorize", json=body, headers={"X-Operation-Code": "yx"})
+    assert ok.status_code == 200
+
+
 def test_agent_gateway_requires_token(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("AGENT_GATEWAY_TOKEN", raising=False)
     config_path = tmp_path / "config.yaml"

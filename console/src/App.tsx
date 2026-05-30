@@ -43,6 +43,7 @@ import { JsonBlock, Metric, Surface, button, danger, errText, input, mono, num, 
 
 const DEFAULT_SYMBOL = "ETH/USDT:USDT";
 const WORKSPACE_IDS: WorkspaceId[] = ["dashboard", "market", "strategy", "ai", "agent", "execution", "data"];
+const OPERATION_CODE_STORAGE_KEY = "aiq_operation_code";
 
 export function App() {
   const [workspace, setWorkspace] = useState<WorkspaceId>(() => readWorkspaceHash());
@@ -65,6 +66,7 @@ export function App() {
   const [warning, setWarning] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [operationCode, setOperationCode] = useState(() => window.localStorage.getItem(OPERATION_CODE_STORAGE_KEY) || "");
 
   const symbols = useMemo(() => {
     const fromMarkets = markets.items.map((item) => item.symbol);
@@ -149,11 +151,21 @@ export function App() {
     }
   }, [workspace]);
 
+  useEffect(() => {
+    const code = operationCode.trim();
+    if (code) {
+      window.localStorage.setItem(OPERATION_CODE_STORAGE_KEY, code);
+    } else {
+      window.localStorage.removeItem(OPERATION_CODE_STORAGE_KEY);
+    }
+  }, [operationCode]);
+
   const postAction = async (path: string, body: Record<string, unknown>) => {
     setBusy(true);
     setMessage("");
     try {
-      const result = await api<Record<string, unknown>>(path, { method: "POST", body: JSON.stringify(body), timeoutMs: 15000 });
+      const headers = operationCode.trim() ? { "X-Operation-Code": operationCode.trim() } : undefined;
+      const result = await api<Record<string, unknown>>(path, { method: "POST", body: JSON.stringify(body), headers, timeoutMs: 15000 });
       setMessage(String(result.message || "ok"));
       await load();
     } catch (error) {
@@ -189,6 +201,8 @@ export function App() {
         setWorkspace={setWorkspace}
         refresh={load}
         warning={warning}
+        operationCode={operationCode}
+        setOperationCode={setOperationCode}
       />
       <div className={`grid min-h-0 flex-1 gap-5 overflow-hidden p-5 ${showRightRail ? "grid-cols-[minmax(0,1fr)_358px]" : "grid-cols-[minmax(0,1fr)]"}`}>
         <WorkspaceBody
@@ -375,6 +389,8 @@ function TopBar({
   setWorkspace,
   refresh,
   warning,
+  operationCode,
+  setOperationCode,
 }: {
   platform: PlatformOverview | null;
   status: StatusResponse | null;
@@ -382,6 +398,8 @@ function TopBar({
   setWorkspace: (value: WorkspaceId) => void;
   refresh: () => void;
   warning: string;
+  operationCode: string;
+  setOperationCode: (value: string) => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const switchWorkspace = (id: WorkspaceId) => {
@@ -445,6 +463,18 @@ function TopBar({
       </div>
       <div className="ml-auto flex min-w-0 items-center gap-3 text-[11px] text-[#7b8798]">
         {warning ? <span className="max-w-[440px] truncate rounded-full bg-[#fff7e6] px-3 py-2 text-[#b7791f]">{warning}</span> : null}
+        <label className="flex h-10 items-center gap-2 rounded-xl border border-[#d9e2ef] bg-[#f8fbff] px-2 sm:px-3">
+          <KeyRound size={13} />
+          <span className="hidden whitespace-nowrap sm:inline">操作验证码</span>
+          <input
+            className={`${input} h-7 w-20 border-0 bg-white px-2 py-0 text-xs`}
+            type="password"
+            value={operationCode}
+            placeholder="yx"
+            autoComplete="off"
+            onChange={(event) => setOperationCode(event.target.value)}
+          />
+        </label>
         <span className={`rounded-full px-3 py-2 ${status?.opening_paused ? "bg-[#fff7e6] text-[#b7791f]" : "bg-[#e7f8ee] text-[#0a9f5a]"}`}>
           {status?.opening_paused ? "开仓已暂停" : "允许开仓"}
         </span>

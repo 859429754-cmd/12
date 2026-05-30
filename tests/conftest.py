@@ -7,3 +7,5 @@ import pytest
 def isolate_console_basic_auth(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CONSOLE_BASIC_USER", "")
     monkeypatch.setenv("CONSOLE_BASIC_PASSWORD", "")
+    monkeypatch.setenv("CONSOLE_REQUIRE_OPERATION_CODE", "")
+    monkeypatch.setenv("CONSOLE_OPERATION_CODE", "")

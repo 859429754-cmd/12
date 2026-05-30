@@ -13,7 +13,7 @@ from typing import Any, Literal
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 
@@ -241,6 +241,18 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
             status_code=401,
             headers={"WWW-Authenticate": 'Basic realm="AI Quant Console"'},
         )
+
+    @app.middleware("http")
+    async def console_operation_code_guard(request: Request, call_next):
+        if _operation_code_required_for_request(request):
+            expected_code = _console_operation_code()
+            provided_code = request.headers.get("x-operation-code", "").strip()
+            if not expected_code or not secrets.compare_digest(provided_code, expected_code):
+                return JSONResponse(
+                    {"detail": "operation_code_required", "message": "Operation code is required for mutating console requests."},
+                    status_code=403,
+                )
+        return await call_next(request)
 
     assets_path = Path("console/dist/assets")
     if assets_path.exists():
@@ -2025,6 +2037,25 @@ def _valid_console_basic_auth(authorization: str | None) -> bool:
     expected_user = os.getenv("CONSOLE_BASIC_USER", "").strip()
     expected_password = os.getenv("CONSOLE_BASIC_PASSWORD", "").strip()
     return secrets.compare_digest(username, expected_user) and secrets.compare_digest(password, expected_password)
+
+
+def _console_operation_code() -> str:
+    return os.getenv("CONSOLE_OPERATION_CODE", "yx").strip()
+
+
+def _console_operation_code_enabled() -> bool:
+    flag = os.getenv("CONSOLE_REQUIRE_OPERATION_CODE", "").strip().lower()
+    return flag in {"1", "true", "yes", "on"} or bool(os.getenv("CONSOLE_OPERATION_CODE", "").strip())
+
+
+def _operation_code_required_for_request(request: Request) -> bool:
+    if not _console_operation_code_enabled():
+        return False
+    if request.method.upper() not in {"POST", "PUT", "PATCH", "DELETE"}:
+        return False
+    if request.url.path == "/api/health":
+        return False
+    return True
 
 
 async def _cancel_trend_native_stops(execution, symbols: list[str], store: SQLiteStore | None = None, gateway_mode: str = "unknown") -> None:
