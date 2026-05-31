@@ -27,7 +27,7 @@ def strategy_execution_contract(config: TrendStrategyConfig) -> dict[str, Any]:
     }
 
 
-def backtest_defaults(config: TrendStrategyConfig) -> dict[str, Any]:
+def backtest_defaults(config: TrendStrategyConfig, max_leverage: float = 4.0) -> dict[str, Any]:
     return {
         "timeframe": "1h",
         "initial_equity": 200.0,
@@ -36,9 +36,9 @@ def backtest_defaults(config: TrendStrategyConfig) -> dict[str, Any]:
         "funding_rate_per_8h": 0.0,
         "min_order_qty": 0.0,
         "max_volume_participation": 1.0,
-        "leverage": 4.0,
+        "leverage": max_leverage,
         "position_fraction": config.position_fraction,
-        "notional_multiple": config.position_fraction * 4.0,
+        "notional_multiple": config.position_fraction * max_leverage,
         "data_source": "binance",
     }
 
@@ -69,7 +69,11 @@ def build_strategy_profile(
     symbol: str,
     config: TrendStrategyConfig,
     state: RuntimeState,
+    max_leverage: float = 4.0,
 ) -> dict[str, Any]:
+    contract = strategy_execution_contract(config)
+    contract["max_leverage"] = max_leverage
+    defaults = backtest_defaults(config, max_leverage=max_leverage)
     return {
         "symbol": symbol,
         "profile_name": config.profile_name,
@@ -79,8 +83,8 @@ def build_strategy_profile(
         "report_enabled": symbol in state.report_symbols,
         "live_ready": config.enabled and symbol in state.enabled_symbols and not state.opening_paused,
         "params": config.model_dump(mode="json"),
-        "backtest_defaults": backtest_defaults(config),
+        "backtest_defaults": defaults,
         "optimization_defaults": optimization_defaults(config),
-        "execution_contract": strategy_execution_contract(config),
+        "execution_contract": contract,
         "notes": "research_only" if not config.enabled else "eligible_for_risk_checked_execution",
     }

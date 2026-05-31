@@ -1151,7 +1151,7 @@ const EDITABLE_STRATEGY_PARAMS = [
   { key: "vma_length", path: "strategy.trend.vma_length", label: "成交量均线周期", step: "1", min: 5, max: 100, scope: "symbol" },
   { key: "volume_multiple", path: "strategy.trend.volume_multiple", label: "成交量放大倍数", step: "0.1", min: 0.5, max: 8, scope: "symbol" },
   { key: "ema_length", path: "strategy.trend.ema_length", label: "EMA过滤周期", step: "1", min: 20, max: 300, scope: "symbol" },
-  { key: "max_total_leverage", path: "risk.max_total_leverage", label: "全局杠杆硬上限", step: "0.1", min: 0.5, max: 4, scope: "global" },
+  { key: "max_total_leverage", path: "risk.max_total_leverage", label: "全局杠杆硬上限", step: "0.1", min: 0.5, max: 20, scope: "global" },
 ] as const;
 
 function StrategyParameterEditor({
@@ -1464,13 +1464,19 @@ function DashboardWorkspace({
         <div className="grid min-w-0 gap-4">
           <DashboardPanel title={<><Wallet size={14} /> 账户与持仓</>}>
             <div className="rounded-xl bg-[#0f172a] p-4 text-white">
-              <div className="text-[11px] text-[#cbd5e1]">USDT 权益</div>
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-[11px] text-[#cbd5e1]">USDT 权益</div>
+                <span className={`rounded-full px-2 py-1 text-[10px] ${account.ok === false ? "bg-[#3b1117] text-[#fb7185]" : account.source === "gate_live_readonly" || account.source === "live" ? "bg-[#052e1a] text-[#22c55e]" : "bg-[#241806] text-[#facc15]"}`}>
+                  {account.sourceLabel}
+                </span>
+              </div>
               <div className={`${mono} mt-2 text-3xl font-semibold`}>{num(account.total)}</div>
+              {account.message ? <div className="mt-2 rounded-lg border border-[#263246] bg-[#07111f] px-3 py-2 text-[11px] text-[#94a3b8]">{account.message}</div> : null}
               <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
                 <PlainKV label="可用" value={`${num(account.free)} USDT`} />
                 <PlainKV label="已用" value={`${num(account.used)} USDT`} />
                 <PlainKV label="风控上限" value={`${num(runtimeStatus?.risk?.max_total_leverage || 4, 1)}x`} />
-                <PlainKV label="策略档案" value={profile?.profile_name || "--"} />
+                <PlainKV label="余额来源" value={account.sourceLabel} />
               </div>
             </div>
             <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-[#263246] bg-[#101a2d] p-3">
@@ -1775,7 +1781,21 @@ function accountSnapshot(balance: Record<string, unknown> | null) {
   const total = numberValue(payload.usdt_total, payload.total_usdt, rawUsdt.total, objectPayload(payload.total).USDT);
   const free = numberValue(payload.usdt_free, payload.free_usdt, rawUsdt.free, objectPayload(payload.free).USDT);
   const used = numberValue(payload.usdt_used, payload.used_usdt, rawUsdt.used, objectPayload(payload.used).USDT);
-  return { total, free, used };
+  const source = String(payload.balance_source || payload.mode || "unknown");
+  const sourceLabel =
+    payload.ok === false
+      ? "读取失败"
+      : source === "gate_live_readonly"
+      ? "Gate只读"
+      : source === "live"
+        ? "Gate实盘"
+        : source === "mock"
+          ? "模拟余额"
+          : source === "live_readonly_failed"
+            ? "读取失败"
+            : "--";
+  const message = typeof payload.message === "string" ? payload.message : "";
+  return { total, free, used, source, sourceLabel, ok: payload.ok, message };
 }
 
 function objectPayload(value: unknown): Record<string, unknown> {
@@ -3069,7 +3089,7 @@ function ExecutionWorkspace({
             />
           </div>
           <div className="mt-3 rounded-xl border border-[#854d0e] bg-[#241806] p-3 text-xs leading-5 text-[#facc15]">
-            当前按你的要求采用“单账户独立风控”：趋势账户和震荡账户各自最高 4x。组合总风险允许叠加，但控制台会单独展示，不能把它误认为一个账户的 4x 限制。
+            当前按你的要求采用“单账户独立风控”：趋势账户和震荡账户各自使用配置的杠杆硬上限（当前 {num(riskCap, 1)}x）。组合总风险允许叠加，但控制台会单独展示，不能把它误认为一个账户限制。
           </div>
         </Surface>
         <RuntimeModePanel executionMode={executionMode} busy={busy} postAction={postAction} />

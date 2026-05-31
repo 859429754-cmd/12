@@ -23,6 +23,6 @@ class BaseStrategy(ABC):
         position: PositionSnapshot,
         equity: float,
         ai_multiplier: float,
+        leverage: float = 4.0,
     ) -> StrategySignal:
         raise NotImplementedError
-

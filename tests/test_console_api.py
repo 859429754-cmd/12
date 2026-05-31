@@ -131,7 +131,7 @@ def test_console_can_create_global_max_leverage_proposal(tmp_path: Path, monkeyp
         json={
             "operator_id": "console",
             "path": "risk.max_total_leverage",
-            "value": 3.2,
+            "value": 12.5,
             "symbols": [],
         },
     )
@@ -143,7 +143,7 @@ def test_console_can_create_global_max_leverage_proposal(tmp_path: Path, monkeyp
 
     strategy = client.get("/api/strategy/config")
     assert strategy.status_code == 200
-    assert strategy.json()["risk"]["max_total_leverage"] == 3.2
+    assert strategy.json()["risk"]["max_total_leverage"] == 12.5
 
     prometheus = client.get("/metrics")
     assert prometheus.status_code == 200
@@ -173,6 +173,76 @@ def test_console_can_create_global_max_leverage_proposal(tmp_path: Path, monkeyp
     dense = client.get("/api/dense-zones/latest?symbol=ETH%2FUSDT%3AUSDT")
     assert dense.status_code == 200
     assert dense.json()["item"] is None
+
+
+def test_account_balance_prefers_gate_readonly_when_mock_has_configured_account(tmp_path: Path, monkeypatch) -> None:
+    for key in ["GATEIO_API_KEY", "GATEIO_API_SECRET", "GATEIO_TREND_API_KEY", "GATEIO_TREND_API_SECRET"]:
+        monkeypatch.setenv(key, "")
+    config_path = tmp_path / "config.yaml"
+    write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl", ["ETH/USDT:USDT"])
+    created: list[tuple[str, str]] = []
+
+    class FakeGateway:
+        def __init__(self, mode: str, account_slot: str) -> None:
+            self.mode = mode
+            self.account_slot = account_slot
+
+        async def fetch_balance_summary(self) -> dict[str, object]:
+            return {
+                "ok": True,
+                "mode": self.mode,
+                "usdt_total": 321.5,
+                "usdt_free": 300.0,
+                "usdt_used": 21.5,
+            }
+
+        async def close(self) -> None:
+            return None
+
+    def fake_factory(mode_or_config: object, account_slot: str = "default") -> FakeGateway:
+        mode = str(mode_or_config)
+        created.append((mode, account_slot))
+        return FakeGateway(mode, account_slot)
+
+    monkeypatch.setattr(server, "_account_slot_configured", lambda slot: slot == "trend")
+    monkeypatch.setattr(server, "create_exchange_gateway", fake_factory)
+    client = TestClient(create_app(str(config_path)))
+
+    response = client.get("/api/account/balance?account_slot=trend")
+    assert response.status_code == 200
+    body = response.json()
+    assert created == [("live", "trend")]
+    assert body["dry_run"] is True
+    assert body["execution_mode"] == "mock"
+    assert body["balance_source"] == "gate_live_readonly"
+    assert body["read_only_live_balance"] is True
+    assert body["usdt_total"] == 321.5
+
+
+def test_account_balance_does_not_fallback_to_mock_when_gate_readonly_fails(tmp_path: Path, monkeypatch) -> None:
+    for key in ["GATEIO_API_KEY", "GATEIO_API_SECRET", "GATEIO_TREND_API_KEY", "GATEIO_TREND_API_SECRET"]:
+        monkeypatch.setenv(key, "")
+    config_path = tmp_path / "config.yaml"
+    write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl", ["ETH/USDT:USDT"])
+
+    class FailingGateway:
+        async def fetch_balance_summary(self) -> dict[str, object]:
+            raise TimeoutError("gate timeout")
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(server, "_account_slot_configured", lambda slot: slot == "trend")
+    monkeypatch.setattr(server, "create_exchange_gateway", lambda mode_or_config, account_slot="default": FailingGateway())
+    client = TestClient(create_app(str(config_path)))
+
+    response = client.get("/api/account/balance?account_slot=trend")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is False
+    assert body["balance_source"] == "gate_live_readonly"
+    assert body["usdt_total"] is None
+    assert "10000" not in body["message"]
 
 
 def test_readiness_blocks_failed_backup_integrity(tmp_path: Path, monkeypatch) -> None:

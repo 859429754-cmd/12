@@ -73,6 +73,16 @@ def test_four_x_hard_cap_clips_position() -> None:
     assert decision.clipped_qty <= 10
 
 
+def test_configurable_hard_cap_allows_higher_account_leverage() -> None:
+    state = RuntimeState(opening_paused=False, enabled_symbols={"ETH/USDT:USDT"})
+    manager = RiskManager(RiskConfig(max_total_leverage=10), state)
+    existing = [PositionSnapshot(symbol="BTC/USDT:USDT", side=Side.LONG, qty=30, mark_price=100)]
+    decision = manager.evaluate(_signal(), _ai(), 1000, existing)
+    assert decision.allowed
+    assert decision.max_total_notional == 10_000
+    assert decision.target_notional > 1000
+
+
 def test_same_direction_position_blocks_addon() -> None:
     state = RuntimeState(opening_paused=False, enabled_symbols={"ETH/USDT:USDT"})
     manager = RiskManager(RiskConfig(max_total_leverage=4), state)

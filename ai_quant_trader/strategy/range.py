@@ -20,6 +20,7 @@ class EmptyRangeStrategy(BaseStrategy):
         position: PositionSnapshot,
         equity: float,
         ai_multiplier: float,
+        leverage: float = 4.0,
     ) -> StrategySignal:
         price = float(candles["close"].iloc[-1]) if len(candles) else 0.0
         return StrategySignal(
@@ -29,4 +30,3 @@ class EmptyRangeStrategy(BaseStrategy):
             current_price=price,
             technical_evidence={"reason": "range_strategy_not_enabled"},
         )
-

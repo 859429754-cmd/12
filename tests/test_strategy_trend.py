@@ -57,6 +57,23 @@ def test_trend_strategy_generates_long_signal() -> None:
     assert signal.technical_evidence["stop_loss_estimate"] is not None
 
 
+def test_trend_strategy_uses_configured_leverage_for_live_sizing() -> None:
+    strategy = TrendStrategy(TrendStrategyConfig(position_fraction=0.5))
+    signal = strategy.generate_signal(
+        "ETH/USDT:USDT",
+        "1h",
+        _candles_with_breakout("long"),
+        PositionSnapshot(symbol="ETH/USDT:USDT"),
+        equity=1000,
+        ai_multiplier=1.0,
+        leverage=8.0,
+    )
+    assert signal.action == SignalAction.LONG
+    assert signal.technical_evidence["target_leverage"] == 8.0
+    assert signal.technical_evidence["base_nominal"] == 4000.0
+    assert signal.suggested_qty == pytest.approx(4000.0 / signal.current_price)
+
+
 def test_trend_strategy_generates_short_signal() -> None:
     strategy = TrendStrategy(TrendStrategyConfig())
     signal = strategy.generate_signal(

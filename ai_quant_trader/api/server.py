@@ -19,7 +19,14 @@ from pydantic import BaseModel, Field, model_validator
 
 from ai_quant_trader.core.config import load_config
 from ai_quant_trader.core.control import RuntimeControlManager
-from ai_quant_trader.core.models import NewsDigest, OrderRequest, SecretService, SecretUpdateCommand, Side
+from ai_quant_trader.core.models import (
+    MAX_CONFIGURABLE_LEVERAGE,
+    NewsDigest,
+    OrderRequest,
+    SecretService,
+    SecretUpdateCommand,
+    Side,
+)
 from ai_quant_trader.core.secrets import SecretCommandError, SecretUpdateManager
 from ai_quant_trader.core.state import RuntimeState
 from ai_quant_trader.data.market import MarketDataClient
@@ -145,7 +152,7 @@ class BacktestRequest(BaseModel):
     funding_rate_per_8h: float = Field(default=0.0, ge=0, le=0.01)
     min_order_qty: float = Field(default=0.0, ge=0)
     max_volume_participation: float = Field(default=1.0, gt=0, le=1.0)
-    leverage: float = Field(default=4.0, gt=0, le=4.0)
+    leverage: float = Field(default=4.0, gt=0, le=MAX_CONFIGURABLE_LEVERAGE)
     ai_proxy: bool = False
 
 
@@ -372,8 +379,8 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
             _readiness_check(
                 "risk",
                 "Risk limits",
-                "ok" if ctx.config.risk.max_total_leverage <= 4 else "block",
-                f"Max total leverage: {ctx.config.risk.max_total_leverage}x.",
+                "ok" if 0 < ctx.config.risk.max_total_leverage <= MAX_CONFIGURABLE_LEVERAGE else "block",
+                f"Max total leverage: {ctx.config.risk.max_total_leverage}x; hard ceiling: {MAX_CONFIGURABLE_LEVERAGE}x.",
             ),
             _readiness_check(
                 "news",
@@ -530,7 +537,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
                     "AI 候选审批模式：AI 置信度超过 65% 但策略未触发时，只能生成候选计划等待人工审批。",
                     "纯 AI 纸面模式：只做模拟研究和候选计划，不允许直接实盘下单。",
                     "重大新闻触发独立 AI 风险复评和审计，默认不直接开新仓。",
-                    "冷启动锁、逐标的授权、4 倍总杠杆硬上限永远优先。",
+                    "冷启动锁、逐标的授权、配置的总杠杆硬上限永远优先。",
                     "同方向已有持仓时禁止重复加仓。",
                 ],
                 "ai_inputs": [
@@ -810,13 +817,42 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
             await market.close()
 
     @app.get("/api/account/balance")
-    async def account_balance(account_slot: Literal["default", "trend", "range"] = "trend") -> dict[str, Any]:
+    async def account_balance(
+        account_slot: Literal["default", "trend", "range"] = "trend",
+        prefer_live: bool = True,
+    ) -> dict[str, Any]:
         ctx = _ctx(app)
         ctx.reload()
-        execution = create_exchange_gateway(ctx.config, account_slot=account_slot)
+        configured_slot = _account_slot_configured(account_slot)
+        runtime_mode = execution_mode_from_config(ctx.config)
+        live_readonly = prefer_live and runtime_mode == "mock" and configured_slot
+        gateway_mode = "live" if live_readonly else runtime_mode
+        execution = create_exchange_gateway(gateway_mode, account_slot=account_slot)
         try:
             summary = await execution.fetch_balance_summary()
-            return {"dry_run": execution_mode_from_config(ctx.config) == "mock", **summary}
+            return {
+                "dry_run": runtime_mode == "mock",
+                "execution_mode": runtime_mode,
+                "balance_source": "gate_live_readonly" if live_readonly else gateway_mode,
+                "read_only_live_balance": live_readonly,
+                **summary,
+            }
+        except Exception as exc:
+            if live_readonly:
+                return {
+                    "ok": False,
+                    "dry_run": True,
+                    "execution_mode": runtime_mode,
+                    "balance_source": "gate_live_readonly",
+                    "read_only_live_balance": True,
+                    "mode": "live_readonly_failed",
+                    "message": "真实 Gate.io 余额读取失败；未回退显示模拟余额。",
+                    "error_type": type(exc).__name__,
+                    "usdt_total": None,
+                    "usdt_free": None,
+                    "usdt_used": None,
+                }
+            raise
         finally:
             await execution.close()
 
@@ -899,7 +935,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
             "small_position_mode": ctx.config.risk.small_position_mode,
             "small_position_notional_usdt": ctx.config.risk.small_position_notional_usdt,
             "rules": [
-                "总名义仓位不得超过账户权益的 4 倍。",
+                "总名义仓位不得超过配置的账户权益杠杆上限。",
                 "未授权标的不允许新开仓。",
                 "策略确认模式下，AI 不可绕过技术信号自动开仓。",
                 "AI 候选交易计划必须审批后才能执行。",
@@ -1206,7 +1242,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
             ctx.control.set_config_value(config, "risk.small_position_mode", False)
         ctx.control.write_config(config)
         mode_text = "模拟运行" if target_mode == "mock" else "真实运行"
-        warning = "" if target_mode == "mock" else "；真实订单仍必须满足逐标的授权、允许开仓、AI否决和4倍硬风控"
+        warning = "" if target_mode == "mock" else "；真实订单仍必须满足逐标的授权、允许开仓、AI否决和配置的杠杆硬风控"
         return {"ok": True, "message": f"已切换为{mode_text}{warning}"}
 
     @app.post("/api/control/pause")
@@ -1313,7 +1349,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
 
 def _strategy_profile(ctx: ConsoleContext, raw_config: dict[str, Any], symbol: str, state: RuntimeState) -> dict[str, Any]:
     cfg = ctx.control.trend_config_for_symbol(raw_config, symbol)
-    return build_strategy_profile(symbol=symbol, config=cfg, state=state)
+    return build_strategy_profile(symbol=symbol, config=cfg, state=state, max_leverage=ctx.config.risk.max_total_leverage)
 
 
 def _agent_job_id(idempotency_key: str) -> str:

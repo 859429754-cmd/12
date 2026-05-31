@@ -150,6 +150,7 @@ class TrendStrategy(BaseStrategy):
         position: PositionSnapshot,
         equity: float,
         ai_multiplier: float,
+        leverage: float = 4.0,
     ) -> StrategySignal:
         df = self.add_indicators(candles)
         cfg = self.config
@@ -188,7 +189,8 @@ class TrendStrategy(BaseStrategy):
         volume_ok = volume > vma * cfg.volume_multiple if cfg.use_volume_filter else True
         momentum_long_ok, momentum_short_ok = self._momentum_filter_ok(last)
 
-        base_nominal = equity * self.config.position_fraction * 4.0 * ai_multiplier
+        target_leverage = max(float(leverage or 0.0), 0.0)
+        base_nominal = equity * self.config.position_fraction * target_leverage * ai_multiplier
         qty = max(base_nominal / close, 0.0) if close > 0 else 0.0
 
         long_condition = (
@@ -252,6 +254,8 @@ class TrendStrategy(BaseStrategy):
                 "entry_stop_atr": atr_value,
                 "atr_stop_multiple": cfg.atr_stop_multiple,
                 "position_fraction": cfg.position_fraction,
+                "target_leverage": target_leverage,
+                "base_nominal": base_nominal,
                 "profile_name": cfg.profile_name,
                 "strategy_enabled": cfg.enabled,
                 "stop_loss_estimate": stop_loss_estimate,

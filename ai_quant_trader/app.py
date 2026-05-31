@@ -800,6 +800,7 @@ class TradingApp:
             position,
             equity,
             ai_multiplier=1.0,
+            leverage=float(self.config.risk.max_total_leverage),
         )
         stop_signal = self._fixed_atr_stop_signal(symbol, timeframe, candles, position)
         return stop_signal or signal

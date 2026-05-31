@@ -293,7 +293,7 @@ def activate_strategy(strategy_id: str, symbols: list[str], operator_id: str = "
         "symbols": symbols,
         "live_enabled": live_enabled,
         "operator_id": operator_id,
-        "note": "自定义策略已激活。它只替换本地技术信号来源，不能绕过AI、授权、同方向不加仓和4倍总杠杆上限。",
+        "note": "自定义策略已激活。它只替换本地技术信号来源，不能绕过AI、授权、同方向不加仓和配置的总杠杆上限。",
     }
     STRATEGY_LAB_DIR.mkdir(parents=True, exist_ok=True)
     ACTIVE_STRATEGY_PATH.write_text(json.dumps(active, ensure_ascii=False, indent=2), encoding="utf-8")

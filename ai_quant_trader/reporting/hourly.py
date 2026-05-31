@@ -258,7 +258,7 @@ class HourlyReportBuilder:
             "ai_confidence_too_low": "AI置信度不足，暂不交易。",
             "news_major_conflict": "消息面与开仓方向冲突，禁止开仓。",
             "orderflow_conflict": "多交易所订单流与开仓方向冲突，禁止开仓。",
-            "max_total_leverage_reached": "总仓位已达到4倍杠杆硬上限。",
+            "max_total_leverage_reached": "总仓位已达到配置的杠杆硬上限。",
             "entry_allowed_by_consensus": "技术面、AI、消息面和订单流形成足够同向共识。",
             "same_direction_position_exists": "检测到同方向已有持仓，禁止重复加仓。",
             "exit_signal_allowed_even_when_opening_paused": "技术平仓信号允许执行。",

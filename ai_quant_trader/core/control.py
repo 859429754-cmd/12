@@ -7,7 +7,7 @@ from typing import Any
 
 import yaml
 
-from ai_quant_trader.core.models import TrendStrategyConfig
+from ai_quant_trader.core.models import MAX_CONFIGURABLE_LEVERAGE, TrendStrategyConfig
 from ai_quant_trader.core.state import RuntimeState
 from ai_quant_trader.storage.sqlite import SQLiteStore
 
@@ -34,7 +34,7 @@ PARAM_RULES: dict[str, dict[str, Any]] = {
     "risk.min_confidence_to_trade": {"type": float, "min": 0.1, "max": 0.95, "label": "最低AI置信度"},
     "risk.ai_full_size_confidence": {"type": float, "min": 0.2, "max": 0.98, "label": "满仓AI置信度阈值"},
     "risk.small_position_notional_usdt": {"type": float, "min": 1.0, "max": 200.0, "label": "小仓单次名义金额"},
-    "risk.max_total_leverage": {"type": float, "min": 0.5, "max": 4.0, "label": "全局杠杆硬上限"},
+    "risk.max_total_leverage": {"type": float, "min": 0.5, "max": MAX_CONFIGURABLE_LEVERAGE, "label": "全局杠杆硬上限"},
 }
 
 PARAM_ALIASES: dict[str, str] = {
@@ -188,7 +188,7 @@ class RuntimeControlManager:
                 f"- 已授权标的：{enabled}",
                 f"- 报告标的：{reports}",
                 f"- 消息模式：{news_mode}",
-                "- 安全规则：4倍总杠杆硬上限、AI可否决、本地技术信号必须确认、同方向已有持仓不重复加仓。",
+                "- 安全规则：配置的总杠杆硬上限、AI可否决、本地技术信号必须确认、同方向已有持仓不重复加仓。",
             ]
         )
 
@@ -235,7 +235,7 @@ class RuntimeControlManager:
                 "2. 采集 Binance、OKX、Bybit 公开订单流并聚合。",
                 "3. 采集公开消息面，筛选宏观、政治、地缘和加密重点新闻。",
                 "4. 本地趋势策略先给候选信号，AI再判断趋势/震荡、消息面和订单流是否印证。",
-                "5. 风控最终裁剪仓位：冷启动锁、逐标的授权、AI否决、同方向不加仓和4倍杠杆上限都不能绕过。",
+                "5. 风控最终裁剪仓位：冷启动锁、逐标的授权、AI否决、同方向不加仓和配置的杠杆上限都不能绕过。",
             ]
         )
 
@@ -349,7 +349,7 @@ class RuntimeControlManager:
             "operator_id": operator_id,
             "summary": "切换为正常实盘模式",
             "changes": {"runtime.dry_run": {"old": config.get("runtime", {}).get("dry_run", True), "new": False, "reason": "控制台申请恢复真实运行"}},
-            "risk_note": "实盘切换仍不绕过逐标的授权、冷启动锁、AI否决和4倍杠杆上限。",
+            "risk_note": "实盘切换仍不绕过逐标的授权、冷启动锁、AI否决和配置的杠杆上限。",
             "source": "console",
         }
         return self.store.insert("optimization_proposals", proposal, symbol="live_mode")
@@ -367,7 +367,7 @@ class RuntimeControlManager:
                 "risk.small_position_mode": {"old": config.get("risk", {}).get("small_position_mode", False), "new": True, "reason": "小仓实盘测试"},
                 "risk.small_position_notional_usdt": {"old": config.get("risk", {}).get("small_position_notional_usdt", 20.0), "new": notional, "reason": "小仓实盘测试"},
             },
-            "risk_note": "小仓模式只限制单次名义金额，不改变4倍总杠杆硬上限。",
+            "risk_note": "小仓模式只限制单次名义金额，不改变配置的总杠杆硬上限。",
             "source": "console",
         }
         return self.store.insert("optimization_proposals", proposal, symbol="small_position_mode")

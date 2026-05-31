@@ -93,8 +93,11 @@ class RuntimeConfig(BaseModel):
     price_wakeup_volatility_multiplier: float = Field(default=1.8, ge=1.0, le=10.0)
 
 
+MAX_CONFIGURABLE_LEVERAGE = 20.0
+
+
 class RiskConfig(BaseModel):
-    max_total_leverage: float = Field(default=4.0, gt=0)
+    max_total_leverage: float = Field(default=4.0, gt=0, le=MAX_CONFIGURABLE_LEVERAGE)
     ai_full_size_confidence: float = Field(default=0.75, ge=0, le=1)
     min_confidence_to_trade: float = Field(default=0.55, ge=0, le=1)
     ai_candidate_min_confidence: float = Field(default=0.65, ge=0, le=1)
