@@ -117,6 +117,9 @@ class RegimePatternAnalyzer:
                 "regime_range_score": regime_pattern.range_score,
                 "regime_risk_score": regime_pattern.risk_score,
                 "regime_reason_codes": ",".join(regime_pattern.reason_codes[:8]),
+                "pattern_family": regime_pattern.pattern_family,
+                "pattern_name": regime_pattern.pattern_name,
+                "pattern_breakout_quality": regime_pattern.breakout_quality,
             }
         )
         return signal.model_copy(update={"technical_evidence": evidence})
@@ -157,6 +160,8 @@ class RegimePatternAnalyzer:
             return "trend_continuation"
         if regime_candidate == "range":
             return "range_rotation"
+        if pattern.pattern_family in {"compression", "channel", "continuation", "reversal", "breakout", "range"}:
+            return f"{pattern.pattern_family}_structure"
         if pattern.pattern_type in {"symmetrical_triangle", "ascending_triangle", "descending_triangle"}:
             return "compression_transition"
         return "uncertain_structure"
@@ -229,7 +234,18 @@ class RegimePatternAnalyzer:
         return self._clip(atr_shock * 0.45 + high_vol * 0.35 + unclear)
 
     def _pattern_trend_bonus(self, pattern: PatternCandidate) -> float:
-        if pattern.pattern_type in {"ascending_triangle", "descending_triangle", "falling_wedge", "rising_wedge"} and pattern.breakout_direction:
+        if pattern.pattern_type in {
+            "ascending_triangle",
+            "descending_triangle",
+            "falling_wedge",
+            "rising_wedge",
+            "rectangle_breakout",
+            "generic_breakout",
+            "ascending_channel",
+            "descending_channel",
+            "bull_flag",
+            "bear_flag",
+        } and pattern.breakout_direction:
             return 1.0
         if pattern.breakout_direction:
             return 0.65

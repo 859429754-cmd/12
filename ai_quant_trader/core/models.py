@@ -273,11 +273,19 @@ class DenseZone(BaseModel):
 class PatternCandidate(BaseModel):
     symbol: str
     pattern_type: str = "unknown"
+    pattern_family: str = "unknown"
     confidence: float = Field(default=0.0, ge=0, le=1)
     upper_boundary: float | None = None
     lower_boundary: float | None = None
     breakout_direction: Side | None = None
     invalidation_price: float | None = None
+    upper_slope: float | None = None
+    lower_slope: float | None = None
+    width_ratio: float | None = None
+    upper_touches: int = Field(default=0, ge=0)
+    lower_touches: int = Field(default=0, ge=0)
+    sample_bars: int = Field(default=0, ge=0)
+    evidence_codes: list[str] = Field(default_factory=list)
 
 
 class RegimePattern(BaseModel):
