@@ -45,3 +45,9 @@ python -m compileall ai_quant_trader tests scripts
 python -m pytest -q
 cd console && npm.cmd run build
 ```
+
+## Clone Install
+
+For copying this system to another workstation or cloud server, use:
+
+- `docs/clone-install-runbook.md`
