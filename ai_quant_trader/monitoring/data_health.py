@@ -95,9 +95,10 @@ class DataHealthMonitor:
         return parsed.astimezone(UTC) if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
     def _timeframe_seconds(self, timeframe: str) -> int:
-        unit = timeframe[-1:].lower()
+        raw = str(timeframe or "1h").strip()
+        unit = raw[-1:]
         try:
-            value = int(timeframe[:-1])
+            value = int(raw[:-1])
         except ValueError:
             return 3600
         if unit == "m":
@@ -106,4 +107,8 @@ class DataHealthMonitor:
             return value * 3600
         if unit == "d":
             return value * 86400
+        if unit == "w":
+            return value * 7 * 86400
+        if unit == "M":
+            return value * 30 * 86400
         return 3600

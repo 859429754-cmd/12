@@ -39,6 +39,13 @@ def test_data_health_blocks_stale_ohlcv() -> None:
     assert "ohlcv_stale" in report.reason
 
 
+def test_data_health_distinguishes_month_from_minute_timeframe() -> None:
+    monitor = DataHealthMonitor(stale_data_seconds=300, news_max_age_hours=6)
+
+    assert monitor._timeframe_seconds("15m") == 15 * 60
+    assert monitor._timeframe_seconds("1M") == 30 * 24 * 60 * 60
+
+
 def test_data_health_blocks_empty_orderflow() -> None:
     candles = pd.DataFrame(
         [

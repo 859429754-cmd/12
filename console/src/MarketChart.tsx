@@ -19,6 +19,9 @@ export function MarketChart({
   decisions = [],
   denseZone,
   height = 560,
+  timeframe = "1h",
+  timeframeOptions = [],
+  onTimeframeChange,
 }: {
   candles: Candle[];
   profile?: StrategyProfile;
@@ -26,6 +29,9 @@ export function MarketChart({
   decisions?: DbRow[];
   denseZone?: DenseZonePayload;
   height?: number;
+  timeframe?: string;
+  timeframeOptions?: string[];
+  onTimeframeChange?: (value: string) => void;
 }) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -201,21 +207,38 @@ export function MarketChart({
             <ChartStat label="量" value={focus?.volume} compact />
           </div>
         </div>
-        <div className="flex gap-1 overflow-x-auto pb-1 lg:flex-wrap lg:justify-end lg:overflow-visible">
-          {(["7d", "30d", "90d", "all"] as const).map((item) => (
-            <ChartButton key={item} active={range === item} onClick={() => setRange(item)}>{rangeLabel(item)}</ChartButton>
-          ))}
-          <ChartButton active={showKc} onClick={() => setShowKc((value) => !value)}>KC</ChartButton>
-          <ChartButton active={showEma} onClick={() => setShowEma((value) => !value)}>EMA</ChartButton>
-          <ChartButton active={showVolume} onClick={() => setShowVolume((value) => !value)}>成交量</ChartButton>
-          <ChartButton active={showOrders} onClick={() => setShowOrders((value) => !value)}>订单</ChartButton>
-          <ChartButton active={showAi} onClick={() => setShowAi((value) => !value)}>AI</ChartButton>
-          <ChartButton active={markerDensity === "full"} onClick={() => setMarkerDensity((value) => value === "compact" ? "full" : "compact")}>
-            {markerDensity === "compact" ? "精简标记" : "全部标记"}
-          </ChartButton>
-          <ChartButton active={showDense} onClick={() => setShowDense((value) => !value)}>密集区</ChartButton>
-          <ChartButton active={false} onClick={() => chartRef.current?.timeScale().scrollToRealTime()}>最新</ChartButton>
-          <ChartButton active={expanded} onClick={() => setExpanded((value) => !value)}>{expanded ? "退出全屏" : "全屏"}</ChartButton>
+        <div className="min-w-0 space-y-1 lg:flex lg:flex-wrap lg:justify-end lg:gap-1 lg:space-y-0">
+          {timeframeOptions.length ? (
+            <div className="flex flex-wrap items-center gap-1">
+              <ChartToolbarLabel>周期</ChartToolbarLabel>
+              {timeframeOptions.map((item) => (
+                <ChartButton key={item} active={timeframe === item} onClick={() => onTimeframeChange?.(item)}>
+                  {timeframeLabel(item)}
+                </ChartButton>
+              ))}
+              <ChartToolbarDivider />
+            </div>
+          ) : null}
+          <div className="flex flex-wrap items-center gap-1">
+            <ChartToolbarLabel>范围</ChartToolbarLabel>
+            {(["7d", "30d", "90d", "all"] as const).map((item) => (
+              <ChartButton key={item} active={range === item} onClick={() => setRange(item)}>{rangeLabel(item)}</ChartButton>
+            ))}
+            <ChartToolbarDivider />
+          </div>
+          <div className="flex flex-wrap gap-1 pb-1 lg:pb-0">
+            <ChartButton active={showKc} onClick={() => setShowKc((value) => !value)}>KC</ChartButton>
+            <ChartButton active={showEma} onClick={() => setShowEma((value) => !value)}>EMA</ChartButton>
+            <ChartButton active={showVolume} onClick={() => setShowVolume((value) => !value)}>成交量</ChartButton>
+            <ChartButton active={showOrders} onClick={() => setShowOrders((value) => !value)}>订单</ChartButton>
+            <ChartButton active={showAi} onClick={() => setShowAi((value) => !value)}>AI</ChartButton>
+            <ChartButton active={markerDensity === "full"} onClick={() => setMarkerDensity((value) => value === "compact" ? "full" : "compact")}>
+              {markerDensity === "compact" ? "精简标记" : "全部标记"}
+            </ChartButton>
+            <ChartButton active={showDense} onClick={() => setShowDense((value) => !value)}>密集区</ChartButton>
+            <ChartButton active={false} onClick={() => chartRef.current?.timeScale().scrollToRealTime()}>最新</ChartButton>
+            <ChartButton active={expanded} onClick={() => setExpanded((value) => !value)}>{expanded ? "退出全屏" : "全屏"}</ChartButton>
+          </div>
         </div>
       </div>
       <div className="relative flex-1 bg-[#07111f]">
@@ -244,6 +267,18 @@ function ChartButton({ active, onClick, children }: { active: boolean; onClick: 
       {children}
     </button>
   );
+}
+
+function ChartToolbarLabel({ children }: { children: ReactNode }) {
+  return (
+    <span className="flex h-8 shrink-0 items-center rounded-lg border border-[#263246] bg-[#0b1220] px-2 text-[10px] text-[#94a3b8]">
+      {children}
+    </span>
+  );
+}
+
+function ChartToolbarDivider() {
+  return <span className="mx-1 hidden h-8 w-px shrink-0 bg-[#263246] sm:block" />;
 }
 
 function ChartHoverPanel({ candle, prev, visibleStats }: { candle: Candle; prev: Candle | null; visibleStats: VisibleWindowStats }) {
@@ -293,6 +328,18 @@ function formatChartNumber(value: unknown, digits = 2) {
 
 function rangeLabel(value: ChartRange) {
   return value === "7d" ? "7D" : value === "30d" ? "30D" : value === "90d" ? "90D" : "ALL";
+}
+
+function timeframeLabel(value: string) {
+  const labels: Record<string, string> = {
+    "15m": "15分",
+    "1h": "1小时",
+    "4h": "4小时",
+    "1d": "1日",
+    "1w": "周线",
+    "1M": "月线",
+  };
+  return labels[value] || value;
 }
 
 type VisibleWindowStats = {

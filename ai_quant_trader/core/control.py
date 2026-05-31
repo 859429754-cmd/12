@@ -34,6 +34,7 @@ PARAM_RULES: dict[str, dict[str, Any]] = {
     "risk.min_confidence_to_trade": {"type": float, "min": 0.1, "max": 0.95, "label": "最低AI置信度"},
     "risk.ai_full_size_confidence": {"type": float, "min": 0.2, "max": 0.98, "label": "满仓AI置信度阈值"},
     "risk.small_position_notional_usdt": {"type": float, "min": 1.0, "max": 200.0, "label": "小仓单次名义金额"},
+    "risk.max_total_leverage": {"type": float, "min": 0.5, "max": 4.0, "label": "全局杠杆硬上限"},
 }
 
 PARAM_ALIASES: dict[str, str] = {
@@ -65,6 +66,9 @@ PARAM_ALIASES: dict[str, str] = {
     "开仓置信度": "risk.min_confidence_to_trade",
     "满仓置信度": "risk.ai_full_size_confidence",
     "小仓金额": "risk.small_position_notional_usdt",
+    "杠杆上限": "risk.max_total_leverage",
+    "最大杠杆": "risk.max_total_leverage",
+    "全局杠杆": "risk.max_total_leverage",
 }
 
 SYMBOL_PARAM_TO_GLOBAL = {

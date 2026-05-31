@@ -43,6 +43,8 @@ TIMEFRAME_MS: dict[str, int] = {
     "1h": 60 * 60_000,
     "4h": 4 * 60 * 60_000,
     "1d": 24 * 60 * 60_000,
+    "1w": 7 * 24 * 60 * 60_000,
+    "1M": 30 * 24 * 60 * 60_000,
 }
 
 
@@ -489,7 +491,7 @@ class MarketDataClient:
         limit_per_call: int,
         max_candles: int,
     ) -> pd.DataFrame:
-        bar = {"1h": "1H", "4h": "4H", "1d": "1D"}.get(timeframe, timeframe)
+        bar = {"1h": "1H", "4h": "4H", "1d": "1D", "1w": "1W", "1M": "1M"}.get(timeframe, timeframe)
         inst_id = f"{symbol.split('/')[0].upper()}-USDT-SWAP"
         tf_ms = TIMEFRAME_MS.get(timeframe, TIMEFRAME_MS["1h"])
         before = end_ms + tf_ms

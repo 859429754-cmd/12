@@ -136,14 +136,19 @@ class BacktestCostModel:
 
 
 def timeframe_hours(timeframe: str) -> float:
-    value = str(timeframe or "").strip().lower()
+    raw = str(timeframe or "").strip()
+    value = raw.lower()
     try:
+        if raw.endswith("M"):
+            return max(float(raw[:-1]) * 24.0 * 30, 1 / 60)
         if value.endswith("m"):
             return max(float(value[:-1]) / 60.0, 1 / 60)
         if value.endswith("h"):
             return max(float(value[:-1]), 1 / 60)
         if value.endswith("d"):
             return max(float(value[:-1]) * 24.0, 1 / 60)
+        if value.endswith("w"):
+            return max(float(value[:-1]) * 24.0 * 7, 1 / 60)
     except ValueError:
         return 1.0
     return 1.0

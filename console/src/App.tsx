@@ -45,6 +45,19 @@ import { JsonBlock, Metric, Surface, button, danger, errText, input, mono, num, 
 const DEFAULT_SYMBOL = "ETH/USDT:USDT";
 const WORKSPACE_IDS: WorkspaceId[] = ["dashboard", "market", "strategy", "ai", "agent", "execution", "data"];
 const OPERATION_CODE_STORAGE_KEY = "aiq_operation_code";
+const CHART_TIMEFRAMES = ["15m", "1h", "4h", "1d", "1w", "1M"];
+
+function chartCandleLimits(timeframe: string) {
+  const map: Record<string, { fast: number; full: number }> = {
+    "15m": { fast: 1200, full: 5000 },
+    "1h": { fast: 1200, full: 5000 },
+    "4h": { fast: 900, full: 3000 },
+    "1d": { fast: 700, full: 1500 },
+    "1w": { fast: 260, full: 520 },
+    "1M": { fast: 120, full: 240 },
+  };
+  return map[timeframe] || map["1h"];
+}
 
 export function App() {
   const [workspace, setWorkspace] = useState<WorkspaceId>(() => readWorkspaceHash());
@@ -102,7 +115,8 @@ export function App() {
         { symbol, source: "unavailable", last: null, warning: "实时价格接口暂时未返回。" },
       ).then(setTicker);
       const candleBase = `/api/market/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${timeframe}&source=${source}`;
-      void safe(api<CandleResponse>(`${candleBase}&limit=1200`, { retries: 0, timeoutMs: 9000 }), {
+      const candleLimits = chartCandleLimits(timeframe);
+      void safe(api<CandleResponse>(`${candleBase}&limit=${candleLimits.fast}`, { retries: 0, timeoutMs: 9000 }), {
         items: [],
         warning: "K线接口暂时未返回，已保留上一轮界面状态。",
       }).then((nextCandles) => {
@@ -113,7 +127,7 @@ export function App() {
           setWarning(nextCandles.warning || "");
         }
       });
-      void safe(api<CandleResponse>(`${candleBase}&limit=5000`, { retries: 0, timeoutMs: 25000 }), {
+      void safe(api<CandleResponse>(`${candleBase}&limit=${candleLimits.full}`, { retries: 0, timeoutMs: 25000 }), {
         items: [],
         warning: "",
       }).then((nextCandles) => {
@@ -718,7 +732,17 @@ function WorkspaceBody({
 }) {
   const selectedProfile = platform?.strategy_profiles.find((item) => item.symbol === symbol);
   if (workspace === "strategy") {
-    return <StrategyWorkspace symbol={symbol} setSymbol={setSymbol} symbols={symbols} platform={platform} profile={selectedProfile} />;
+    return (
+      <StrategyWorkspace
+        symbol={symbol}
+        setSymbol={setSymbol}
+        symbols={symbols}
+        platform={platform}
+        profile={selectedProfile}
+        riskSummary={riskSummary}
+        status={runtimeStatus}
+      />
+    );
   }
   if (workspace === "dashboard") {
     return (
@@ -839,7 +863,7 @@ function MarketWorkspace({
   const localLow = Math.min(...windowCandles.map((item) => item.low).filter(Number.isFinite));
   const volume = latest?.volume || 0;
   const params = profile?.params || {};
-  const timeframes = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"];
+  const timeframes = CHART_TIMEFRAMES;
   return (
     <section className="min-h-0 space-y-4 overflow-auto pr-1">
       <Surface
@@ -856,7 +880,7 @@ function MarketWorkspace({
             <select className={`${input} ${mono}`} value={timeframe} onChange={(event) => setTimeframe(event.target.value)}>
               {timeframes.map((item) => (
                 <option key={item} value={item}>
-                  {item}
+                  {chartTimeframeLabel(item)}
                 </option>
               ))}
             </select>
@@ -878,7 +902,7 @@ function MarketWorkspace({
           <Metric label="成交量" value={num(volume, 2)} />
           <Metric label="K线数量" value={num(candles.length, 0)} />
         </div>
-        <div className="mt-4 flex gap-2 overflow-x-auto pb-1 text-[11px] text-[#94a3b8] sm:flex-wrap sm:overflow-visible">
+        <div className="mt-4 flex flex-wrap gap-2 pb-1 text-[11px] text-[#94a3b8]">
           <ChartChip label="EMA" value={String(params.ema_length || 89)} />
           <ChartChip label="KC" value={`${params.kc_length || 20}/${params.kc_scalar || 2.8}`} />
           <ChartChip label="ATR" value={String(params.atr_length || 14)} />
@@ -888,9 +912,19 @@ function MarketWorkspace({
           {warning ? <span className="rounded-full border border-[#854d0e] bg-[#241806] px-3 py-1 text-[#facc15]">{warning}</span> : null}
         </div>
         <div className="mt-3">
-          <MarketChart candles={candles} profile={profile} orders={orders} decisions={decisions} denseZone={denseZone?.payload} height={700} />
+          <MarketChart
+            candles={candles}
+            profile={profile}
+            orders={orders}
+            decisions={decisions}
+            denseZone={denseZone?.payload}
+            height={700}
+            timeframe={timeframe}
+            timeframeOptions={timeframes}
+            onTimeframeChange={setTimeframe}
+          />
         </div>
-        <div className="mt-3 flex gap-3 overflow-x-auto pb-1 text-[11px] text-[#94a3b8] sm:flex-wrap sm:overflow-visible">
+        <div className="mt-3 flex flex-wrap gap-3 pb-1 text-[11px] text-[#94a3b8]">
           <span><span className="text-[#22c55e]">■</span> 阳线 / 成交量</span>
           <span><span className="text-[#fb7185]">■</span> 阴线 / 成交量</span>
           <span><span className="text-[#e5e7eb]">━</span> EMA 过滤线</span>
@@ -917,6 +951,18 @@ function ChartChip({ label, value }: { label: string; value: string }) {
       {label}: <span className={mono}>{value}</span>
     </span>
   );
+}
+
+function chartTimeframeLabel(value: string) {
+  const labels: Record<string, string> = {
+    "15m": "15分钟",
+    "1h": "1小时",
+    "4h": "4小时",
+    "1d": "1日",
+    "1w": "周线",
+    "1M": "月线",
+  };
+  return labels[value] || value;
 }
 
 function DenseZonePanel({ denseZone }: { denseZone?: DenseZonePayload }) {
@@ -954,12 +1000,16 @@ function StrategyWorkspace({
   symbols,
   platform,
   profile,
+  riskSummary,
+  status,
 }: {
   symbol: string;
   setSymbol: (value: string) => void;
   symbols: string[];
   platform: PlatformOverview | null;
   profile: StrategyProfile | undefined;
+  riskSummary: Record<string, unknown> | null;
+  status: StatusResponse | null;
 }) {
   return (
     <section className="min-h-0 space-y-5 overflow-auto pr-1">
@@ -992,7 +1042,7 @@ function StrategyWorkspace({
           </div>
         </Surface>
       </div>
-      <StrategyParameterEditor symbol={symbol} profile={profile} />
+      <StrategyParameterEditor symbol={symbol} profile={profile} riskSummary={riskSummary} status={status} />
       <BacktestPanel symbol={symbol} setSymbol={setSymbol} symbols={symbols} profile={profile} />
     </section>
   );
@@ -1094,16 +1144,27 @@ function contractValueLabel(value: unknown) {
 }
 
 const EDITABLE_STRATEGY_PARAMS = [
-  { key: "kc_length", path: "strategy.trend.kc_length", label: "KC中轨周期", step: "1", min: 5, max: 100 },
-  { key: "kc_scalar", path: "strategy.trend.kc_scalar", label: "KC通道宽度", step: "0.1", min: 0.5, max: 8 },
-  { key: "atr_length", path: "strategy.trend.atr_length", label: "ATR周期", step: "1", min: 5, max: 100 },
-  { key: "atr_stop_multiple", path: "strategy.trend.atr_stop_multiple", label: "ATR止损倍数", step: "0.1", min: 0.2, max: 20 },
-  { key: "vma_length", path: "strategy.trend.vma_length", label: "成交量均线周期", step: "1", min: 5, max: 100 },
-  { key: "volume_multiple", path: "strategy.trend.volume_multiple", label: "成交量放大倍数", step: "0.1", min: 0.5, max: 8 },
-  { key: "ema_length", path: "strategy.trend.ema_length", label: "EMA过滤周期", step: "1", min: 20, max: 300 },
+  { key: "kc_length", path: "strategy.trend.kc_length", label: "KC中轨周期", step: "1", min: 5, max: 100, scope: "symbol" },
+  { key: "kc_scalar", path: "strategy.trend.kc_scalar", label: "KC通道宽度", step: "0.1", min: 0.5, max: 8, scope: "symbol" },
+  { key: "atr_length", path: "strategy.trend.atr_length", label: "ATR周期", step: "1", min: 5, max: 100, scope: "symbol" },
+  { key: "atr_stop_multiple", path: "strategy.trend.atr_stop_multiple", label: "ATR止损倍数", step: "0.1", min: 0.2, max: 20, scope: "symbol" },
+  { key: "vma_length", path: "strategy.trend.vma_length", label: "成交量均线周期", step: "1", min: 5, max: 100, scope: "symbol" },
+  { key: "volume_multiple", path: "strategy.trend.volume_multiple", label: "成交量放大倍数", step: "0.1", min: 0.5, max: 8, scope: "symbol" },
+  { key: "ema_length", path: "strategy.trend.ema_length", label: "EMA过滤周期", step: "1", min: 20, max: 300, scope: "symbol" },
+  { key: "max_total_leverage", path: "risk.max_total_leverage", label: "全局杠杆硬上限", step: "0.1", min: 0.5, max: 4, scope: "global" },
 ] as const;
 
-function StrategyParameterEditor({ symbol, profile }: { symbol: string; profile?: StrategyProfile }) {
+function StrategyParameterEditor({
+  symbol,
+  profile,
+  riskSummary,
+  status,
+}: {
+  symbol: string;
+  profile?: StrategyProfile;
+  riskSummary: Record<string, unknown> | null;
+  status: StatusResponse | null;
+}) {
   const [values, setValues] = useState<Record<string, string>>({});
   const [proposals, setProposals] = useState<Array<DbRow>>([]);
   const [submitting, setSubmitting] = useState("");
@@ -1122,11 +1183,14 @@ function StrategyParameterEditor({ symbol, profile }: { symbol: string; profile?
   useEffect(() => {
     const next: Record<string, string> = {};
     EDITABLE_STRATEGY_PARAMS.forEach((item) => {
-      next[item.key] = String(params[item.key] ?? "");
+      const current = item.scope === "global"
+        ? riskSummary?.max_total_leverage ?? status?.risk?.max_total_leverage ?? 4
+        : params[item.key];
+      next[item.key] = String(current ?? "");
     });
     setValues(next);
     setMessage("");
-  }, [profile?.symbol, profile?.profile_name]);
+  }, [profile?.symbol, profile?.profile_name, riskSummary?.max_total_leverage, status?.risk?.max_total_leverage]);
 
   useEffect(() => {
     void loadProposals();
@@ -1148,7 +1212,7 @@ function StrategyParameterEditor({ symbol, profile }: { symbol: string; profile?
           operator_id: "console",
           path: item.path,
           value,
-          symbols: [symbol],
+          symbols: item.scope === "global" ? [] : [symbol],
         }),
       });
       setMessage(`已创建 ${item.label} 参数提案 #${String(result.proposal_id || "--")}，审批后生效。`);
@@ -1185,7 +1249,9 @@ function StrategyParameterEditor({ symbol, profile }: { symbol: string; profile?
       </div>
       <div className="grid grid-cols-1 gap-3 xl:grid-cols-2 2xl:grid-cols-4">
         {EDITABLE_STRATEGY_PARAMS.map((item) => {
-          const current = params[item.key];
+          const current = item.scope === "global"
+            ? riskSummary?.max_total_leverage ?? status?.risk?.max_total_leverage ?? 4
+            : params[item.key];
           const changed = String(current ?? "") !== String(values[item.key] ?? "");
           return (
             <div key={item.key} className="rounded-2xl border border-[#263246] bg-[#101a2d] p-3">
@@ -1194,6 +1260,7 @@ function StrategyParameterEditor({ symbol, profile }: { symbol: string; profile?
                   <div className="text-xs font-semibold text-[#e5eefb]">{item.label}</div>
                   <div className="mt-1 text-[10px] text-[#7b8798]">
                     当前值 <span className={mono}>{num(current, 4)}</span> / 范围 {item.min}-{item.max}
+                    {item.scope === "global" ? " / 全局硬风控" : " / 当前标的"}
                   </div>
                 </div>
                 <span className={`rounded-full px-2 py-1 text-[10px] ${changed ? "bg-[#241806] text-[#facc15]" : "bg-[#052e1a] text-[#22c55e]"}`}>
@@ -1292,6 +1359,7 @@ function paramPathLabel(path: string) {
     vma_length: "成交量均线周期",
     volume_multiple: "成交量放大倍数",
     ema_length: "EMA过滤周期",
+    max_total_leverage: "全局杠杆硬上限",
   };
   return labels[shortKey] || shortKey;
 }
@@ -2673,9 +2741,9 @@ function AiBrainWorkspace({
   const latestDecision = status?.latest_decisions?.[symbol]?.payload || decisions[0]?.payload || { state: "等待下一次AI判断" };
   const reviewRuns = platform?.latest_ai_review_runs || [];
   return (
-    <section className="min-h-0 space-y-5 overflow-auto pr-1">
+    <section className="min-h-0 space-y-4 overflow-auto sm:space-y-5 sm:pr-1">
       <Surface title={<><BrainCircuit size={13} /> DeepSeek 五档决策中心</>}>
-        <div className="grid grid-cols-6 gap-3">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 2xl:grid-cols-6">
           <Metric label="接入状态" value={ai.api_key_configured ? "已配置" : "未配置"} tone={ai.api_key_configured ? "good" : "warn"} />
           <Metric label="常规模型" value={String(ai.decision_model || "--")} />
           <Metric label="突发筛查" value={String(ai.emergency_screening_model || "--")} />
@@ -2688,7 +2756,7 @@ function AiBrainWorkspace({
         </div>
       </Surface>
 
-      <div className="grid grid-cols-5 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
         <AiLevelCard level="满仓" scale="100%" condition="技术、趋势、新闻、订单流/密集区强共识，AI 置信度达标。" tone="good" />
         <AiLevelCard level="强仓" scale="75%" condition="五分制评分较强，但未满足满仓共识条件。" tone="good" />
         <AiLevelCard level="标准仓" scale="50%" condition="趋势有效，部分确认因子仍需折扣。" tone="warn" />
@@ -2696,9 +2764,9 @@ function AiBrainWorkspace({
         <AiLevelCard level="阻断" scale="0%" condition="震荡/方向冲突/置信度不足/硬风控触发。" tone="bad" />
       </div>
 
-      <div className="grid min-h-0 grid-cols-[minmax(0,1fr)_420px] gap-5 overflow-hidden">
+      <div className="grid min-h-0 grid-cols-1 gap-4 2xl:grid-cols-[minmax(0,1fr)_420px]">
         <Surface title={<><ShieldCheck size={13} /> AI 不可越权边界</>}>
-          <div className="grid grid-cols-2 gap-3 text-xs text-[#94a3b8]">
+          <div className="grid grid-cols-1 gap-3 text-xs text-[#94a3b8] sm:grid-cols-2">
             <Guardrail title="不能绕过策略信号" body="当前真实执行仍以本地趋势策略触发为入口，AI 只能确认、降仓或否决。" />
             <Guardrail title="不能绕过授权" body="冷启动暂停、逐标的授权、同向持仓禁止重复加仓都在本地风控层强制执行。" />
             <Guardrail title="不能突破杠杆上限" body="总名义仓位必须被裁剪到权益乘以全局杠杆上限以内。" />
@@ -2772,7 +2840,7 @@ function DecisionRow({ row }: { row: DbRow }) {
         <div className="font-semibold text-[#e5eefb]">{row.symbol ? shortSymbol(row.symbol) : "系统"}</div>
         <div className={`${mono} text-[11px] text-[#94a3b8]`}>{row.created_at}</div>
       </div>
-      <div className="mt-2 grid grid-cols-5 gap-2">
+      <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-5">
         <Metric label="状态" value={regime} />
         <Metric label="方向" value={direction} />
         <Metric label="动作" value={action} />
@@ -2953,9 +3021,9 @@ function ExecutionWorkspace({
   const trendChannel = channels.find((item) => item.channel === "trend");
   const rangeChannel = channels.find((item) => item.channel === "range");
   return (
-    <section className="min-h-0 space-y-5 overflow-auto pr-1">
+    <section className="min-h-0 space-y-4 overflow-auto sm:space-y-5 sm:pr-1">
       <Surface title={<><ShieldCheck size={13} /> 实盘安全链路</>}>
-        <div className="grid grid-cols-6 gap-3">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 2xl:grid-cols-6">
           <Metric label="执行模式" value={executionMode === "live" ? "真实网关" : "模拟网关"} tone={executionMode === "live" ? "warn" : "good"} />
           <Metric label="交易模式" value={status?.trade_mode || platform?.platform.trade_mode || "--"} />
           <Metric label="开仓状态" value={status?.opening_paused ? "已暂停" : "允许"} tone={status?.opening_paused ? "warn" : "good"} />
@@ -2963,7 +3031,7 @@ function ExecutionWorkspace({
           <Metric label="权益估算" value={num(totalEquity)} />
           <Metric label="最大名义" value={num(maxNotional)} />
         </div>
-        <div className="mt-4 grid grid-cols-5 gap-3">
+        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
           <ExecutionStep title="控制台/智能体" body="只能提交动作请求，不能直接碰交易所密钥。" done />
           <ExecutionStep title="策略信号" body="必须来自本地策略引擎，AI 不能凭空开仓。" done />
           <ExecutionStep title="AI 五档" body="只允许确认、降仓、阻断，不允许突破硬风控。" done />
@@ -2974,7 +3042,7 @@ function ExecutionWorkspace({
 
       <div className="grid grid-cols-1 gap-5 2xl:grid-cols-[minmax(0,1fr)_430px]">
         <Surface title={<><ServerCog size={13} /> 策略运行通道</>}>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
             <StrategyChannelCard
               title="趋势策略运行"
               account={trendChannel?.account_label || "账号1：趋势策略 API"}
@@ -3009,7 +3077,7 @@ function ExecutionWorkspace({
 
       <AccountSlotManager accountSlots={accountSlots} busy={busy} postAction={postAction} />
 
-      <div className="grid grid-cols-4 gap-5">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 2xl:grid-cols-4">
         <Surface title={<><Wallet size={13} /> 账户与风控</>}>
           <div className="grid grid-cols-2 gap-3">
             <Metric label="USDT总额" value={num(balance?.total_usdt ?? balance?.usdt_total ?? usdt.total)} />
@@ -3051,7 +3119,7 @@ function ExecutionWorkspace({
         <Surface title={<><Wallet size={13} /> 持仓快照</>}>
           <div className="max-h-[440px] overflow-auto">
             {positions.length ? (
-              <table className="w-full text-left text-xs">
+              <table className="min-w-[720px] w-full text-left text-xs">
                 <thead className="sticky top-0 bg-[#101a2d] text-[#94a3b8]">
                   <tr><th className="p-2">标的</th><th>方向</th><th>数量</th><th>开仓价</th><th>标记价</th><th>未实现盈亏</th></tr>
                 </thead>
@@ -3104,7 +3172,7 @@ function StrategyChannelCard({
       <div className={`${mono} mt-2 text-xs text-[#2454ff]`}>{account}</div>
       <div className="mt-2 text-xs leading-5 text-[#94a3b8]">{body}</div>
       {details.length ? (
-        <div className="mt-3 grid grid-cols-3 gap-2">
+        <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
           {details.map((detail) => (
             <div key={detail} className="rounded-xl border border-[#263246] bg-[#0b1220] px-3 py-2 text-[11px] text-[#94a3b8]">
               {detail}
@@ -3220,7 +3288,7 @@ function AccountSlotCard({
           {item?.configured ? "已配置" : "未配置"}
         </span>
       </div>
-      <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
+      <div className="mt-3 grid grid-cols-1 gap-2 text-xs sm:grid-cols-3">
         <Metric label="版本" value={num(item?.version, 0)} />
         <Metric label="Key尾号" value={item?.key_tail || "-"} />
         <Metric label="实盘路由" value={item?.gateway_binding === "active" ? "已绑定" : "待绑定"} tone={item?.gateway_binding === "active" ? "good" : "warn"} />

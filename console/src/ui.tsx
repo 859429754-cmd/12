@@ -35,14 +35,14 @@ export function Metric({ label, value, tone = "default" }: { label: string; valu
   return (
     <div className="rounded-lg border border-[#263246] bg-[#101a2d] p-3">
       <div className="text-[11px] text-[#94a3b8]">{label}</div>
-      <div className={`${mono} mt-1 truncate text-sm font-semibold ${toneClass}`}>{value}</div>
+      <div className={`${mono} mt-1 min-w-0 break-words text-sm font-semibold ${toneClass}`}>{value}</div>
     </div>
   );
 }
 
 export function JsonBlock({ data, maxHeight = "max-h-80" }: { data: unknown; maxHeight?: string }) {
   return (
-    <pre className={`${maxHeight} overflow-auto whitespace-pre-wrap rounded-xl border border-[#263246] bg-[#07111f] p-3 text-[11px] text-[#cbd5e1]`}>
+    <pre className={`${maxHeight} max-w-full overflow-auto whitespace-pre-wrap break-words rounded-xl border border-[#263246] bg-[#07111f] p-3 text-[11px] text-[#cbd5e1]`}>
       {JSON.stringify(data, null, 2)}
     </pre>
   );

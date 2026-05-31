@@ -118,6 +118,33 @@ def test_console_status_strategy_and_workbench(tmp_path: Path, monkeypatch) -> N
     assert "worker_heartbeats" in metrics_body
     assert "storage" in metrics_body
 
+
+def test_console_can_create_global_max_leverage_proposal(tmp_path: Path, monkeypatch) -> None:
+    for key in ["GATEIO_API_KEY", "GATEIO_API_SECRET", "GATEIO_TREND_API_KEY", "GATEIO_TREND_API_SECRET"]:
+        monkeypatch.setenv(key, "")
+    config_path = tmp_path / "config.yaml"
+    write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl", ["ETH/USDT:USDT"])
+    client = TestClient(create_app(str(config_path)))
+
+    created = client.post(
+        "/api/proposals/parameter",
+        json={
+            "operator_id": "console",
+            "path": "risk.max_total_leverage",
+            "value": 3.2,
+            "symbols": [],
+        },
+    )
+    assert created.status_code == 200
+    proposal_id = created.json()["proposal_id"]
+
+    approved = client.post(f"/api/proposals/{proposal_id}/approve", json={"operator_id": "console"})
+    assert approved.status_code == 200
+
+    strategy = client.get("/api/strategy/config")
+    assert strategy.status_code == 200
+    assert strategy.json()["risk"]["max_total_leverage"] == 3.2
+
     prometheus = client.get("/metrics")
     assert prometheus.status_code == 200
     assert "ai_quant_readiness_status" in prometheus.text

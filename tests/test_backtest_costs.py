@@ -9,6 +9,7 @@ from ai_quant_trader.strategy.lab import (
     backtest_trend_strategy,
     intrabar_path_labels,
     pessimistic_intrabar_exit,
+    timeframe_hours,
 )
 from tests.test_strategy_trend import _candles_with_breakout
 
@@ -141,6 +142,11 @@ def test_ai_overlay_guard_rejects_score_regression_even_when_return_improves() -
     }
 
     assert _is_negative_ai_overlay(result, baseline) is True
+
+
+def test_timeframe_hours_distinguishes_month_from_minute() -> None:
+    assert timeframe_hours("15m") == 0.25
+    assert timeframe_hours("1M") == 24.0 * 30
 
 
 def _cost_breakout_candles(direction: str, next_volume: float = 1000.0) -> pd.DataFrame:
