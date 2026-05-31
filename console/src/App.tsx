@@ -903,7 +903,6 @@ function MarketWorkspace({
           <Metric label="K线数量" value={num(candles.length, 0)} />
         </div>
         <div className="mt-4 flex flex-wrap gap-2 pb-1 text-[11px] text-[#94a3b8]">
-          <ChartChip label="EMA" value={String(params.ema_length || 89)} />
           <ChartChip label="KC" value={`${params.kc_length || 20}/${params.kc_scalar || 2.8}`} />
           <ChartChip label="ATR" value={String(params.atr_length || 14)} />
           <ChartChip label="VOL" value={String(params.volume_multiple || "--")} />
@@ -1109,8 +1108,6 @@ function StrategyParameterGrid({ profile }: { profile?: StrategyProfile }) {
       <Metric label="ATR止损" value={num(params.atr_stop_multiple ?? 1.5, 2)} />
       <Metric label="成交量过滤" value={String(params.use_volume_filter ?? true) === "true" ? "开启" : "关闭"} />
       <Metric label="成交量倍数" value={num(params.volume_multiple ?? 2.5, 2)} />
-      <Metric label="EMA过滤" value={String(params.use_ema_filter ?? false) === "true" ? "开启" : "关闭"} />
-      <Metric label="EMA周期" value={String(params.ema_length || 89)} />
       <Metric label="动量过滤" value={String(params.momentum_filter || "KDJ")} />
       <Metric label="KDJ周期" value={String(params.kdj_length || 9)} />
     </div>
@@ -1150,7 +1147,6 @@ const EDITABLE_STRATEGY_PARAMS = [
   { key: "atr_stop_multiple", path: "strategy.trend.atr_stop_multiple", label: "ATR止损倍数", step: "0.1", min: 0.2, max: 20, scope: "symbol" },
   { key: "vma_length", path: "strategy.trend.vma_length", label: "成交量均线周期", step: "1", min: 5, max: 100, scope: "symbol" },
   { key: "volume_multiple", path: "strategy.trend.volume_multiple", label: "成交量放大倍数", step: "0.1", min: 0.5, max: 8, scope: "symbol" },
-  { key: "ema_length", path: "strategy.trend.ema_length", label: "EMA过滤周期", step: "1", min: 20, max: 300, scope: "symbol" },
   { key: "max_total_leverage", path: "risk.max_total_leverage", label: "全局杠杆硬上限", step: "0.1", min: 0.5, max: 20, scope: "global" },
 ] as const;
 

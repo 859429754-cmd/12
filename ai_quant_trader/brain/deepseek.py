@@ -254,7 +254,6 @@ class DeepSeekBrain:
             "task": "根据最近交易与决策数据，给出量化策略优化建议。只输出JSON。",
             "days": days,
             "allowed_parameter_paths": [
-                "strategy.trend.ema_length",
                 "strategy.trend.kc_length",
                 "strategy.trend.kc_scalar",
                 "strategy.trend.vma_length",
