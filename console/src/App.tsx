@@ -184,7 +184,7 @@ export function App() {
   const showRightRail = workspace !== "dashboard";
 
   return (
-    <main className="grid h-screen grid-cols-[252px_minmax(0,1fr)] overflow-hidden bg-[#07111f] text-[#e5eefb]">
+    <main className="grid h-screen grid-cols-[68px_minmax(0,1fr)] overflow-hidden bg-[#07111f] text-[#e5eefb] xl:grid-cols-[252px_minmax(0,1fr)]">
       <ShellNav
         platform={platform}
         workspace={workspace}
@@ -210,7 +210,7 @@ export function App() {
         operationCode={operationCode}
         setOperationCode={setOperationCode}
       />
-      <div className={`grid min-h-0 flex-1 gap-4 overflow-hidden p-4 ${showRightRail ? "grid-cols-[minmax(0,1fr)_320px]" : "grid-cols-[minmax(0,1fr)]"}`}>
+      <div className={`grid min-h-0 flex-1 gap-4 overflow-auto p-3 sm:p-4 ${showRightRail ? "grid-cols-[minmax(0,1fr)] xl:grid-cols-[minmax(0,1fr)_320px]" : "grid-cols-[minmax(0,1fr)]"}`}>
         <WorkspaceBody
           workspace={workspace}
           symbol={symbol}
@@ -346,11 +346,11 @@ function ShellNav({
   ];
   return (
     <aside className="flex min-h-0 flex-col border-r border-[#1f2a3d] bg-[#08111f] shadow-[10px_0_30px_rgba(0,0,0,0.35)]">
-      <div className="flex h-16 shrink-0 items-center gap-2 border-b border-[#1f2a3d] px-4">
+      <div className="flex h-16 shrink-0 items-center justify-center gap-2 border-b border-[#1f2a3d] px-2 xl:justify-start xl:px-4">
         <div className="grid h-9 w-9 place-items-center rounded-xl bg-[#2454ff] text-base font-black text-white shadow-lg shadow-blue-950/40">
           Q
         </div>
-        <div className="min-w-0">
+        <div className="hidden min-w-0 xl:block">
           <div className="truncate text-base font-bold tracking-tight text-[#dbeafe]">量化 AI 工作台</div>
           <div className="truncate text-[10px] text-[#94a3b8]">策略内核 / AI 风控</div>
         </div>
@@ -361,18 +361,18 @@ function ShellNav({
           return (
             <button
               key={item.id}
-              className={`mb-1 flex h-10 w-full items-center gap-2 rounded-xl px-3 text-left text-sm transition ${
+              className={`mb-1 flex h-10 w-full items-center justify-center gap-2 rounded-xl px-0 text-left text-sm transition xl:justify-start xl:px-3 ${
                 active ? "bg-[#1d4ed8] text-white shadow-inner shadow-blue-950/30" : "text-[#94a3b8] hover:bg-[#111827] hover:text-[#e5eefb]"
               }`}
               onClick={() => setWorkspace(item.id)}
             >
               {workspaceIcon(item.id)}
-              <span className="font-medium">{workspaceLabel(item.id, platform)}</span>
+              <span className="hidden font-medium xl:inline">{workspaceLabel(item.id, platform)}</span>
             </button>
           );
         })}
       </nav>
-      <div className="min-h-0 flex-1 overflow-auto border-t border-[#1f2a3d] bg-[#07111f] p-2">
+      <div className="hidden min-h-0 flex-1 overflow-auto border-t border-[#1f2a3d] bg-[#07111f] p-2 xl:block">
         <LeftRail
           workspace={workspace}
           symbol={symbol}
@@ -415,7 +415,7 @@ function TopBar({
     setMenuOpen(false);
   };
   return (
-    <header className="relative flex h-16 shrink-0 items-center gap-3 border-b border-[#1f2a3d] bg-[#0b1220] px-4 shadow-sm shadow-black/30">
+    <header className="relative flex h-16 shrink-0 items-center gap-2 border-b border-[#1f2a3d] bg-[#0b1220] px-2 shadow-sm shadow-black/30 sm:gap-3 sm:px-4">
       <button
         className={`grid h-10 w-10 place-items-center rounded-xl border border-[#263246] bg-[#111827] text-[#94a3b8] transition hover:border-[#3b82f6] hover:text-white ${
           menuOpen ? "border-[#3b82f6] text-white shadow-sm" : ""
@@ -460,7 +460,7 @@ function TopBar({
           </div>
         </div>
       ) : null}
-      <div className="min-w-[220px]">
+      <div className="min-w-0 flex-1 sm:min-w-[180px] sm:flex-none">
         <div className="text-[11px] uppercase tracking-wide text-[#94a3b8]">工作区</div>
         <div className="text-lg font-semibold text-[#e5eefb]">{workspaceLabel(workspace, platform)}</div>
       </div>
@@ -471,7 +471,7 @@ function TopBar({
       </div>
       <div className="ml-auto flex min-w-0 items-center gap-3 text-[11px] text-[#94a3b8]">
         {warning ? <span className="max-w-[440px] truncate rounded-full border border-[#854d0e] bg-[#241806] px-3 py-2 text-[#facc15]">{warning}</span> : null}
-        <label className="flex h-10 items-center gap-2 rounded-xl border border-[#263246] bg-[#111827] px-2 sm:px-3">
+        <label className="hidden h-10 items-center gap-2 rounded-xl border border-[#263246] bg-[#111827] px-2 md:flex sm:px-3">
           <KeyRound size={13} />
           <span className="hidden whitespace-nowrap sm:inline">操作验证码</span>
           <input
@@ -483,7 +483,7 @@ function TopBar({
             onChange={(event) => setOperationCode(event.target.value)}
           />
         </label>
-        <span className={`rounded-full border px-3 py-2 ${status?.opening_paused ? "border-[#854d0e] bg-[#241806] text-[#facc15]" : "border-[#14532d] bg-[#052e1a] text-[#22c55e]"}`}>
+        <span className={`hidden rounded-full border px-3 py-2 sm:inline-flex ${status?.opening_paused ? "border-[#854d0e] bg-[#241806] text-[#facc15]" : "border-[#14532d] bg-[#052e1a] text-[#22c55e]"}`}>
           {status?.opening_paused ? "开仓已暂停" : "允许开仓"}
         </span>
         <button className={button} onClick={refresh}>
@@ -773,7 +773,7 @@ function MarketWorkspace({
       <Surface
         title={<><BarChart3 size={13} /> 专业行情图表</>}
         action={
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <select className={`${input} ${mono}`} value={symbol} onChange={(event) => setSymbol(event.target.value)}>
               {symbols.map((item) => (
                 <option key={item} value={item}>
@@ -798,7 +798,7 @@ function MarketWorkspace({
           </div>
         }
       >
-        <div className="grid grid-cols-6 gap-2">
+        <div className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6">
           <Metric label="最新价" value={num(latest?.close)} tone={changePct >= 0 ? "good" : "bad"} />
           <Metric label="涨跌幅" value={pct(changePct)} tone={changePct >= 0 ? "good" : "bad"} />
           <Metric label="最高" value={num(latest?.high)} />
@@ -806,7 +806,7 @@ function MarketWorkspace({
           <Metric label="成交量" value={num(volume, 2)} />
           <Metric label="K线数量" value={num(candles.length, 0)} />
         </div>
-        <div className="mt-4 flex flex-wrap items-center gap-2 text-[11px] text-[#53627a]">
+        <div className="mt-4 flex flex-wrap items-center gap-2 text-[11px] text-[#94a3b8]">
           <ChartChip label="EMA" value={String(params.ema_length || 89)} />
           <ChartChip label="KC" value={`${params.kc_length || 20}/${params.kc_scalar || 2.8}`} />
           <ChartChip label="ATR" value={String(params.atr_length || 14)} />
@@ -818,9 +818,9 @@ function MarketWorkspace({
         <div className="mt-3">
           <MarketChart candles={candles} profile={profile} orders={orders} decisions={decisions} denseZone={denseZone?.payload} height={700} />
         </div>
-        <div className="mt-3 flex flex-wrap gap-3 text-[11px] text-[#53627a]">
-          <span><span className="text-[#0a9f5a]">■</span> 阳线 / 成交量</span>
-          <span><span className="text-[#e11d48]">■</span> 阴线 / 成交量</span>
+        <div className="mt-3 flex flex-wrap gap-3 text-[11px] text-[#94a3b8]">
+          <span><span className="text-[#22c55e]">■</span> 阳线 / 成交量</span>
+          <span><span className="text-[#fb7185]">■</span> 阴线 / 成交量</span>
           <span><span className="text-[#1f2937]">━</span> EMA 过滤线</span>
           <span><span className="text-[#2454ff]">━</span> 肯特纳上下轨</span>
           <span><span className="text-[#64748b]">━</span> 肯特纳中轨</span>
@@ -949,21 +949,21 @@ function StrategyListPanel({
               key={item}
               className={`w-full rounded-2xl border p-4 text-left transition ${
                 active
-                  ? "border-[#2454ff] bg-[#eef3ff] shadow-[0_12px_30px_rgba(36,84,255,0.12)]"
-                  : "border-[#dfe7f1] bg-[#f8fbff] hover:border-[#a8b9d3]"
+                  ? "border-[#60a5fa] bg-[#102a5c] shadow-[0_12px_30px_rgba(37,99,235,0.22)]"
+                  : "border-[#263246] bg-[#101a2d] hover:border-[#3b82f6]"
               }`}
               onClick={() => setSymbol(item)}
             >
               <div className="flex items-center justify-between">
-                <span className="rounded-lg bg-white px-2 py-1 text-[11px] font-semibold text-[#2454ff] shadow-sm">
+                <span className="rounded-lg border border-[#263246] bg-[#0b1220] px-2 py-1 text-[11px] font-semibold text-[#93c5fd] shadow-sm">
                   Gate.io
                 </span>
-                <span className={`rounded-full px-2 py-1 text-[11px] ${profile?.enabled ? "bg-[#e7f8ee] text-[#0a9f5a]" : "bg-[#fff7e6] text-[#b7791f]"}`}>
+                <span className={`rounded-full px-2 py-1 text-[11px] ${profile?.enabled ? "bg-[#052e1a] text-[#22c55e]" : "bg-[#241806] text-[#facc15]"}`}>
                   {profile?.enabled ? "运行中" : "研究中"}
                 </span>
               </div>
-              <div className="mt-3 text-lg font-semibold text-[#172033]">{shortSymbol(item)}</div>
-              <div className="mt-2 flex items-center justify-between gap-2 text-[11px] text-[#53627a]">
+              <div className="mt-3 text-lg font-semibold text-[#e5eefb]">{shortSymbol(item)}</div>
+              <div className="mt-2 flex items-center justify-between gap-2 text-[11px] text-[#94a3b8]">
                 <span className="min-w-0 truncate">{profile?.profile_name || "待配置档案"}</span>
                 <span className="shrink-0">{profile?.opening_authorized ? "已授权" : "未授权"}</span>
               </div>
@@ -997,8 +997,8 @@ function StrategyParameterGrid({ profile }: { profile?: StrategyProfile }) {
 
 function ContractCard({ title, items }: { title: string; items: Array<[string, string]> }) {
   return (
-    <div className="rounded-2xl border border-[#dfe7f1] bg-[#f8fbff] p-4">
-      <div className="font-semibold text-[#172033]">{title}</div>
+    <div className="rounded-2xl border border-[#263246] bg-[#101a2d] p-4">
+      <div className="font-semibold text-[#e5eefb]">{title}</div>
       <div className="mt-3 grid gap-2 text-xs">
         {items.map(([label, value]) => (
           <BoundaryLine key={label} label={label} value={value} />
@@ -1108,7 +1108,7 @@ function StrategyParameterEditor({ symbol, profile }: { symbol: string; profile?
 
   return (
     <Surface title={<><ShieldCheck size={13} /> 策略参数修改</>}>
-      <div className="mb-3 rounded-xl border border-[#ffdca8] bg-[#fff8ed] p-3 text-[11px] leading-relaxed text-[#8a5a00]">
+      <div className="mb-3 rounded-xl border border-[#854d0e] bg-[#241806] p-3 text-[11px] leading-relaxed text-[#facc15]">
         修改不会直接写入实盘配置，只会创建待审批提案；审批通过后才热加载到策略运行参数。这是为了避免误操作把回测参数直接推到实盘。
       </div>
       <div className="grid grid-cols-1 gap-3 xl:grid-cols-2 2xl:grid-cols-4">
@@ -1116,15 +1116,15 @@ function StrategyParameterEditor({ symbol, profile }: { symbol: string; profile?
           const current = params[item.key];
           const changed = String(current ?? "") !== String(values[item.key] ?? "");
           return (
-            <div key={item.key} className="rounded-2xl border border-[#dfe7f1] bg-[#f8fbff] p-3">
+            <div key={item.key} className="rounded-2xl border border-[#263246] bg-[#101a2d] p-3">
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <div className="text-xs font-semibold text-[#172033]">{item.label}</div>
+                  <div className="text-xs font-semibold text-[#e5eefb]">{item.label}</div>
                   <div className="mt-1 text-[10px] text-[#7b8798]">
                     当前值 <span className={mono}>{num(current, 4)}</span> / 范围 {item.min}-{item.max}
                   </div>
                 </div>
-                <span className={`rounded-full px-2 py-1 text-[10px] ${changed ? "bg-[#fff7e6] text-[#b7791f]" : "bg-[#e7f8ee] text-[#0a9f5a]"}`}>
+                <span className={`rounded-full px-2 py-1 text-[10px] ${changed ? "bg-[#241806] text-[#facc15]" : "bg-[#052e1a] text-[#22c55e]"}`}>
                   {changed ? "待提交" : "未改动"}
                 </span>
               </div>
@@ -1146,9 +1146,9 @@ function StrategyParameterEditor({ symbol, profile }: { symbol: string; profile?
           );
         })}
       </div>
-      <div className="mt-4 overflow-hidden rounded-2xl border border-[#dfe7f1] bg-white">
+      <div className="mt-4 overflow-hidden rounded-2xl border border-[#263246] bg-[#0b1220]">
         <div className="flex h-10 items-center justify-between border-b border-[#e6edf5] px-3 text-xs">
-          <span className="font-semibold text-[#172033]">待审批参数提案</span>
+          <span className="font-semibold text-[#e5eefb]">待审批参数提案</span>
           <button className={button} onClick={() => void loadProposals()}>刷新提案</button>
         </div>
         <div className="max-h-64 overflow-auto">
@@ -1167,7 +1167,7 @@ function StrategyParameterEditor({ symbol, profile }: { symbol: string; profile?
           )}
         </div>
       </div>
-      {message ? <div className="mt-3 rounded-xl border border-[#dfe7f1] bg-white p-3 text-xs text-[#53627a]">{message}</div> : null}
+      {message ? <div className="mt-3 rounded-xl border border-[#263246] bg-[#0b1220] p-3 text-xs text-[#94a3b8]">{message}</div> : null}
     </Surface>
   );
 }
@@ -1186,18 +1186,18 @@ function ParameterProposalRow({
   const payload = row.payload || {};
   const changes = (payload.changes as Record<string, { old?: unknown; new?: unknown }> | undefined) || {};
   return (
-    <div className="grid grid-cols-[minmax(0,1fr)_160px] gap-3 border-b border-[#edf2f7] p-3 text-xs">
+    <div className="grid grid-cols-[minmax(0,1fr)_160px] gap-3 border-b border-[#1f2a3d] p-3 text-xs">
       <div className="min-w-0">
         <div className="flex items-center gap-2">
-          <span className="rounded-full bg-[#fff7e6] px-2 py-1 text-[10px] text-[#b7791f]">待审批</span>
+          <span className="rounded-full bg-[#241806] px-2 py-1 text-[10px] text-[#facc15]">待审批</span>
           <span className={mono}>#{row.id}</span>
           <span className="truncate text-[#7b8798]">{row.created_at}</span>
         </div>
         <div className="mt-2 grid gap-1">
           {Object.entries(changes).map(([path, change]) => (
-            <div key={path} className="rounded-lg bg-[#f8fbff] px-2 py-1">
-              <span className="font-semibold text-[#172033]">{paramPathLabel(path)}</span>
-              <span className={`${mono} ml-2 text-[#53627a]`}>{num(change.old, 4)} → {num(change.new, 4)}</span>
+            <div key={path} className="rounded-lg bg-[#101a2d] px-2 py-1">
+              <span className="font-semibold text-[#e5eefb]">{paramPathLabel(path)}</span>
+              <span className={`${mono} ml-2 text-[#94a3b8]`}>{num(change.old, 4)} → {num(change.new, 4)}</span>
             </div>
           ))}
         </div>
@@ -1257,7 +1257,8 @@ function DashboardWorkspace({
 }) {
   const profile = platform?.strategy_profiles.find((item) => item.symbol === symbol);
   const position = positionSnapshot(positions, symbol);
-  const latestDecision = runtimeStatus?.latest_decisions?.[symbol]?.payload || decisions[0]?.payload || { state: "等待下一次AI判断" };
+  const latestDecision = (runtimeStatus?.latest_decisions?.[symbol]?.payload || decisions[0]?.payload || { state: "等待下一次AI判断" }) as Record<string, unknown>;
+  const latestDecisionParts = decisionParts(latestDecision);
   const latestCandle = candles.at(-1);
   const account = accountSnapshot(balance);
   const newsItems = visibleNewsItems(news).slice(0, 8);
@@ -1343,7 +1344,7 @@ function DashboardWorkspace({
               <HeroMetric label="止损价" value={position?.stopLoss != null ? num(position.stopLoss) : "--"} />
             </div>
             <div className="mt-3 rounded-xl border border-[#263246] bg-[#101a2d] p-3">
-              <BoundaryLine label="密集区位置" value={denseZoneLabel((latestDecision as Record<string, unknown>)?.dense_zone_position)} />
+              <BoundaryLine label="密集区位置" value={denseZoneLabel(decisionValue(latestDecisionParts, ["dense_zone_position", "current_position"]))} />
               <BoundaryLine label="最近订单" value={orders[0] ? orderLifecycleSummary(orders[0].payload) : "暂无订单"} />
             </div>
           </DashboardPanel>
@@ -1632,6 +1633,57 @@ function objectPayload(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
+type DecisionParts = {
+  root: Record<string, unknown>;
+  ai: Record<string, unknown>;
+  risk: Record<string, unknown>;
+  signal: Record<string, unknown>;
+  technical: Record<string, unknown>;
+  event: Record<string, unknown>;
+};
+
+function decisionParts(data: Record<string, unknown>): DecisionParts {
+  const nestedPayload = objectPayload(data.payload);
+  const root = Object.keys(nestedPayload).length ? nestedPayload : objectPayload(data);
+  const signal = objectPayload(root.signal);
+  return {
+    root,
+    ai: objectPayload(root.ai),
+    risk: objectPayload(root.risk),
+    signal,
+    technical: objectPayload(signal.technical_evidence),
+    event: objectPayload(root.event || data.event),
+  };
+}
+
+function decisionValue(parts: DecisionParts, keys: string[], extraSources: Array<Record<string, unknown>> = []): unknown {
+  const sources = [parts.ai, parts.risk, parts.root, parts.signal, parts.technical, parts.event, ...extraSources];
+  for (const key of keys) {
+    for (const source of sources) {
+      const value = source[key];
+      if (value !== undefined && value !== null && value !== "") return value;
+    }
+  }
+  return undefined;
+}
+
+function decisionAction(parts: DecisionParts): unknown {
+  return decisionValue(parts, ["action_suggestion", "veto_action", "action", "state"]);
+}
+
+function decisionReason(parts: DecisionParts): string {
+  return String(
+    decisionValue(parts, ["brief_reason", "reason", "summary", "major_news_title", "title"]) ||
+      "等待下一次 AI 判断。"
+  );
+}
+
+function decisionPatternValue(parts: DecisionParts): unknown {
+  const aiPattern = decisionValue(parts, ["pattern_type"]);
+  if (aiPattern && String(aiPattern) !== "unknown") return aiPattern;
+  return decisionValue(parts, ["regime_pattern_name", "regime_pattern_family", "pattern_type"]);
+}
+
 function numberValue(...values: unknown[]): number | null {
   for (const value of values) {
     const number = Number(value);
@@ -1685,16 +1737,13 @@ function orderStatusLabel(value: unknown) {
 }
 
 function dashboardActionLabel(data: Record<string, unknown>) {
-  const payload = data.payload && typeof data.payload === "object" ? (data.payload as Record<string, unknown>) : data;
-  const body = payload.ai && typeof payload.ai === "object" ? (payload.ai as Record<string, unknown>) : payload;
-  return actionLabel(body.action_suggestion || body.veto_action || payload.action || data.state || "--");
+  return actionLabel(decisionAction(decisionParts(data)));
 }
 
 function dashboardTierLabel(data: Record<string, unknown>) {
-  const payload = data.payload && typeof data.payload === "object" ? (data.payload as Record<string, unknown>) : data;
-  const risk = payload.risk && typeof payload.risk === "object" ? (payload.risk as Record<string, unknown>) : null;
-  if (risk) return `${tierLabel(risk.position_tier)} / ${positionScaleLabel(risk.position_scale)}`;
-  return aiScaleFromConfidence(payload.confidence || data.confidence).label;
+  const parts = decisionParts(data);
+  if (Object.keys(parts.risk).length) return `${tierLabel(parts.risk.position_tier)} / ${positionScaleLabel(parts.risk.position_scale)}`;
+  return aiScaleFromConfidence(decisionValue(parts, ["confidence"])).label;
 }
 
 function ReadinessPanel({ readiness }: { readiness: SystemReadiness | null }) {
@@ -1726,31 +1775,31 @@ function ReadinessPanel({ readiness }: { readiness: SystemReadiness | null }) {
         <Metric label="数据新鲜度" value={healthStatusLabel(dataHealthPayload.status)} tone={dataHealthPayload.status === "ok" ? "good" : dataHealthPayload.status === "block" ? "bad" : "warn"} />
         <Metric label="AI 漂移" value={healthStatusLabel(aiDriftPayload.status)} tone={aiDriftPayload.status === "ok" ? "good" : aiDriftPayload.status === "block" ? "bad" : "warn"} />
       </div>
-      <div className="mt-3 grid grid-cols-3 gap-2 text-[11px] text-[#53627a]">
-        <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3">
-          <div className="font-semibold text-[#172033]">交易所降级说明</div>
+      <div className="mt-3 grid grid-cols-3 gap-2 text-[11px] text-[#94a3b8]">
+        <div className="rounded-xl border border-[#263246] bg-[#101a2d] p-3">
+          <div className="font-semibold text-[#e5eefb]">交易所降级说明</div>
           <div className="mt-1 leading-relaxed">{exchangeSafetyReason(exchangePayload.reason)}</div>
           <div className="mt-1 leading-relaxed">{exchangeSafetyReason(exchangePayload.manual_action)}</div>
         </div>
-        <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3">
-          <div className="font-semibold text-[#172033]">订单状态机</div>
+        <div className="rounded-xl border border-[#263246] bg-[#101a2d] p-3">
+          <div className="font-semibold text-[#e5eefb]">订单状态机</div>
           <div className="mt-1 leading-relaxed">{orderLifecycleSummary(orderLifecyclePayload)}</div>
           <div className="mt-1 leading-relaxed">{workerHeartbeatSummary(workerHeartbeats)}</div>
           <div className="mt-1 leading-relaxed">阻断：{blockedReasons.length ? blockedReasons.join(" / ") : "无"}</div>
         </div>
-        <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3">
-          <div className="font-semibold text-[#172033]">最新新闻风险审计</div>
+        <div className="rounded-xl border border-[#263246] bg-[#101a2d] p-3">
+          <div className="font-semibold text-[#e5eefb]">最新新闻风险审计</div>
           <div className="mt-1 leading-relaxed">{newsRiskSummary(newsRiskPayload)}</div>
         </div>
       </div>
       <div className="mt-3 grid grid-cols-2 gap-2">
         {(readiness?.checks || []).map((check) => (
-          <div key={check.id} className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs">
+          <div key={check.id} className="rounded-xl border border-[#263246] bg-[#101a2d] p-3 text-xs">
             <div className="flex items-center justify-between gap-2">
-              <span className="font-semibold text-[#172033]">{readinessCheckLabel(check.label)}</span>
+              <span className="font-semibold text-[#e5eefb]">{readinessCheckLabel(check.label)}</span>
               <span className={`rounded-full px-2 py-1 text-[10px] ${readinessToneClass(check.status)}`}>{readinessLabel(check.status)}</span>
             </div>
-            <div className="mt-2 text-[11px] leading-relaxed text-[#53627a]">{readinessDetail(check.detail)}</div>
+            <div className="mt-2 text-[11px] leading-relaxed text-[#94a3b8]">{readinessDetail(check.detail)}</div>
           </div>
         ))}
       </div>
@@ -1904,8 +1953,8 @@ function readinessDetail(detail: string) {
 }
 function RoadmapItem({ title, body, done = false }: { title: string; body: string; done?: boolean }) {
   return (
-    <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3">
-      <div className={done ? "text-[#0a9f5a]" : "text-[#b7791f]"}>{title}</div>
+    <div className="rounded-xl border border-[#263246] bg-[#101a2d] p-3">
+      <div className={done ? "text-[#22c55e]" : "text-[#facc15]"}>{title}</div>
       <div className="mt-1">{body}</div>
     </div>
   );
@@ -2091,13 +2140,13 @@ function BacktestPanel({
       action={<span className={mono}>{job?.progress || 0}%</span>}
     >
       <div className="grid gap-3 2xl:grid-cols-[minmax(0,1fr)_360px]">
-        <div className="rounded-2xl border border-[#dfe7f1] bg-[#f8fbff] p-3">
+        <div className="rounded-2xl border border-[#263246] bg-[#101a2d] p-3">
           <div className="mb-3 flex items-center justify-between">
             <div>
-              <div className="text-xs font-semibold text-[#172033]">回测设置</div>
+              <div className="text-xs font-semibold text-[#e5eefb]">回测设置</div>
               <div className="mt-1 text-[11px] text-[#7b8798]">信号使用已收盘K线，成交按下一可交易价格；实盘与回测必须共享同一策略契约。</div>
             </div>
-            <span className="rounded-full bg-white px-3 py-1 text-[11px] text-[#53627a] shadow-sm">
+            <span className="rounded-full bg-[#0b1220] px-3 py-1 text-[11px] text-[#94a3b8] shadow-sm">
               档案 <span className={mono}>{profile?.profile_name || "--"}</span>
             </span>
           </div>
@@ -2139,15 +2188,15 @@ function BacktestPanel({
               <input className={`${input} ${mono} w-full`} value={maxParticipation} onChange={(event) => setMaxParticipation(event.target.value)} />
             </BacktestField>
             <BacktestField label="AI代理过滤">
-              <label className="flex h-9 items-center gap-2 rounded-lg border border-[#d8e1ee] bg-white px-2 text-xs text-[#53627a]">
+              <label className="flex h-9 items-center gap-2 rounded-lg border border-[#263246] bg-[#0b1220] px-2 text-xs text-[#94a3b8]">
                 <input type="checkbox" checked={aiProxy} onChange={(event) => setAiProxy(event.target.checked)} />
                 启用本地代理
               </label>
             </BacktestField>
           </div>
         </div>
-        <div className="rounded-2xl border border-[#dfe7f1] bg-white p-3">
-          <div className="text-xs font-semibold text-[#172033]">执行假设</div>
+        <div className="rounded-2xl border border-[#263246] bg-[#0b1220] p-3">
+          <div className="text-xs font-semibold text-[#e5eefb]">执行假设</div>
           <div className="mt-3 grid gap-2 text-[11px]">
             <BoundaryLine label="初始权益" value="200 USDT" />
             <BoundaryLine label="名义仓位" value={`${num(profile?.backtest_defaults?.notional_multiple, 2)}x`} />
@@ -2163,10 +2212,10 @@ function BacktestPanel({
               导出当前交割单 CSV
             </button>
           </div>
-          {job?.message ? <div className="mt-2 text-[11px] text-[#53627a]">{job.message}</div> : null}
+          {job?.message ? <div className="mt-2 text-[11px] text-[#94a3b8]">{job.message}</div> : null}
         </div>
       </div>
-      {error ? <div className="mt-2 rounded-xl border border-[#ffd1d6] bg-[#fff1f2] p-2 text-[11px] text-[#e11d48]">{error}</div> : null}
+      {error ? <div className="mt-2 rounded-xl border border-[#7f1d1d] bg-[#2a0f14] p-2 text-[11px] text-[#fb7185]">{error}</div> : null}
       {result ? <BacktestMetrics result={result} /> : null}
       {optimization ? <OptimizationView result={optimization} /> : null}
       {trades.length ? <TradeLedgerTable trades={trades} /> : null}
@@ -2203,10 +2252,10 @@ function BacktestMetrics({ result }: { result: BacktestResult }) {
         <Metric label="跳过订单" value={num(result.skipped_orders?.length, 0)} />
       </div>
       {aiApplied ? (
-        <div className="rounded-2xl border border-[#ffdca8] bg-[#fff8ed] p-3">
+        <div className="rounded-2xl border border-[#854d0e] bg-[#241806] p-3">
           <div className="mb-2 flex items-center justify-between text-xs">
-            <span className="font-semibold text-[#8a5a00]">AI代理对比</span>
-            <span className="text-[11px] text-[#8a5a00]">用于评估过滤/减仓是否正优化，不等同真实 DeepSeek 历史调用</span>
+            <span className="font-semibold text-[#facc15]">AI代理对比</span>
+            <span className="text-[11px] text-[#facc15]">用于评估过滤/减仓是否正优化，不等同真实 DeepSeek 历史调用</span>
           </div>
           <div className="grid grid-cols-2 gap-2 lg:grid-cols-6">
             <Metric label="原始收益" value={pct(raw?.total_return_pct)} />
@@ -2224,14 +2273,14 @@ function BacktestMetrics({ result }: { result: BacktestResult }) {
 
 function TradeLedgerTable({ trades }: { trades: BacktestTrade[] }) {
   return (
-    <div className="mt-3 overflow-hidden rounded-2xl border border-[#dfe7f1] bg-white">
+    <div className="mt-3 overflow-hidden rounded-2xl border border-[#263246] bg-[#0b1220]">
       <div className="flex h-10 items-center justify-between border-b border-[#e6edf5] px-3 text-xs">
-        <span className="font-semibold text-[#172033]">交割单明细</span>
+        <span className="font-semibold text-[#e5eefb]">交割单明细</span>
         <span className="text-[11px] text-[#7b8798]">显示前 {Math.min(trades.length, 160)} / {trades.length} 笔</span>
       </div>
       <div className="max-h-72 overflow-auto">
         <table className="w-full min-w-[1180px] text-left text-[10px]">
-          <thead className="sticky top-0 bg-[#f8fbff] text-[#53627a]">
+          <thead className="sticky top-0 bg-[#101a2d] text-[#94a3b8]">
             <tr>
               <th className="px-2 py-2">开仓时间</th>
               <th className="px-2 py-2">方向</th>
@@ -2252,7 +2301,7 @@ function TradeLedgerTable({ trades }: { trades: BacktestTrade[] }) {
           </thead>
           <tbody>
             {trades.slice(0, 160).map((trade, idx) => (
-              <tr key={`${trade.entry_time || idx}-${trade.exit_time || idx}`} className="border-t border-[#edf2f7] text-[#2f3b52]">
+              <tr key={`${trade.entry_time || idx}-${trade.exit_time || idx}`} className="border-t border-[#1f2a3d] text-[#2f3b52]">
                 <td className={`${mono} px-2 py-2`}>{trade.entry_time || "--"}</td>
                 <td className="px-2 py-2">{formatSide(trade.side)}</td>
                 <td className={`${mono} px-2 py-2`}>{num(trade.entry_price, 4)}</td>
@@ -2261,13 +2310,13 @@ function TradeLedgerTable({ trades }: { trades: BacktestTrade[] }) {
                 <td className={`${mono} px-2 py-2`}>{trade.exit_time || "--"}</td>
                 <td className={`${mono} px-2 py-2`}>{num(trade.exit_price, 4)}</td>
                 <td className="px-2 py-2">{trade.exit_reason || "--"}</td>
-                <td className={`${mono} px-2 py-2 ${Number(trade.pnl) >= 0 ? "text-[#0a9f5a]" : "text-[#e11d48]"}`}>{num(trade.pnl, 4)}</td>
+                <td className={`${mono} px-2 py-2 ${Number(trade.pnl) >= 0 ? "text-[#22c55e]" : "text-[#fb7185]"}`}>{num(trade.pnl, 4)}</td>
                 <td className={`${mono} px-2 py-2`}>{pct(trade.return_pct)}</td>
                 <td className={`${mono} px-2 py-2`}>{num(trade.fee_paid, 4)}</td>
                 <td className={`${mono} px-2 py-2`}>{num(trade.slippage_paid, 4)}</td>
                 <td className={`${mono} px-2 py-2`}>{num(trade.funding_paid, 4)}</td>
                 <td className={`${mono} px-2 py-2`}>{pct((trade.fill_ratio ?? 1) * 100)}</td>
-                <td className={`${mono} px-2 py-2 text-[#e11d48]`}>{pct(trade.max_adverse_excursion_pct)}</td>
+                <td className={`${mono} px-2 py-2 text-[#fb7185]`}>{pct(trade.max_adverse_excursion_pct)}</td>
               </tr>
             ))}
           </tbody>
@@ -2334,9 +2383,9 @@ function csvCell(value: unknown) {
 
 function BacktestRunHistory({ runs, onSelect }: { runs: Array<DbRow>; onSelect: (row: DbRow) => void }) {
   return (
-    <div className="mt-3 overflow-hidden rounded-2xl border border-[#dfe7f1] bg-white">
+    <div className="mt-3 overflow-hidden rounded-2xl border border-[#263246] bg-[#0b1220]">
       <div className="flex h-10 items-center justify-between border-b border-[#e6edf5] px-3 text-xs">
-        <span className="font-semibold text-[#172033]">历史回测与寻优记录</span>
+        <span className="font-semibold text-[#e5eefb]">历史回测与寻优记录</span>
         <span className="text-[11px] text-[#7b8798]">来自 SQLite backtest_runs，按当前标的过滤</span>
       </div>
       <div className="max-h-56 overflow-auto">
@@ -2349,11 +2398,11 @@ function BacktestRunHistory({ runs, onSelect }: { runs: Array<DbRow>; onSelect: 
             return (
               <button
                 key={row.id}
-                className="grid w-full grid-cols-[110px_1fr_78px_78px_70px_72px] gap-2 border-b border-[#edf2f7] px-3 py-2 text-left text-[11px] hover:bg-[#f8fbff]"
+                className="grid w-full grid-cols-[110px_1fr_78px_78px_70px_72px] gap-2 border-b border-[#1f2a3d] px-3 py-2 text-left text-[11px] hover:bg-[#101a2d]"
                 onClick={() => onSelect(row)}
               >
                 <span>
-                  <span className={`rounded-full px-2 py-1 ${isOptimization ? "bg-[#fff7e6] text-[#b7791f]" : "bg-[#eaf0ff] text-[#2454ff]"}`}>
+                  <span className={`rounded-full px-2 py-1 ${isOptimization ? "bg-[#241806] text-[#facc15]" : "bg-[#102a5c] text-[#2454ff]"}`}>
                     {isOptimization ? "寻优" : "回测"}
                   </span>
                 </span>
@@ -2379,13 +2428,13 @@ function OptimizationView({ result }: { result: OptimizationResult }) {
   const best = result.best;
   const params = best?.params || {};
   return (
-    <div className="mt-3 rounded-2xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-[11px]">
+    <div className="mt-3 rounded-2xl border border-[#263246] bg-[#101a2d] p-3 text-[11px]">
       <div className="mb-3 flex items-center justify-between">
         <div>
-          <div className="text-xs font-semibold text-[#172033]">参数寻优结果</div>
+          <div className="text-xs font-semibold text-[#e5eefb]">参数寻优结果</div>
           <div className="mt-1 text-[#7b8798]">{String(result.selection_policy || "按验证集收益、回撤、交易数和稳定性综合排序")}</div>
         </div>
-        <span className="rounded-full bg-white px-3 py-1 text-[#53627a] shadow-sm">{num(result.searched_candidates, 0)} 个候选</span>
+        <span className="rounded-full bg-[#0b1220] px-3 py-1 text-[#94a3b8] shadow-sm">{num(result.searched_candidates, 0)} 个候选</span>
       </div>
       <div className="grid grid-cols-2 gap-2 lg:grid-cols-6">
         <Metric label="组合" value={String(params.momentum_filter || "无")} />
@@ -2404,13 +2453,13 @@ function OptimizationView({ result }: { result: OptimizationResult }) {
         <Metric label="验证PF" value={num(best?.validation?.profit_factor, 3)} />
       </div>
       {best?.warnings?.length ? (
-        <div className="mt-2 rounded-xl border border-[#ffdca8] bg-[#fff8ed] p-2 text-[#8a5a00]">
+        <div className="mt-2 rounded-xl border border-[#854d0e] bg-[#241806] p-2 text-[#facc15]">
           {best.warnings.join(" / ")}
         </div>
       ) : null}
-      <div className="mt-3 max-h-36 overflow-auto rounded-xl border border-[#dfe7f1] bg-white">
+      <div className="mt-3 max-h-36 overflow-auto rounded-xl border border-[#263246] bg-[#0b1220]">
         {(result.candidates || []).map((item, idx) => (
-          <div key={idx} className="grid grid-cols-[42px_minmax(0,1fr)_80px_80px_80px_70px] gap-2 border-t border-[#edf2f7] px-2 py-2 first:border-t-0">
+          <div key={idx} className="grid grid-cols-[42px_minmax(0,1fr)_80px_80px_80px_70px] gap-2 border-t border-[#1f2a3d] px-2 py-2 first:border-t-0">
             <span className={mono}>#{idx + 1}</span>
             <span className={`${mono} truncate`}>
               {String(item.params?.momentum_filter || "无")} / KC{num(item.params?.kc_scalar, 2)} / VOL{num(item.params?.volume_multiple, 2)} / ATR{num(item.params?.atr_stop_multiple, 2)}
@@ -2472,7 +2521,7 @@ function AiBrainWorkspace({
 
       <div className="grid min-h-0 grid-cols-[minmax(0,1fr)_420px] gap-5 overflow-hidden">
         <Surface title={<><ShieldCheck size={13} /> AI 不可越权边界</>}>
-          <div className="grid grid-cols-2 gap-3 text-xs text-[#53627a]">
+          <div className="grid grid-cols-2 gap-3 text-xs text-[#94a3b8]">
             <Guardrail title="不能绕过策略信号" body="当前真实执行仍以本地趋势策略触发为入口，AI 只能确认、降仓或否决。" />
             <Guardrail title="不能绕过授权" body="冷启动暂停、逐标的授权、同向持仓禁止重复加仓都在本地风控层强制执行。" />
             <Guardrail title="不能突破杠杆上限" body="总名义仓位必须被裁剪到权益乘以全局杠杆上限以内。" />
@@ -2488,7 +2537,7 @@ function AiBrainWorkspace({
             {decisions.length ? (
               decisions.slice(0, 24).map((row) => <DecisionRow key={`${row.id}-${row.created_at}`} row={row} />)
             ) : (
-              <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs text-[#53627a]">暂无 AI 决策记录。</div>
+              <div className="rounded-xl border border-[#263246] bg-[#101a2d] p-3 text-xs text-[#94a3b8]">暂无 AI 决策记录。</div>
             )}
           </div>
         </Surface>
@@ -2508,20 +2557,20 @@ function AiLevelCard({
   condition: string;
   tone: "good" | "warn" | "bad";
 }) {
-  const toneClass = tone === "good" ? "text-[#0a9f5a]" : tone === "bad" ? "text-[#e11d48]" : "text-[#b7791f]";
+  const toneClass = tone === "good" ? "text-[#22c55e]" : tone === "bad" ? "text-[#fb7185]" : "text-[#facc15]";
   return (
-    <div className="rounded-2xl border border-[#d9e2ef] bg-white p-4 shadow-[0_12px_35px_rgba(26,42,68,0.06)]">
+    <div className="rounded-2xl border border-[#263246] bg-[#0b1220] p-4 shadow-[0_12px_35px_rgba(26,42,68,0.06)]">
       <div className="text-[11px] uppercase text-[#7b8798]">{level}</div>
       <div className={`${mono} mt-1 text-2xl font-bold ${toneClass}`}>{scale}</div>
-      <div className="mt-3 text-xs leading-5 text-[#53627a]">{condition}</div>
+      <div className="mt-3 text-xs leading-5 text-[#94a3b8]">{condition}</div>
     </div>
   );
 }
 
 function Guardrail({ title, body }: { title: string; body: string }) {
   return (
-    <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3">
-      <div className="font-semibold text-[#172033]">{title}</div>
+    <div className="rounded-xl border border-[#263246] bg-[#101a2d] p-3">
+      <div className="font-semibold text-[#e5eefb]">{title}</div>
       <div className="mt-1 leading-5">{body}</div>
     </div>
   );
@@ -2541,10 +2590,10 @@ function DecisionRow({ row }: { row: DbRow }) {
   const confidence = body.confidence ?? "--";
   const direction = String(body.direction || "--");
   return (
-    <div className="mb-2 rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs">
+    <div className="mb-2 rounded-xl border border-[#263246] bg-[#101a2d] p-3 text-xs">
       <div className="flex items-center justify-between gap-3">
-        <div className="font-semibold text-[#172033]">{row.symbol ? shortSymbol(row.symbol) : "系统"}</div>
-        <div className={`${mono} text-[11px] text-[#53627a]`}>{row.created_at}</div>
+        <div className="font-semibold text-[#e5eefb]">{row.symbol ? shortSymbol(row.symbol) : "系统"}</div>
+        <div className={`${mono} text-[11px] text-[#94a3b8]`}>{row.created_at}</div>
       </div>
       <div className="mt-2 grid grid-cols-5 gap-2">
         <Metric label="状态" value={regime} />
@@ -2594,7 +2643,7 @@ function AgentGatewayWorkspace({ platform }: { platform: PlatformOverview | null
           <Metric label="探测结果" value={probe ? `HTTP ${probe.status}` : "未探测"} tone={probe?.ok ? "good" : probe ? "warn" : "default"} />
         </div>
         {probe ? (
-          <div className="mt-3 rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs text-[#53627a]">
+          <div className="mt-3 rounded-xl border border-[#263246] bg-[#101a2d] p-3 text-xs text-[#94a3b8]">
             健康接口返回：{probe.message}。浏览器端不保存智能体访问令牌；如果这里返回 503/401，说明网关未配置或未授权，属于安全阻断。
           </div>
         ) : null}
@@ -2628,7 +2677,7 @@ function AgentGatewayWorkspace({ platform }: { platform: PlatformOverview | null
             {(platform?.latest_backtest_runs || []).length ? (
               (platform?.latest_backtest_runs || []).map((row) => <AgentBacktestRun key={`${row.id}-${row.created_at}`} row={row} />)
             ) : (
-              <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs text-[#53627a]">暂无回测任务。</div>
+              <div className="rounded-xl border border-[#263246] bg-[#101a2d] p-3 text-xs text-[#94a3b8]">暂无回测任务。</div>
             )}
           </div>
         </Surface>
@@ -2650,28 +2699,28 @@ function AgentCapability({
   body: string;
   tone: "good" | "bad";
 }) {
-  const toneClass = tone === "good" ? "text-[#0a9f5a]" : "text-[#e11d48]";
+  const toneClass = tone === "good" ? "text-[#22c55e]" : "text-[#fb7185]";
   return (
-    <div className="rounded-2xl border border-[#dfe7f1] bg-white p-4 shadow-[0_12px_35px_rgba(26,42,68,0.06)]">
+    <div className="rounded-2xl border border-[#263246] bg-[#0b1220] p-4 shadow-[0_12px_35px_rgba(26,42,68,0.06)]">
       <div className="flex items-center justify-between gap-3">
-        <div className="font-semibold text-[#172033]">{title}</div>
-        <span className={`${mono} rounded-full border border-[#dfe7f1] bg-[#f8fbff] px-2 py-1 text-[11px]`}>{scope}</span>
+        <div className="font-semibold text-[#e5eefb]">{title}</div>
+        <span className={`${mono} rounded-full border border-[#263246] bg-[#101a2d] px-2 py-1 text-[11px]`}>{scope}</span>
       </div>
       <div className={`mt-2 text-xl font-bold ${toneClass}`}>{status}</div>
-      <div className="mt-2 text-xs leading-5 text-[#53627a]">{body}</div>
+      <div className="mt-2 text-xs leading-5 text-[#94a3b8]">{body}</div>
     </div>
   );
 }
 
 function EndpointRow({ method, path, scope, note }: { method: string; path: string; scope: string; note: string }) {
   return (
-    <div className="grid grid-cols-[70px_minmax(0,1fr)_64px] items-center gap-3 rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs">
+    <div className="grid grid-cols-[70px_minmax(0,1fr)_64px] items-center gap-3 rounded-xl border border-[#263246] bg-[#101a2d] p-3 text-xs">
       <span className={`${mono} font-semibold text-[#2454ff]`}>{method}</span>
       <div>
-        <div className={`${mono} truncate font-semibold text-[#172033]`}>{path}</div>
-        <div className="mt-1 text-[#53627a]">{note}</div>
+        <div className={`${mono} truncate font-semibold text-[#e5eefb]`}>{path}</div>
+        <div className="mt-1 text-[#94a3b8]">{note}</div>
       </div>
-      <span className="rounded-full bg-white px-2 py-1 text-center text-[11px] text-[#53627a]">scope {scope}</span>
+      <span className="rounded-full bg-[#0b1220] px-2 py-1 text-center text-[11px] text-[#94a3b8]">scope {scope}</span>
     </div>
   );
 }
@@ -2680,10 +2729,10 @@ function AgentBacktestRun({ row }: { row: DbRow }) {
   const payload = row.payload || {};
   const summary = payload.summary && typeof payload.summary === "object" ? (payload.summary as Record<string, unknown>) : {};
   return (
-    <div className="mb-2 rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs">
+    <div className="mb-2 rounded-xl border border-[#263246] bg-[#101a2d] p-3 text-xs">
       <div className="flex items-center justify-between gap-3">
-        <div className="font-semibold text-[#172033]">{shortSymbol(String(row.symbol || payload.symbol || "--"))}</div>
-        <div className={`${mono} text-[11px] text-[#53627a]`}>{row.created_at}</div>
+        <div className="font-semibold text-[#e5eefb]">{shortSymbol(String(row.symbol || payload.symbol || "--"))}</div>
+        <div className={`${mono} text-[11px] text-[#94a3b8]`}>{row.created_at}</div>
       </div>
       <div className="mt-2 grid grid-cols-3 gap-2">
         <Metric label="收益率" value={pct(summary.total_return_pct)} />
@@ -2774,7 +2823,7 @@ function ExecutionWorkspace({
               ]}
             />
           </div>
-          <div className="mt-3 rounded-xl border border-[#ffdca8] bg-[#fff8ed] p-3 text-xs leading-5 text-[#8a5a00]">
+          <div className="mt-3 rounded-xl border border-[#854d0e] bg-[#241806] p-3 text-xs leading-5 text-[#facc15]">
             当前按你的要求采用“单账户独立风控”：趋势账户和震荡账户各自最高 4x。组合总风险允许叠加，但控制台会单独展示，不能把它误认为一个账户的 4x 限制。
           </div>
         </Surface>
@@ -2800,11 +2849,11 @@ function ExecutionWorkspace({
             <button className={danger} disabled={busy} onClick={() => postAction("/api/control/panic-close", { operator_id: "console", symbols: [] })}>
               暂停开仓并一键全平
             </button>
-            <div className="text-[11px] leading-5 text-[#53627a]">这里不提供手动开仓入口。真实开仓必须由策略信号、AI、本地风控和交易网关串联通过。</div>
+            <div className="text-[11px] leading-5 text-[#94a3b8]">这里不提供手动开仓入口。真实开仓必须由策略信号、AI、本地风控和交易网关串联通过。</div>
           </div>
         </Surface>
         <Surface title={<><ServerCog size={13} /> 网关边界</>}>
-          <div className="grid gap-2 text-xs text-[#53627a]">
+          <div className="grid gap-2 text-xs text-[#94a3b8]">
             <BoundaryLine label="业务层" value="不写 dry_run 分支" />
             <BoundaryLine label="模拟运行" value="本地模拟网关，本地记账" />
             <BoundaryLine label="真实运行" value="Gate.io 真实网关，固定 dry_run=false" />
@@ -2812,7 +2861,7 @@ function ExecutionWorkspace({
           </div>
         </Surface>
         <Surface title={<><Database size={13} /> 审计要求</>}>
-          <div className="grid gap-2 text-xs text-[#53627a]">
+          <div className="grid gap-2 text-xs text-[#94a3b8]">
             <BoundaryLine label="订单" value="orders 表留痕" />
             <BoundaryLine label="AI" value="ai_decisions 表留痕" />
             <BoundaryLine label="风控" value="本地风控结论可追踪" />
@@ -2826,7 +2875,7 @@ function ExecutionWorkspace({
           <div className="max-h-[440px] overflow-auto">
             {positions.length ? (
               <table className="w-full text-left text-xs">
-                <thead className="sticky top-0 bg-[#f8fbff] text-[#53627a]">
+                <thead className="sticky top-0 bg-[#101a2d] text-[#94a3b8]">
                   <tr><th className="p-2">标的</th><th>方向</th><th>数量</th><th>开仓价</th><th>标记价</th><th>未实现盈亏</th></tr>
                 </thead>
                 <tbody>
@@ -2834,14 +2883,14 @@ function ExecutionWorkspace({
                 </tbody>
               </table>
             ) : (
-              <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs text-[#53627a]">暂无持仓快照。模拟网关无持仓时这是正常状态。</div>
+              <div className="rounded-xl border border-[#263246] bg-[#101a2d] p-3 text-xs text-[#94a3b8]">暂无持仓快照。模拟网关无持仓时这是正常状态。</div>
             )}
           </div>
         </Surface>
         <Surface title={<><Power size={13} /> 最近订单</>}>
           <div className="max-h-[440px] overflow-auto">
             {orders.length ? orders.slice(0, 30).map((row) => <OrderRow key={`${row.id}-${row.created_at}`} row={row} />) : (
-              <div className="rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs text-[#53627a]">暂无订单记录。</div>
+              <div className="rounded-xl border border-[#263246] bg-[#101a2d] p-3 text-xs text-[#94a3b8]">暂无订单记录。</div>
             )}
           </div>
         </Surface>
@@ -2868,19 +2917,19 @@ function StrategyChannelCard({
   details?: string[];
 }) {
   return (
-    <div className="rounded-2xl border border-[#dfe7f1] bg-[#f8fbff] p-4">
+    <div className="rounded-2xl border border-[#263246] bg-[#101a2d] p-4">
       <div className="flex items-center justify-between gap-3">
-        <div className="font-semibold text-[#172033]">{title}</div>
-        <span className={`rounded-full px-3 py-1 text-[11px] ${liveReady ? "bg-[#e7f8ee] text-[#0a9f5a]" : enabled ? "bg-[#eaf1ff] text-[#2454ff]" : "bg-[#fff7e6] text-[#b7791f]"}`}>
+        <div className="font-semibold text-[#e5eefb]">{title}</div>
+        <span className={`rounded-full px-3 py-1 text-[11px] ${liveReady ? "bg-[#052e1a] text-[#22c55e]" : enabled ? "bg-[#102a5c] text-[#2454ff]" : "bg-[#241806] text-[#facc15]"}`}>
           {status}
         </span>
       </div>
       <div className={`${mono} mt-2 text-xs text-[#2454ff]`}>{account}</div>
-      <div className="mt-2 text-xs leading-5 text-[#53627a]">{body}</div>
+      <div className="mt-2 text-xs leading-5 text-[#94a3b8]">{body}</div>
       {details.length ? (
         <div className="mt-3 grid grid-cols-3 gap-2">
           {details.map((detail) => (
-            <div key={detail} className="rounded-xl border border-[#dfe7f1] bg-white px-3 py-2 text-[11px] text-[#53627a]">
+            <div key={detail} className="rounded-xl border border-[#263246] bg-[#0b1220] px-3 py-2 text-[11px] text-[#94a3b8]">
               {detail}
             </div>
           ))}
@@ -2904,14 +2953,14 @@ function RuntimeModePanel({
     <Surface title={<><Power size={13} /> 模拟 / 实盘模式</>}>
       <div className="grid grid-cols-2 gap-2">
         <button
-          className={`${button} justify-center ${executionMode === "mock" ? "border-[#0a9f5a] text-[#0a9f5a]" : ""}`}
+          className={`${button} justify-center ${executionMode === "mock" ? "border-[#22c55e] text-[#22c55e]" : ""}`}
           disabled={busy}
           onClick={() => postAction("/api/control/runtime-mode", { operator_id: "console", dry_run: true })}
         >
           模拟运行
         </button>
         <button
-          className={`${button} justify-center ${executionMode === "live" ? "border-[#b7791f] text-[#b7791f]" : ""}`}
+          className={`${button} justify-center ${executionMode === "live" ? "border-[#facc15] text-[#facc15]" : ""}`}
           disabled={busy || pin.trim().length < 4}
           onClick={() => postAction("/api/control/runtime-mode", { operator_id: "console", dry_run: false, trade_pin: pin })}
         >
@@ -2925,7 +2974,7 @@ function RuntimeModePanel({
         placeholder="实盘 Trade PIN"
         onChange={(event) => setPin(event.target.value)}
       />
-      <div className="mt-2 text-[11px] leading-5 text-[#53627a]">
+      <div className="mt-2 text-[11px] leading-5 text-[#94a3b8]">
         实盘按钮只切换网关模式，不代表系统已通过实盘验收。未配置 PIN、API、授权或风控检查失败时后端会拒绝。
       </div>
     </Surface>
@@ -2984,13 +3033,13 @@ function AccountSlotCard({
     setApiSecret("");
   };
   return (
-    <div className="rounded-2xl border border-[#dfe7f1] bg-[#f8fbff] p-4">
+    <div className="rounded-2xl border border-[#263246] bg-[#101a2d] p-4">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <div className="font-semibold text-[#172033]">{item?.label || label}</div>
+          <div className="font-semibold text-[#e5eefb]">{item?.label || label}</div>
           <div className="mt-1 text-[11px] text-[#7b8798]">Gate.io USDT 永续 / {slot === "trend" ? "趋势策略" : "震荡策略"}</div>
         </div>
-        <span className={`rounded-full px-3 py-1 text-[11px] ${item?.configured ? "bg-[#e7f8ee] text-[#0a9f5a]" : "bg-[#fff7e6] text-[#b7791f]"}`}>
+        <span className={`rounded-full px-3 py-1 text-[11px] ${item?.configured ? "bg-[#052e1a] text-[#22c55e]" : "bg-[#241806] text-[#facc15]"}`}>
           {item?.configured ? "已配置" : "未配置"}
         </span>
       </div>
@@ -3000,7 +3049,7 @@ function AccountSlotCard({
         <Metric label="实盘路由" value={item?.gateway_binding === "active" ? "已绑定" : "待绑定"} tone={item?.gateway_binding === "active" ? "good" : "warn"} />
       </div>
       {item?.credential_source === "legacy_default_gateio" ? (
-        <div className="mt-2 rounded-xl border border-[#ffdca8] bg-[#fff8ed] px-3 py-2 text-[11px] leading-5 text-[#8a5a00]">
+        <div className="mt-2 rounded-xl border border-[#854d0e] bg-[#241806] px-3 py-2 text-[11px] leading-5 text-[#facc15]">
           正在兼容使用旧版 GATEIO_API_KEY 作为趋势账号。建议后续迁移到 GATEIO_TREND_API_KEY，便于双账户隔离。
         </div>
       ) : null}
@@ -3011,7 +3060,7 @@ function AccountSlotCard({
           更新
         </button>
       </div>
-      <div className="mt-2 text-[11px] text-[#53627a]">
+      <div className="mt-2 text-[11px] text-[#94a3b8]">
         明文只写入运行密钥文件；SQLite 和审计日志只保存指纹与尾号。
       </div>
     </div>
@@ -3040,13 +3089,13 @@ function BoundaryLine({ label, value }: { label: string; value: string }) {
 function PositionRow({ row }: { row: DbRow }) {
   const payload = row.payload || {};
   return (
-    <tr className="border-t border-[#dfe7f1]">
-      <td className="p-2 font-medium text-[#172033]">{shortSymbol(String(row.symbol || payload.symbol || "--"))}</td>
+    <tr className="border-t border-[#263246]">
+      <td className="p-2 font-medium text-[#e5eefb]">{shortSymbol(String(row.symbol || payload.symbol || "--"))}</td>
       <td>{String(payload.side || "--")}</td>
       <td className={mono}>{num(payload.qty, 6)}</td>
       <td className={mono}>{num(payload.entry_price)}</td>
       <td className={mono}>{num(payload.mark_price)}</td>
-      <td className={`${mono} ${Number(payload.unrealized_pnl || 0) >= 0 ? "text-[#0a9f5a]" : "text-[#e11d48]"}`}>{num(payload.unrealized_pnl)}</td>
+      <td className={`${mono} ${Number(payload.unrealized_pnl || 0) >= 0 ? "text-[#22c55e]" : "text-[#fb7185]"}`}>{num(payload.unrealized_pnl)}</td>
     </tr>
   );
 }
@@ -3056,10 +3105,10 @@ function OrderRow({ row }: { row: DbRow }) {
   const side = String(payload.side || payload.action || "--");
   const status = String(payload.status || "--");
   return (
-    <div className="mb-2 rounded-xl border border-[#dfe7f1] bg-[#f8fbff] p-3 text-xs">
+    <div className="mb-2 rounded-xl border border-[#263246] bg-[#101a2d] p-3 text-xs">
       <div className="flex items-center justify-between gap-3">
-        <div className="font-semibold text-[#172033]">{shortSymbol(String(row.symbol || payload.symbol || "--"))}</div>
-        <div className={`${mono} text-[11px] text-[#53627a]`}>{row.created_at}</div>
+        <div className="font-semibold text-[#e5eefb]">{shortSymbol(String(row.symbol || payload.symbol || "--"))}</div>
+        <div className={`${mono} text-[11px] text-[#94a3b8]`}>{row.created_at}</div>
       </div>
       <div className="mt-2 grid grid-cols-4 gap-2">
         <Metric label="方向" value={side} />
@@ -3224,11 +3273,11 @@ function HealthCard({
   tone: "good" | "warn" | "bad";
   rows: Array<[string, string]>;
 }) {
-  const toneClass = tone === "good" ? "bg-[#e7f8ee] text-[#0a9f5a]" : tone === "bad" ? "bg-[#fff1f2] text-[#e11d48]" : "bg-[#fff7e6] text-[#b7791f]";
+  const toneClass = tone === "good" ? "bg-[#052e1a] text-[#22c55e]" : tone === "bad" ? "bg-[#2a0f14] text-[#fb7185]" : "bg-[#241806] text-[#facc15]";
   return (
-    <div className="rounded-2xl border border-[#dfe7f1] bg-[#f8fbff] p-4">
+    <div className="rounded-2xl border border-[#263246] bg-[#101a2d] p-4">
       <div className="flex items-center justify-between gap-3">
-        <div className="font-semibold text-[#172033]">{title}</div>
+        <div className="font-semibold text-[#e5eefb]">{title}</div>
         <span className={`rounded-full px-3 py-1 text-[11px] font-medium ${toneClass}`}>{status}</span>
       </div>
       <div className="mt-3 grid gap-2 text-xs">
@@ -3299,27 +3348,24 @@ function RightRail({
 }
 
 function DecisionSummary({ data, showSizing = true }: { data: Record<string, unknown>; showSizing?: boolean }) {
-  const event = data.event && typeof data.event === "object" ? (data.event as Record<string, unknown>) : null;
-  const payload = data.payload && typeof data.payload === "object" ? (data.payload as Record<string, unknown>) : data;
-  const body = payload.ai && typeof payload.ai === "object" ? (payload.ai as Record<string, unknown>) : payload;
-  const risk = payload.risk && typeof payload.risk === "object" ? (payload.risk as Record<string, unknown>) : null;
-  const regime = String(body.regime || payload.regime || data.regime || event?.event_type || "--");
-  const direction = String(body.direction || payload.direction || data.direction || "--");
-  const action = String(body.action_suggestion || body.veto_action || payload.action || data.state || "--");
-  const confidence = body.confidence ?? payload.confidence ?? data.confidence ?? null;
-  const scale = risk
-    ? { label: tierLabel(risk.position_tier), scale: positionScaleLabel(risk.position_scale) }
+  const parts = decisionParts(data);
+  const regime = String(decisionValue(parts, ["regime", "regime_candidate", "event_type"]) || "--");
+  const direction = String(decisionValue(parts, ["direction"]) || "--");
+  const action = String(decisionAction(parts) || "--");
+  const confidence = decisionValue(parts, ["confidence"]);
+  const scale = Object.keys(parts.risk).length
+    ? { label: tierLabel(parts.risk.position_tier), scale: positionScaleLabel(parts.risk.position_scale) }
     : aiScaleFromConfidence(confidence);
-  const activeTier = risk ? String(risk.position_tier || "block") : tierKeyFromConfidence(confidence);
+  const activeTier = Object.keys(parts.risk).length ? String(parts.risk.position_tier || "block") : tierKeyFromConfidence(confidence);
   const scoreRows: Array<[string, unknown]> = [
-    ["趋势确认", body.trend_confirmation_score],
-    ["震荡风险", body.range_risk_score],
-    ["新闻风险", body.news_risk_score],
-    ["订单流确认", body.orderflow_confirmation_score],
-    ["密集区突破", body.dense_zone_breakout_score],
+    ["趋势确认", decisionValue(parts, ["trend_confirmation_score", "regime_trend_score"])],
+    ["震荡风险", decisionValue(parts, ["range_risk_score", "regime_range_score"])],
+    ["新闻风险", decisionValue(parts, ["news_risk_score"])],
+    ["订单流确认", decisionValue(parts, ["orderflow_confirmation_score"])],
+    ["密集区突破", decisionValue(parts, ["dense_zone_breakout_score"])],
   ];
   return (
-    <div className="mb-3 grid grid-cols-5 gap-2">
+    <div className="mb-3 grid grid-cols-2 gap-2 md:grid-cols-5">
       <Metric label="行情状态" value={regimeLabel(regime)} />
       <Metric label="方向" value={directionLabel(direction)} />
       <Metric label="动作" value={actionLabel(action)} />
@@ -3334,14 +3380,12 @@ function DecisionSummary({ data, showSizing = true }: { data: Record<string, unk
 }
 
 function DecisionRailSummary({ data }: { data: Record<string, unknown> }) {
-  const event = data.event && typeof data.event === "object" ? (data.event as Record<string, unknown>) : null;
-  const payload = data.payload && typeof data.payload === "object" ? (data.payload as Record<string, unknown>) : data;
-  const body = payload.ai && typeof payload.ai === "object" ? (payload.ai as Record<string, unknown>) : payload;
-  const regime = String(body.regime || payload.regime || data.regime || event?.event_type || "--");
-  const direction = String(body.direction || payload.direction || data.direction || "--");
-  const action = String(body.action_suggestion || body.veto_action || payload.action || data.state || "--");
-  const confidence = body.confidence ?? payload.confidence ?? data.confidence ?? null;
-  const reason = String(payload.brief_reason || payload.reason || event?.summary || "等待下一次 AI 判断。");
+  const parts = decisionParts(data);
+  const regime = String(decisionValue(parts, ["regime", "regime_candidate", "event_type"]) || "--");
+  const direction = String(decisionValue(parts, ["direction"]) || "--");
+  const action = String(decisionAction(parts) || "--");
+  const confidence = decisionValue(parts, ["confidence"]);
+  const reason = decisionReason(parts);
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-2 gap-2">
@@ -3351,9 +3395,9 @@ function DecisionRailSummary({ data }: { data: Record<string, unknown> }) {
         <Metric label="置信度" value={confidencePct(confidence)} />
       </div>
       <div className="grid gap-2 text-xs">
-        <BoundaryLine label="消息面" value={alignmentLabel(payload.news_alignment)} />
-        <BoundaryLine label="订单流" value={alignmentLabel(payload.orderflow_alignment)} />
-        <BoundaryLine label="密集区" value={denseZoneLabel(payload.dense_zone_position)} />
+        <BoundaryLine label="消息面" value={alignmentLabel(decisionValue(parts, ["news_alignment"]))} />
+        <BoundaryLine label="订单流" value={alignmentLabel(decisionValue(parts, ["orderflow_alignment"]))} />
+        <BoundaryLine label="密集区" value={denseZoneLabel(decisionValue(parts, ["dense_zone_position", "current_position"]))} />
       </div>
       <div className="rounded-lg border border-[#263246] bg-[#0b1220] p-2 text-[11px] leading-relaxed text-[#94a3b8]">{reason}</div>
     </div>
@@ -3361,14 +3405,12 @@ function DecisionRailSummary({ data }: { data: Record<string, unknown> }) {
 }
 
 function AiSizingRail({ data }: { data: Record<string, unknown> }) {
-  const payload = data.payload && typeof data.payload === "object" ? (data.payload as Record<string, unknown>) : data;
-  const body = payload.ai && typeof payload.ai === "object" ? (payload.ai as Record<string, unknown>) : payload;
-  const risk = payload.risk && typeof payload.risk === "object" ? (payload.risk as Record<string, unknown>) : null;
-  const confidence = body.confidence ?? payload.confidence ?? data.confidence ?? null;
-  const scale = risk
-    ? { label: tierLabel(risk.position_tier), scale: positionScaleLabel(risk.position_scale) }
+  const parts = decisionParts(data);
+  const confidence = decisionValue(parts, ["confidence"]);
+  const scale = Object.keys(parts.risk).length
+    ? { label: tierLabel(parts.risk.position_tier), scale: positionScaleLabel(parts.risk.position_scale) }
     : aiScaleFromConfidence(confidence);
-  const activeTier = risk ? String(risk.position_tier || "block") : tierKeyFromConfidence(confidence);
+  const activeTier = Object.keys(parts.risk).length ? String(parts.risk.position_tier || "block") : tierKeyFromConfidence(confidence);
   const tiers = [
     { key: "block", label: "阻断", scale: "0%" },
     { key: "weak", label: "弱仓", scale: "25%" },
@@ -3439,7 +3481,7 @@ function AiSizingTierStrip({ activeTier, activeScale }: { activeTier: string; ac
     { key: "full", label: "满仓", scale: "100%", body: "强趋势且风险项全部通过。" },
   ];
   return (
-    <div className="col-span-5 rounded-xl border border-[#263246] bg-gradient-to-br from-[#0b1220] to-[#111827] p-3 text-xs shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+    <div className="col-span-2 rounded-xl border border-[#263246] bg-gradient-to-br from-[#0b1220] to-[#111827] p-3 text-xs shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] md:col-span-5">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div>
           <div className="font-semibold text-[#e5eefb]">ETH 实盘五档映射</div>
@@ -3469,16 +3511,15 @@ function AiSizingTierStrip({ activeTier, activeScale }: { activeTier: string; ac
 }
 
 function DecisionNarrative({ data }: { data: Record<string, unknown> }) {
-  const event = data.event && typeof data.event === "object" ? (data.event as Record<string, unknown>) : null;
-  const payload = data.payload && typeof data.payload === "object" ? (data.payload as Record<string, unknown>) : data;
+  const parts = decisionParts(data);
   const rows: Array<[string, string]> = [
-    ["消息面", alignmentLabel(payload.news_alignment)],
-    ["订单流", alignmentLabel(payload.orderflow_alignment)],
-    ["密集区", denseZoneLabel(payload.dense_zone_position)],
-    ["形态", patternLabel(payload.pattern_type)],
-    ["建议", actionLabel(payload.action_suggestion || payload.veto_action || data.action || data.state)],
+    ["消息面", alignmentLabel(decisionValue(parts, ["news_alignment"]))],
+    ["订单流", alignmentLabel(decisionValue(parts, ["orderflow_alignment"]))],
+    ["密集区", denseZoneLabel(decisionValue(parts, ["dense_zone_position", "current_position"]))],
+    ["形态", patternLabel(decisionPatternValue(parts))],
+    ["建议", actionLabel(decisionAction(parts))],
   ];
-  const reason = String(payload.brief_reason || payload.reason || event?.summary || "等待下一次 AI 判断。");
+  const reason = decisionReason(parts);
   return (
     <div className="rounded-xl border border-[#263246] bg-[#101a2d] p-3 text-xs text-[#cbd5e1]">
       <div className="grid gap-2">
@@ -3545,6 +3586,9 @@ function denseZoneLabel(value: unknown) {
     inside_value: "密集区内部",
     inside_value_above_mid: "密集区内偏强",
     inside_value_below_mid: "密集区内偏弱",
+    inside_zone: "密集区内部",
+    inside_zone_near_resistance: "密集区内接近阻力",
+    inside_zone_near_support: "密集区内接近支撑",
     near_resistance: "接近阻力",
     near_support: "接近支撑",
     vacuum_breakout: "真空区突破",
@@ -3566,6 +3610,7 @@ function patternLabel(value: unknown) {
     falling_wedge: "下降楔形",
     rising_wedge: "上升楔形",
     rectangle_breakout: "矩形突破",
+    range_rotation: "区间轮动",
     unknown: "未知",
   };
   return labels[text] || text;
@@ -3653,7 +3698,7 @@ function breakoutStatusLabel(value: unknown) {
 
 export function AppError({ error }: { error: string }) {
   return (
-    <div className="flex h-screen items-center justify-center bg-[#eef2f7] text-[#e11d48]">
+    <div className="flex h-screen items-center justify-center bg-[#07111f] text-[#fb7185]">
       <AlertTriangle className="mr-2" />
       {error}
     </div>
