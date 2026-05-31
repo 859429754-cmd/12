@@ -138,6 +138,19 @@ export type MarketSymbolsResponse = {
 
 export type Candle = { time: string; open: number; high: number; low: number; close: number; volume: number };
 export type CandleResponse = { items: Candle[]; source?: string; warning?: string };
+
+export type MarketTickerResponse = {
+  symbol: string;
+  source: string;
+  requested_source?: string;
+  last?: number | null;
+  bid?: number | null;
+  ask?: number | null;
+  mark?: number | null;
+  index?: number | null;
+  timestamp?: string;
+  warning?: string;
+};
 export type ApiList<T = Record<string, unknown>> = { items: Array<DbRow<T>> };
 export type NewsResponse = ApiList & {
   timeline?: Array<Record<string, unknown>>;

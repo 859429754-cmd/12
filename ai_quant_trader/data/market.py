@@ -81,6 +81,33 @@ class MarketDataClient:
             frame = self._drop_incomplete_tail(frame, timeframe)
         return frame.tail(limit).reset_index(drop=True)
 
+    async def fetch_ticker(
+        self,
+        symbol: str,
+        source: Literal["auto", "gateio", "binance", "okx"] = "auto",
+    ) -> dict[str, Any]:
+        sources = [source] if source != "auto" else ["binance", "gateio", "okx"]
+        last_error = ""
+        for item in sources:
+            try:
+                ticker = await self._fetch_public_ticker(item, symbol)
+                ticker["requested_source"] = source
+                return ticker
+            except Exception as exc:  # noqa: BLE001
+                last_error = f"{item}: {type(exc).__name__}: {exc}"
+        return {
+            "symbol": symbol,
+            "source": "unavailable",
+            "requested_source": source,
+            "last": None,
+            "bid": None,
+            "ask": None,
+            "mark": None,
+            "index": None,
+            "timestamp": datetime.now(tz=UTC).isoformat(),
+            "warning": last_error or "ticker_unavailable",
+        }
+
     async def fetch_ohlcv_history(
         self,
         symbol: str,
@@ -240,6 +267,64 @@ class MarketDataClient:
         if source == "okx":
             return await self._fetch_okx_rest(symbol, timeframe, start_ms, end_ms, limit_per_call, max_candles)
         raise ValueError(f"不支持的原生行情源：{source}")
+
+    async def _fetch_public_ticker(self, source: str, symbol: str) -> dict[str, Any]:
+        if source == "binance":
+            market = f"{symbol.split('/')[0].upper()}USDT"
+            payload = await asyncio.to_thread(self._requests_json, "https://fapi.binance.com/fapi/v1/ticker/bookTicker", {"symbol": market})
+            price_payload = await asyncio.to_thread(self._requests_json, "https://fapi.binance.com/fapi/v1/ticker/price", {"symbol": market})
+            bid = float(payload.get("bidPrice") or 0.0)
+            ask = float(payload.get("askPrice") or 0.0)
+            last = float(price_payload["price"])
+            if bid > 0 and ask > 0 and not (bid <= last <= ask):
+                last = (bid + ask) / 2
+            return {
+                "symbol": symbol,
+                "source": "binance",
+                "last": last,
+                "bid": bid or None,
+                "ask": ask or None,
+                "mark": None,
+                "index": None,
+                "timestamp": datetime.now(tz=UTC).isoformat(),
+                "warning": "",
+            }
+        if source == "gateio":
+            contract = f"{symbol.split('/')[0].upper()}_USDT"
+            payload = await asyncio.to_thread(self._requests_payload, "https://api.gateio.ws/api/v4/futures/usdt/tickers", {"contract": contract})
+            item = payload[0] if isinstance(payload, list) and payload else payload
+            if not isinstance(item, dict):
+                raise RuntimeError("ticker_payload_not_object")
+            return {
+                "symbol": symbol,
+                "source": "gateio",
+                "last": float(item.get("last") or item.get("mark_price") or item.get("index_price")),
+                "bid": float(item["highest_bid"]) if item.get("highest_bid") else None,
+                "ask": float(item["lowest_ask"]) if item.get("lowest_ask") else None,
+                "mark": float(item["mark_price"]) if item.get("mark_price") else None,
+                "index": float(item["index_price"]) if item.get("index_price") else None,
+                "timestamp": datetime.now(tz=UTC).isoformat(),
+                "warning": "",
+            }
+        if source == "okx":
+            inst_id = f"{symbol.split('/')[0].upper()}-USDT-SWAP"
+            payload = await asyncio.to_thread(self._requests_json, "https://www.okx.com/api/v5/market/ticker", {"instId": inst_id})
+            data = payload.get("data") or []
+            if not data:
+                raise RuntimeError("empty_okx_ticker")
+            item = data[0]
+            return {
+                "symbol": symbol,
+                "source": "okx",
+                "last": float(item["last"]),
+                "bid": float(item["bidPx"]) if item.get("bidPx") else None,
+                "ask": float(item["askPx"]) if item.get("askPx") else None,
+                "mark": None,
+                "index": None,
+                "timestamp": datetime.now(tz=UTC).isoformat(),
+                "warning": "",
+            }
+        raise ValueError(f"unsupported_ticker_source:{source}")
 
     async def _fetch_binance_rest(
         self,

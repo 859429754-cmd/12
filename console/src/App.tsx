@@ -31,6 +31,7 @@ import type {
   DbRow,
   ExecutionAccountSlot,
   MarketSymbolsResponse,
+  MarketTickerResponse,
   NewsResponse,
   OptimizationResult,
   PlatformOverview,
@@ -55,6 +56,7 @@ export function App() {
   const [timeframe, setTimeframe] = useState("1h");
   const [source, setSource] = useState("binance");
   const [candles, setCandles] = useState<Candle[]>([]);
+  const [ticker, setTicker] = useState<MarketTickerResponse | null>(null);
   const [orders, setOrders] = useState<Array<DbRow>>([]);
   const [positions, setPositions] = useState<Array<DbRow>>([]);
   const [decisions, setDecisions] = useState<Array<DbRow>>([]);
@@ -127,14 +129,22 @@ export function App() {
       void Promise.all([
         safe(api<NewsResponse>("/api/news/latest?limit=3", { retries: 0, timeoutMs: 15000 }), { items: [], timeline: [], warnings: ["新闻接口暂时未返回，已保留上一轮界面状态。"] }),
         safe(
+          api<MarketTickerResponse>(
+            `/api/market/ticker?symbol=${encodeURIComponent(symbol)}&source=${source === "cryptocompare" ? "auto" : source}`,
+            { retries: 0, timeoutMs: 8000 },
+          ),
+          { symbol, source: "unavailable", last: null, warning: "实时价格接口暂时未返回。" },
+        ),
+        safe(
           api<CandleResponse>(
             `/api/market/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${timeframe}&limit=5000&source=${source}`,
             { retries: 0, timeoutMs: 12000 },
           ),
           { items: [], warning: "K线接口暂时未返回，已保留上一轮界面状态。" },
         ),
-      ]).then(([nextNews, nextCandles]) => {
+      ]).then(([nextNews, nextTicker, nextCandles]) => {
         setNews(nextNews);
+        setTicker(nextTicker);
         if (nextCandles.items?.length) {
           setCandles(nextCandles.items || []);
         }
@@ -221,6 +231,7 @@ export function App() {
           source={source}
           setSource={setSource}
         candles={candles}
+        ticker={ticker}
         warning={warning}
         runtimeStatus={status}
         balance={balance}
@@ -606,6 +617,7 @@ function WorkspaceBody({
   source,
   setSource,
   candles,
+  ticker,
   warning,
   runtimeStatus,
   balance,
@@ -631,6 +643,7 @@ function WorkspaceBody({
   source: string;
   setSource: (value: string) => void;
   candles: Candle[];
+  ticker: MarketTickerResponse | null;
   warning: string;
   runtimeStatus: StatusResponse | null;
   balance: Record<string, unknown> | null;
@@ -664,6 +677,7 @@ function WorkspaceBody({
         denseZone={denseZone}
         news={news}
         candles={candles}
+        ticker={ticker}
         warning={warning}
         readiness={readiness}
         busy={busy}
@@ -1235,6 +1249,7 @@ function DashboardWorkspace({
   denseZone,
   news,
   candles,
+  ticker,
   warning,
   readiness,
   busy,
@@ -1250,6 +1265,7 @@ function DashboardWorkspace({
   denseZone: DbRow<DenseZonePayload> | null;
   news: NewsResponse;
   candles: Candle[];
+  ticker: MarketTickerResponse | null;
   warning: string;
   readiness: SystemReadiness | null;
   busy: boolean;
@@ -1275,7 +1291,9 @@ function DashboardWorkspace({
   const liveReady = profile?.live_ready || readiness?.overall === "ok";
   const aiReady = readiness?.deepseek_ready || Boolean(runtimeStatus?.ai?.enabled);
   const newsAge = news.age_minutes != null ? `${num(news.age_minutes, 1)} 分钟` : "等待刷新";
-  const latestPrice = latestCandle ? num(latestCandle.close) : "--";
+  const realtimePrice = numberValue(ticker?.last, ticker?.mark);
+  const latestPrice = realtimePrice != null ? num(realtimePrice) : latestCandle ? num(latestCandle.close) : "--";
+  const latestPriceLabel = realtimePrice != null ? "实时价" : "K线收盘";
   return (
     <section className="min-h-0 space-y-4 overflow-auto pr-1">
       <div className="rounded-2xl border border-[#263246] bg-[#0b1220] p-4 shadow-[0_18px_44px_rgba(0,0,0,0.30)]">
@@ -1288,8 +1306,13 @@ function DashboardWorkspace({
             <div className="mt-2 flex flex-wrap items-end gap-x-4 gap-y-2">
               <h1 className="text-2xl font-semibold tracking-tight text-[#f8fafc]">{shortSymbol(symbol)} 趋势策略</h1>
               <span className={`${mono} rounded-full border border-[#263246] bg-[#101a2d] px-3 py-1 text-xs text-[#cbd5e1]`}>
-                最新价 {latestPrice}
+                {latestPriceLabel} {latestPrice}
               </span>
+              {realtimePrice != null && latestCandle ? (
+                <span className="rounded-full border border-[#263246] bg-[#101a2d] px-3 py-1 text-xs text-[#94a3b8]">
+                  K线收盘 {num(latestCandle.close)}
+                </span>
+              ) : null}
               <LiveOpsBadge readiness={readinessOverall} mode={mode} />
             </div>
           </div>
@@ -1680,8 +1703,104 @@ function decisionReason(parts: DecisionParts): string {
 
 function decisionPatternValue(parts: DecisionParts): unknown {
   const aiPattern = decisionValue(parts, ["pattern_type"]);
-  if (aiPattern && String(aiPattern) !== "unknown") return aiPattern;
-  return decisionValue(parts, ["regime_pattern_name", "regime_pattern_family", "pattern_type"]);
+  if (!unknownish(aiPattern)) return aiPattern;
+  const structuredPattern = decisionValue(parts, ["regime_pattern_name", "regime_pattern_family", "pattern_name", "pattern_family", "pattern_type"]);
+  if (!unknownish(structuredPattern)) return structuredPattern;
+  return inferPatternFromReason(decisionReason(parts)) || aiPattern || structuredPattern;
+}
+
+function unknownish(value: unknown): boolean {
+  const text = String(value ?? "").trim().toLowerCase();
+  return !text || ["--", "unknown", "none", "null", "undefined", "未知"].includes(text);
+}
+
+function inferPatternFromReason(reason: string): string | null {
+  const text = reason.toLowerCase();
+  if (reason.includes("上升楔形") || text.includes("rising wedge")) return "rising_wedge";
+  if (reason.includes("下降楔形") || text.includes("falling wedge")) return "falling_wedge";
+  if (reason.includes("收敛三角") || reason.includes("对称三角") || text.includes("symmetrical triangle")) return "symmetrical_triangle";
+  if (reason.includes("上升三角") || text.includes("ascending triangle")) return "ascending_triangle";
+  if (reason.includes("下降三角") || text.includes("descending triangle")) return "descending_triangle";
+  if (reason.includes("箱体") || reason.includes("矩形") || text.includes("rectangle") || text.includes("box range")) return "range_rectangle";
+  if (reason.includes("假突破") || text.includes("false breakout")) return "false_breakout";
+  if (reason.includes("突破") || text.includes("breakout")) return "breakout";
+  return null;
+}
+
+type DecisionSizing = {
+  label: string;
+  scale: string;
+  activeTier: string;
+  note: string;
+};
+
+function decisionSizing(parts: DecisionParts): DecisionSizing {
+  const riskTier = parts.risk.position_tier;
+  const riskScale = parts.risk.position_scale;
+  if (!unknownish(riskTier) || riskScale !== undefined && riskScale !== null) {
+    const activeTier = String(riskTier || "block");
+    return {
+      label: tierLabel(activeTier),
+      scale: positionScaleLabel(riskScale),
+      activeTier,
+      note: "后端 RiskManager 已返回正式仓位档。",
+    };
+  }
+
+  const action = String(decisionAction(parts) || "").toLowerCase();
+  const direction = String(decisionValue(parts, ["direction"]) || "").toLowerCase();
+  if (!hasActionableStrategySignal(parts) || ["flat", "neutral", "none", "观望"].includes(direction) || ["hold", "wait", "block"].includes(action)) {
+    return {
+      label: "阻断",
+      scale: "0%",
+      activeTier: "block",
+      note: "当前没有本地策略入场信号，AI 只做观察、减仓或否决，不展示可开仓仓位。",
+    };
+  }
+
+  if (["reduce", "veto", "deny"].includes(action)) {
+    const confidence = Number(decisionValue(parts, ["confidence"]));
+    const activeTier = Number.isFinite(confidence) && confidence >= 0.7 ? "normal" : "weak";
+    return {
+      label: tierLabel(activeTier),
+      scale: activeTier === "normal" ? "50%" : "25%",
+      activeTier,
+      note: "本地策略有信号，但 AI 建议降档。",
+    };
+  }
+
+  const scale = aiScaleFromConfidence(decisionValue(parts, ["confidence"]));
+  const activeTier = tierKeyFromConfidence(decisionValue(parts, ["confidence"]));
+  return {
+    label: scale.label,
+    scale: scale.scale,
+    activeTier,
+    note: "本地策略有入场信号，AI 置信度用于五档缩放。",
+  };
+}
+
+function hasActionableStrategySignal(parts: DecisionParts): boolean {
+  const explicitValues = [
+    parts.signal.action,
+    parts.signal.signal_action,
+    parts.signal.strategy_action,
+    parts.technical.original_strategy_action,
+    parts.technical.strategy_action,
+    parts.technical.signal_action,
+    parts.root.strategy_action,
+    parts.root.signal_action,
+  ];
+  if (explicitValues.some(isEntrySignalValue)) return true;
+  return truthyFlag(parts.technical.long_condition) || truthyFlag(parts.technical.short_condition) || truthyFlag(parts.signal.long_condition) || truthyFlag(parts.signal.short_condition);
+}
+
+function isEntrySignalValue(value: unknown): boolean {
+  const text = String(value || "").trim().toLowerCase();
+  return ["buy", "sell", "long", "short", "open_long", "open_short", "entry_long", "entry_short", "enter_long", "enter_short"].includes(text);
+}
+
+function truthyFlag(value: unknown): boolean {
+  return value === true || String(value).trim().toLowerCase() === "true";
 }
 
 function numberValue(...values: unknown[]): number | null {
@@ -1742,8 +1861,8 @@ function dashboardActionLabel(data: Record<string, unknown>) {
 
 function dashboardTierLabel(data: Record<string, unknown>) {
   const parts = decisionParts(data);
-  if (Object.keys(parts.risk).length) return `${tierLabel(parts.risk.position_tier)} / ${positionScaleLabel(parts.risk.position_scale)}`;
-  return aiScaleFromConfidence(decisionValue(parts, ["confidence"])).label;
+  const sizing = decisionSizing(parts);
+  return `${sizing.label} / ${sizing.scale}`;
 }
 
 function ReadinessPanel({ readiness }: { readiness: SystemReadiness | null }) {
@@ -3353,10 +3472,7 @@ function DecisionSummary({ data, showSizing = true }: { data: Record<string, unk
   const direction = String(decisionValue(parts, ["direction"]) || "--");
   const action = String(decisionAction(parts) || "--");
   const confidence = decisionValue(parts, ["confidence"]);
-  const scale = Object.keys(parts.risk).length
-    ? { label: tierLabel(parts.risk.position_tier), scale: positionScaleLabel(parts.risk.position_scale) }
-    : aiScaleFromConfidence(confidence);
-  const activeTier = Object.keys(parts.risk).length ? String(parts.risk.position_tier || "block") : tierKeyFromConfidence(confidence);
+  const sizing = decisionSizing(parts);
   const scoreRows: Array<[string, unknown]> = [
     ["趋势确认", decisionValue(parts, ["trend_confirmation_score", "regime_trend_score"])],
     ["震荡风险", decisionValue(parts, ["range_risk_score", "regime_range_score"])],
@@ -3370,11 +3486,11 @@ function DecisionSummary({ data, showSizing = true }: { data: Record<string, unk
       <Metric label="方向" value={directionLabel(direction)} />
       <Metric label="动作" value={actionLabel(action)} />
       <Metric label="置信度" value={confidencePct(confidence)} />
-      <Metric label="仓位档" value={`${scale.label} / ${scale.scale}`} />
+      <Metric label="仓位档" value={`${sizing.label} / ${sizing.scale}`} />
       {scoreRows.map(([label, value]) => (
         <Metric key={label} label={label} value={confidencePct(value)} tone={Number(value) >= 0.7 ? "good" : Number(value) >= 0.45 ? "warn" : "bad"} />
       ))}
-      {showSizing ? <AiSizingTierStrip activeTier={activeTier} activeScale={scale.scale} /> : null}
+      {showSizing ? <AiSizingTierStrip activeTier={sizing.activeTier} activeScale={sizing.scale} note={sizing.note} /> : null}
     </div>
   );
 }
@@ -3406,11 +3522,7 @@ function DecisionRailSummary({ data }: { data: Record<string, unknown> }) {
 
 function AiSizingRail({ data }: { data: Record<string, unknown> }) {
   const parts = decisionParts(data);
-  const confidence = decisionValue(parts, ["confidence"]);
-  const scale = Object.keys(parts.risk).length
-    ? { label: tierLabel(parts.risk.position_tier), scale: positionScaleLabel(parts.risk.position_scale) }
-    : aiScaleFromConfidence(confidence);
-  const activeTier = Object.keys(parts.risk).length ? String(parts.risk.position_tier || "block") : tierKeyFromConfidence(confidence);
+  const sizing = decisionSizing(parts);
   const tiers = [
     { key: "block", label: "阻断", scale: "0%" },
     { key: "weak", label: "弱仓", scale: "25%" },
@@ -3422,12 +3534,12 @@ function AiSizingRail({ data }: { data: Record<string, unknown> }) {
     <div className="space-y-2 text-xs">
       <div className="rounded-xl border border-[#60a5fa] bg-[#102a5c] p-3">
         <div className="text-[11px] text-[#bfdbfe]">当前 AI 建议仓位</div>
-        <div className={`${mono} mt-1 text-lg font-semibold text-white`}>{scale.label} / {scale.scale}</div>
-        <div className="mt-2 text-[11px] leading-5 text-[#bfdbfe]">AI 只能缩放或否决，本地策略决定方向。</div>
+        <div className={`${mono} mt-1 text-lg font-semibold text-white`}>{sizing.label} / {sizing.scale}</div>
+        <div className="mt-2 text-[11px] leading-5 text-[#bfdbfe]">{sizing.note}</div>
       </div>
       <div className="grid gap-1">
         {tiers.map((tier) => {
-          const active = tier.key === activeTier;
+          const active = tier.key === sizing.activeTier;
           return (
             <div key={tier.key} className={`grid grid-cols-[58px_minmax(0,1fr)_42px] items-center gap-2 rounded-lg border px-2 py-1.5 ${active ? "border-[#60a5fa] bg-[#102a5c]" : "border-[#263246] bg-[#101a2d]"}`}>
               <span className={active ? "font-semibold text-[#93c5fd]" : "text-[#94a3b8]"}>{tier.label}</span>
@@ -3472,7 +3584,7 @@ function PositionRailCard({ position, symbol, latestOrder }: { position: Positio
   );
 }
 
-function AiSizingTierStrip({ activeTier, activeScale }: { activeTier: string; activeScale: string }) {
+function AiSizingTierStrip({ activeTier, activeScale, note }: { activeTier: string; activeScale: string; note: string }) {
   const tiers = [
     { key: "block", label: "阻断", scale: "0%", body: "AI 或硬风控否决，不开仓。" },
     { key: "weak", label: "弱仓", scale: "25%", body: "只允许小仓验证。" },
@@ -3485,7 +3597,7 @@ function AiSizingTierStrip({ activeTier, activeScale }: { activeTier: string; ac
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div>
           <div className="font-semibold text-[#e5eefb]">ETH 实盘五档映射</div>
-          <div className="mt-1 text-[11px] text-[#94a3b8]">AI 只负责缩放和否决，方向必须来自本地策略信号。</div>
+          <div className="mt-1 text-[11px] text-[#94a3b8]">{note}</div>
         </div>
         <span className={`${mono} rounded-full border border-[#60a5fa] bg-[#1d4ed8] px-3 py-1 text-white`}>当前 {tierLabel(activeTier)} / {activeScale}</span>
       </div>

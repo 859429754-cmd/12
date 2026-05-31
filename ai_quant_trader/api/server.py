@@ -797,6 +797,17 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
             "items": _candles_for_chart(candles, max_points=limit),
         }
 
+    @app.get("/api/market/ticker")
+    async def market_ticker(
+        symbol: str,
+        source: Literal["auto", "gateio", "binance", "okx"] = "auto",
+    ) -> dict[str, Any]:
+        market = MarketDataClient()
+        try:
+            return await market.fetch_ticker(symbol, source=source)
+        finally:
+            await market.close()
+
     @app.get("/api/account/balance")
     async def account_balance(account_slot: Literal["default", "trend", "range"] = "trend") -> dict[str, Any]:
         ctx = _ctx(app)

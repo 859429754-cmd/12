@@ -398,6 +398,33 @@ def test_market_symbols_only_returns_configured_symbols(tmp_path: Path) -> None:
     assert "ARB/USDT:USDT" not in {item["symbol"] for item in items}
 
 
+def test_market_ticker_returns_realtime_price_payload(tmp_path: Path, monkeypatch) -> None:
+    config_path = tmp_path / "config.yaml"
+    write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl", ["ETH/USDT:USDT"])
+
+    async def fake_fetch_ticker(self, symbol: str, source: str = "auto") -> dict[str, object]:
+        assert symbol == "ETH/USDT:USDT"
+        assert source == "binance"
+        return {
+            "symbol": symbol,
+            "source": "binance",
+            "last": 2013.35,
+            "bid": 2013.30,
+            "ask": 2013.40,
+            "timestamp": "2026-05-31T00:00:00+00:00",
+            "warning": "",
+        }
+
+    monkeypatch.setattr(server.MarketDataClient, "fetch_ticker", fake_fetch_ticker)
+    client = TestClient(create_app(str(config_path)))
+
+    response = client.get("/api/market/ticker?symbol=ETH/USDT:USDT&source=binance")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source"] == "binance"
+    assert body["last"] == 2013.35
+
+
 def test_console_cors_rejects_non_local_origins(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
     write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl", ["ETH/USDT:USDT"])
