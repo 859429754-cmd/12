@@ -25,10 +25,10 @@ ai:
   base_url: https://api.deepseek.com
   candidate_trade_min_confidence: 0.65
   call_budget_enabled: true
-  max_calls_per_hour: 8
-  max_calls_per_day: 60
-  max_major_news_reviews_per_hour: 3
-  max_major_news_reviews_per_day: 24
+  max_calls_per_hour: 24
+  max_calls_per_day: 240
+  max_major_news_reviews_per_hour: 6
+  max_major_news_reviews_per_day: 80
   event_dedupe_hours: 48
   failure_cooldown_minutes: 20
   ai_enabled_symbols:
