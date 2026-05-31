@@ -713,6 +713,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         limit: int = Query(default=20, ge=1, le=100),
         max_age_minutes: int = Query(default=65, ge=15, le=24 * 60),
         auto_refresh: bool = Query(default=True),
+        compact: bool = Query(default=False),
     ) -> dict[str, Any]:
         ctx = _ctx(app)
         ctx.reload()
@@ -726,8 +727,8 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
                 if _news_row_is_stale(latest, max_age_minutes):
                     digest = await _collect_news_digest(ctx.config_path)
                     rows = ctx.table("news_summaries", limit=limit)
-                    return _news_latest_response(rows, digest, max_age_minutes)
-        return _news_latest_response(rows, None, max_age_minutes)
+                    return _news_latest_response(rows, digest, max_age_minutes, compact=compact)
+        return _news_latest_response(rows, None, max_age_minutes, compact=compact)
 
     @app.post("/api/news/refresh")
     async def refresh_news(body: ProposalAction) -> dict[str, Any]:
@@ -2100,7 +2101,7 @@ async def _collect_news_digest(config_path: str) -> NewsDigest:
         await trading_app.close()
 
 
-def _news_latest_response(rows: list[dict[str, Any]], fresh_digest: NewsDigest | None, max_age_minutes: int) -> dict[str, Any]:
+def _news_latest_response(rows: list[dict[str, Any]], fresh_digest: NewsDigest | None, max_age_minutes: int, compact: bool = False) -> dict[str, Any]:
     latest_payload = fresh_digest.model_dump(mode="json") if fresh_digest else ((rows[0].get("payload") if rows else None) or {})
     generated_at = latest_payload.get("generated_at") or (rows[0].get("created_at") if rows else None)
     age_minutes = _minutes_since(generated_at)
@@ -2108,7 +2109,7 @@ def _news_latest_response(rows: list[dict[str, Any]], fresh_digest: NewsDigest |
     warnings = latest_payload.get("warnings") or []
     if timeline and any(str(item.get("title") or item.get("summary") or "").strip() for item in timeline):
         warnings = [warning for warning in warnings if not str(warning).startswith(("rss_error:", "scrape_error:"))]
-    return {
+    response = {
         "items": rows,
         "timeline": timeline,
         "latest_digest": latest_payload,
@@ -2118,6 +2119,10 @@ def _news_latest_response(rows: list[dict[str, Any]], fresh_digest: NewsDigest |
         "warnings": warnings,
         "summary": _repair_mojibake_text(str(latest_payload.get("summary") or "")),
     }
+    if compact:
+        response["items"] = []
+        response["latest_digest"] = {}
+    return response
 
 
 def _sanitize_news_item(item: Any) -> dict[str, Any]:

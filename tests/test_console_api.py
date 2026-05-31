@@ -474,6 +474,37 @@ def test_news_latest_auto_refreshes_when_cache_is_empty(tmp_path: Path, monkeypa
     assert "通胀" in body["timeline"][0]["summary"]
 
 
+def test_news_latest_compact_omits_heavy_rows(tmp_path: Path, monkeypatch) -> None:
+    config_path = tmp_path / "config.yaml"
+    write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl", ["ETH/USDT:USDT"])
+
+    async def fake_collect(config_path_arg: str) -> NewsDigest:
+        assert config_path_arg == str(config_path)
+        return NewsDigest(
+            generated_at=datetime.now(UTC),
+            items=[
+                NewsItem(
+                    title="Fed says policy path remains data dependent",
+                    source="Fed",
+                    summary="Fresh macro update for compact console rendering.",
+                    credibility=0.95,
+                    category="macro",
+                )
+            ],
+        )
+
+    monkeypatch.setattr(server, "_collect_news_digest", fake_collect)
+    client = TestClient(create_app(str(config_path)))
+
+    response = client.get("/api/news/latest?limit=4&auto_refresh=true&compact=true")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["items"] == []
+    assert body["latest_digest"] == {}
+    assert body["timeline"][0]["title"] == "Fed says policy path remains data dependent"
+
+
 def test_news_row_age_detects_stale_cache() -> None:
     old = (datetime.now(UTC) - timedelta(minutes=90)).isoformat()
     row = {"created_at": old, "payload": {"generated_at": old}}

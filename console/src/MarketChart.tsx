@@ -1,6 +1,16 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { createChart, ColorType, LineStyle, type IChartApi, type IPriceLine, type ISeriesApi, type UTCTimestamp } from "lightweight-charts";
+import {
+  createChart,
+  ColorType,
+  LineStyle,
+  type IChartApi,
+  type IPriceLine,
+  type ISeriesApi,
+  type UTCTimestamp,
+} from "lightweight-charts";
 import type { Candle, DbRow, DenseZonePayload, StrategyProfile } from "./types";
+
+type ChartRange = "7d" | "30d" | "90d" | "all";
 
 export function MarketChart({
   candles,
@@ -29,7 +39,7 @@ export function MarketChart({
   const rangeLinesRef = useRef<IPriceLine[]>([]);
   const candlesByTimeRef = useRef<Map<number, Candle>>(new Map());
   const [hoverCandle, setHoverCandle] = useState<Candle | null>(null);
-  const [range, setRange] = useState<"7d" | "30d" | "90d" | "all">("90d");
+  const [range, setRange] = useState<ChartRange>("90d");
   const [markerDensity, setMarkerDensity] = useState<"compact" | "full">("compact");
   const [showKc, setShowKc] = useState(true);
   const [showEma, setShowEma] = useState(false);
@@ -38,7 +48,19 @@ export function MarketChart({
   const [showAi, setShowAi] = useState(true);
   const [showDense, setShowDense] = useState(true);
   const [expanded, setExpanded] = useState(false);
-  const effectiveHeight = expanded ? Math.max(620, window.innerHeight - 190) : height;
+  const [isMobile, setIsMobile] = useState(() => (typeof window === "undefined" ? false : window.innerWidth < 640));
+
+  useEffect(() => {
+    const update = () => setIsMobile(window.innerWidth < 640);
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, []);
+
+  const effectiveHeight = expanded
+    ? Math.max(560, (typeof window === "undefined" ? 760 : window.innerHeight) - 170)
+    : isMobile
+      ? Math.min(height, 430)
+      : height;
   const focus = hoverCandle || candles.at(-1) || null;
   const prev = useMemo(() => {
     if (!focus) return null;
@@ -58,9 +80,11 @@ export function MarketChart({
       height: effectiveHeight,
       layout: { background: { type: ColorType.Solid, color: "#07111f" }, textColor: "#94a3b8" },
       grid: { vertLines: { color: "#142033" }, horzLines: { color: "#142033" } },
-      rightPriceScale: { borderColor: "#263246", scaleMargins: { top: 0.08, bottom: 0.22 } },
+      rightPriceScale: { borderColor: "#263246", scaleMargins: { top: 0.08, bottom: showVolume ? 0.22 : 0.08 } },
       timeScale: { borderColor: "#263246", timeVisible: true, secondsVisible: false },
       crosshair: { mode: 1 },
+      handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
+      handleScale: { axisPressedMouseMove: true, mouseWheel: true, pinch: true },
     });
     const candlesSeries = chart.addCandlestickSeries({
       upColor: "#0a9f5a",
@@ -96,7 +120,9 @@ export function MarketChart({
     kcMidRef.current = kcMidSeries;
     kcUpperRef.current = kcUpperSeries;
     kcLowerRef.current = kcLowerSeries;
-    const resize = () => chart.applyOptions({ width: rootRef.current?.clientWidth || 800 });
+    const resize = () => {
+      chart.applyOptions({ width: rootRef.current?.clientWidth || 800, height: effectiveHeight });
+    };
     resize();
     window.addEventListener("resize", resize);
     return () => {
@@ -112,14 +138,14 @@ export function MarketChart({
       denseLinesRef.current = [];
       rangeLinesRef.current = [];
     };
-  }, [effectiveHeight]);
+  }, [effectiveHeight, showVolume]);
 
   useEffect(() => {
     const candleSeries = candleRef.current;
     const volumeSeries = volumeRef.current;
     if (!candleSeries || !volumeSeries) return;
     const candleData = candles.map((item) => ({
-      time: Math.floor(new Date(item.time).getTime() / 1000) as UTCTimestamp,
+      time: toTimestamp(item.time),
       open: item.open,
       high: item.high,
       low: item.low,
@@ -127,7 +153,7 @@ export function MarketChart({
     }));
     candlesByTimeRef.current = new Map(candleData.map((item, idx) => [Number(item.time), candles[idx]]));
     const volumeData = candles.map((item) => ({
-      time: Math.floor(new Date(item.time).getTime() / 1000) as UTCTimestamp,
+      time: toTimestamp(item.time),
       value: item.volume,
       color: item.close >= item.open ? "rgba(10, 159, 90, 0.35)" : "rgba(225, 29, 72, 0.35)",
     }));
@@ -150,30 +176,32 @@ export function MarketChart({
       ...(showOrders ? orderMarkers(orders) : []),
       ...(showAi ? decisionMarkers(decisions) : []),
     ].sort((a, b) => Number(a.time) - Number(b.time)).slice(-markerLimit));
-    for (const line of denseLinesRef.current) {
-      candleSeries.removePriceLine(line);
-    }
-    for (const line of rangeLinesRef.current) {
-      candleSeries.removePriceLine(line);
-    }
+    for (const line of denseLinesRef.current) candleSeries.removePriceLine(line);
+    for (const line of rangeLinesRef.current) candleSeries.removePriceLine(line);
     denseLinesRef.current = showDense ? denseZoneLines(denseZone).map((item) => candleSeries.createPriceLine(item)) : [];
     rangeLinesRef.current = visibleRangeLines(visibleCandles).map((item) => candleSeries.createPriceLine(item));
     applyVisibleRange(chartRef.current, candleData, range);
-  }, [candles, decisions, denseZone, effectiveHeight, markerLimit, orders, profile, range, showAi, showDense, showEma, showKc, showOrders, showVolume, visibleCandles]);
+  }, [candles, decisions, denseZone, markerLimit, orders, profile, range, showAi, showDense, showEma, showKc, showOrders, showVolume, visibleCandles]);
 
   return (
-    <div className={`${expanded ? "fixed inset-4 z-50 flex flex-col" : ""} overflow-hidden rounded-2xl border border-[#263246] bg-[#07111f] shadow-[0_22px_56px_rgba(0,0,0,0.38)]`}>
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#1e293b] bg-[#0f172a] px-3 py-2 text-xs text-[#cbd5e1]">
-        <div className="flex flex-wrap items-center gap-3">
-          <span className="font-semibold text-white">专业K线</span>
-          <ChartStat label="O" value={focus?.open} />
-          <ChartStat label="H" value={focus?.high} tone="good" />
-          <ChartStat label="L" value={focus?.low} tone="bad" />
-          <ChartStat label="C" value={focus?.close} tone={changePct >= 0 ? "good" : "bad"} />
-          <ChartStat label="涨跌" value={`${changePct >= 0 ? "+" : ""}${changePct.toFixed(2)}%`} tone={changePct >= 0 ? "good" : "bad"} />
-          <ChartStat label="量" value={focus?.volume} compact />
+    <div className={`${expanded ? "fixed inset-2 z-50 flex flex-col sm:inset-4" : ""} overflow-hidden rounded-2xl border border-[#263246] bg-[#07111f] shadow-[0_22px_56px_rgba(0,0,0,0.38)]`}>
+      <div className="grid gap-2 border-b border-[#1e293b] bg-[#0f172a] px-3 py-2 text-xs text-[#cbd5e1] lg:grid-cols-[minmax(0,1fr)_auto]">
+        <div className="min-w-0">
+          <div className="mb-1 flex items-center justify-between gap-2 sm:justify-start sm:gap-3">
+            <span className="font-semibold text-white">专业K线</span>
+            <span className={`${changePct >= 0 ? "text-[#22c55e]" : "text-[#f43f5e]"} font-mono`}>
+              {changePct >= 0 ? "+" : ""}{changePct.toFixed(2)}%
+            </span>
+          </div>
+          <div className="flex gap-3 overflow-x-auto whitespace-nowrap pb-1">
+            <ChartStat label="O" value={focus?.open} />
+            <ChartStat label="H" value={focus?.high} tone="good" />
+            <ChartStat label="L" value={focus?.low} tone="bad" />
+            <ChartStat label="C" value={focus?.close} tone={changePct >= 0 ? "good" : "bad"} />
+            <ChartStat label="量" value={focus?.volume} compact />
+          </div>
         </div>
-        <div className="flex flex-wrap items-center gap-1">
+        <div className="flex gap-1 overflow-x-auto pb-1 lg:flex-wrap lg:justify-end lg:overflow-visible">
           {(["7d", "30d", "90d", "all"] as const).map((item) => (
             <ChartButton key={item} active={range === item} onClick={() => setRange(item)}>{rangeLabel(item)}</ChartButton>
           ))}
@@ -194,13 +222,13 @@ export function MarketChart({
         {candles.length ? null : (
           <div className="absolute inset-0 z-10 grid place-items-center bg-[#07111f]/85 text-sm text-[#94a3b8]">等待K线数据加载</div>
         )}
-        {focus ? <ChartHoverPanel candle={focus} prev={prev} visibleStats={visibleStats} /> : null}
+        {focus && !isMobile ? <ChartHoverPanel candle={focus} prev={prev} visibleStats={visibleStats} /> : null}
         <div ref={rootRef} style={{ height: effectiveHeight }} className="w-full" />
       </div>
-      <div className="grid gap-2 border-t border-[#1f2a3d] bg-[#0b1220] px-3 py-2 text-[11px] text-[#94a3b8] md:grid-cols-3">
-        <div>图例：KC 上下轨蓝色，中轨灰色；紫/橙/绿线为密集区，灰色虚线为当前可见区最高/最低。</div>
+      <div className="grid gap-2 border-t border-[#1f2a3d] bg-[#0b1220] px-3 py-2 text-[11px] text-[#94a3b8] lg:grid-cols-3">
+        <div>图例：蓝色为KC上下轨，灰色为KC中轨，虚线为当前可见区间高低点。</div>
         <div>当前显示：{rangeLabel(range)} / {visibleCandles.length} 根K线，区间 {formatChartNumber(visibleStats.low)} - {formatChartNumber(visibleStats.high)}。</div>
-        <div>标记：订单 {Math.min(orderMarkerCount, markerLimit)}/{orderMarkerCount}，AI {Math.min(aiMarkerCount, markerLimit)}/{aiMarkerCount}。精简模式用于减少图表噪音。</div>
+        <div>标记：订单 {Math.min(orderMarkerCount, markerLimit)}/{orderMarkerCount}，AI {Math.min(aiMarkerCount, markerLimit)}/{aiMarkerCount}。</div>
       </div>
     </div>
   );
@@ -211,7 +239,7 @@ function ChartButton({ active, onClick, children }: { active: boolean; onClick: 
     <button
       type="button"
       onClick={onClick}
-      className={`rounded-lg border px-2.5 py-1 text-[11px] transition ${active ? "border-[#60a5fa] bg-[#1d4ed8] text-white shadow-sm" : "border-[#334155] bg-[#111827] text-[#cbd5e1] hover:border-[#64748b]"}`}
+      className={`h-8 shrink-0 rounded-lg border px-2.5 text-[11px] transition ${active ? "border-[#60a5fa] bg-[#1d4ed8] text-white shadow-sm" : "border-[#334155] bg-[#111827] text-[#cbd5e1] hover:border-[#64748b]"}`}
     >
       {children}
     </button>
@@ -263,7 +291,7 @@ function formatChartNumber(value: unknown, digits = 2) {
   return number.toLocaleString("en-US", { maximumFractionDigits: digits });
 }
 
-function rangeLabel(value: "7d" | "30d" | "90d" | "all") {
+function rangeLabel(value: ChartRange) {
   return value === "7d" ? "7D" : value === "30d" ? "30D" : value === "90d" ? "90D" : "ALL";
 }
 
@@ -274,7 +302,7 @@ type VisibleWindowStats = {
   lowTime: string;
 };
 
-function visibleWindow(candles: Candle[], range: "7d" | "30d" | "90d" | "all") {
+function visibleWindow(candles: Candle[], range: ChartRange) {
   if (range === "all") return candles;
   const bars = range === "7d" ? 24 * 7 : range === "30d" ? 24 * 30 : 24 * 90;
   return candles.slice(-Math.min(candles.length, bars));
@@ -333,7 +361,7 @@ function formatChartTime(value: string) {
   return `${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:00`;
 }
 
-function applyVisibleRange(chart: IChartApi | null, candleData: Array<{ time: UTCTimestamp }>, range: "7d" | "30d" | "90d" | "all") {
+function applyVisibleRange(chart: IChartApi | null, candleData: Array<{ time: UTCTimestamp }>, range: ChartRange) {
   if (!chart || !candleData.length) return;
   if (range === "all") {
     chart.timeScale().fitContent();
@@ -349,7 +377,7 @@ function applyVisibleRange(chart: IChartApi | null, candleData: Array<{ time: UT
 function lineData(candles: Candle[], values: number[]) {
   return candles
     .map((item, idx) => ({
-      time: Math.floor(new Date(item.time).getTime() / 1000) as UTCTimestamp,
+      time: toTimestamp(item.time),
       value: values[idx],
     }))
     .filter((item) => Number.isFinite(item.value));

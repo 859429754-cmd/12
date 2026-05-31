@@ -20,11 +20,11 @@ export const errText = (error: unknown): string => (error instanceof Error ? err
 export function Surface({ title, action, children }: { title: ReactNode; action?: ReactNode; children: ReactNode }) {
   return (
     <section className="min-w-0 rounded-xl border border-[#263246] bg-[#0b1220] shadow-[0_18px_44px_rgba(0,0,0,0.28)]">
-      <div className="flex h-11 items-center justify-between border-b border-[#1f2a3d] px-4 text-[12px] font-semibold text-[#cbd5e1]">
-        <div className="flex items-center gap-2">{title}</div>
-        {action}
+      <div className="flex min-h-11 flex-wrap items-center justify-between gap-2 border-b border-[#1f2a3d] px-3 py-2 text-[12px] font-semibold text-[#cbd5e1] sm:px-4">
+        <div className="flex min-w-0 items-center gap-2">{title}</div>
+        {action ? <div className="min-w-0">{action}</div> : null}
       </div>
-      <div className="p-4">{children}</div>
+      <div className="p-3 sm:p-4">{children}</div>
     </section>
   );
 }

@@ -89,6 +89,39 @@ export function App() {
           return fallback;
         }
       };
+      void safe(api<NewsResponse>("/api/news/latest?limit=1&compact=true", { retries: 0, timeoutMs: 8000 }), {
+        items: [],
+        timeline: [],
+        warnings: ["新闻接口暂时未返回，已保留上一轮界面状态。"],
+      }).then(setNews);
+      void safe(
+        api<MarketTickerResponse>(
+          `/api/market/ticker?symbol=${encodeURIComponent(symbol)}&source=${source === "cryptocompare" ? "auto" : source}`,
+          { retries: 0, timeoutMs: 8000 },
+        ),
+        { symbol, source: "unavailable", last: null, warning: "实时价格接口暂时未返回。" },
+      ).then(setTicker);
+      const candleBase = `/api/market/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${timeframe}&source=${source}`;
+      void safe(api<CandleResponse>(`${candleBase}&limit=1200`, { retries: 0, timeoutMs: 9000 }), {
+        items: [],
+        warning: "K线接口暂时未返回，已保留上一轮界面状态。",
+      }).then((nextCandles) => {
+        if (nextCandles.items?.length) {
+          setCandles(nextCandles.items || []);
+          setWarning(nextCandles.warning || "");
+        } else {
+          setWarning(nextCandles.warning || "");
+        }
+      });
+      void safe(api<CandleResponse>(`${candleBase}&limit=5000`, { retries: 0, timeoutMs: 25000 }), {
+        items: [],
+        warning: "",
+      }).then((nextCandles) => {
+        if (nextCandles.items?.length) {
+          setCandles(nextCandles.items || []);
+          setWarning(nextCandles.warning || "");
+        }
+      });
       const [
         nextStatus,
         nextPlatform,
@@ -126,30 +159,6 @@ export function App() {
       setOrders(nextOrders.items || []);
       setDecisions(nextDecisions.items || []);
       setDenseZone(nextDenseZone.item || null);
-      void Promise.all([
-        safe(api<NewsResponse>("/api/news/latest?limit=3", { retries: 0, timeoutMs: 15000 }), { items: [], timeline: [], warnings: ["新闻接口暂时未返回，已保留上一轮界面状态。"] }),
-        safe(
-          api<MarketTickerResponse>(
-            `/api/market/ticker?symbol=${encodeURIComponent(symbol)}&source=${source === "cryptocompare" ? "auto" : source}`,
-            { retries: 0, timeoutMs: 8000 },
-          ),
-          { symbol, source: "unavailable", last: null, warning: "实时价格接口暂时未返回。" },
-        ),
-        safe(
-          api<CandleResponse>(
-            `/api/market/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${timeframe}&limit=5000&source=${source}`,
-            { retries: 0, timeoutMs: 12000 },
-          ),
-          { items: [], warning: "K线接口暂时未返回，已保留上一轮界面状态。" },
-        ),
-      ]).then(([nextNews, nextTicker, nextCandles]) => {
-        setNews(nextNews);
-        setTicker(nextTicker);
-        if (nextCandles.items?.length) {
-          setCandles(nextCandles.items || []);
-        }
-        setWarning(nextCandles.warning || "");
-      });
     } catch (error) {
       setWarning(errText(error));
     }
@@ -194,7 +203,7 @@ export function App() {
   const showRightRail = workspace !== "dashboard";
 
   return (
-    <main className="grid h-screen grid-cols-[68px_minmax(0,1fr)] overflow-hidden bg-[#07111f] text-[#e5eefb] xl:grid-cols-[252px_minmax(0,1fr)]">
+    <main className="flex min-h-[100dvh] flex-col overflow-hidden bg-[#07111f] text-[#e5eefb] md:grid md:h-screen md:grid-cols-[68px_minmax(0,1fr)] xl:grid-cols-[252px_minmax(0,1fr)]">
       <ShellNav
         platform={platform}
         workspace={workspace}
@@ -209,7 +218,7 @@ export function App() {
         message={message}
         postAction={postAction}
       />
-      <section className="flex min-w-0 flex-col overflow-hidden">
+      <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       <TopBar
         platform={platform}
         status={status}
@@ -220,7 +229,7 @@ export function App() {
         operationCode={operationCode}
         setOperationCode={setOperationCode}
       />
-      <div className={`grid min-h-0 flex-1 gap-4 overflow-auto p-3 sm:p-4 ${showRightRail ? "grid-cols-[minmax(0,1fr)] xl:grid-cols-[minmax(0,1fr)_320px]" : "grid-cols-[minmax(0,1fr)]"}`}>
+      <div className={`grid min-h-0 flex-1 gap-3 overflow-auto px-2 py-3 pb-24 sm:gap-4 sm:p-4 ${showRightRail ? "grid-cols-[minmax(0,1fr)] xl:grid-cols-[minmax(0,1fr)_320px]" : "grid-cols-[minmax(0,1fr)]"}`}>
         <WorkspaceBody
           workspace={workspace}
           symbol={symbol}
@@ -249,20 +258,23 @@ export function App() {
           platform={platform}
       />
         {showRightRail ? (
-          <RightRail
-            symbol={symbol}
-            status={status}
-            decisions={decisions}
-            positions={positions}
-            orders={orders}
-            news={news}
-            denseZone={denseZone}
-            busy={busy}
-            postAction={postAction}
-          />
+          <div className="hidden min-h-0 xl:block">
+            <RightRail
+              symbol={symbol}
+              status={status}
+              decisions={decisions}
+              positions={positions}
+              orders={orders}
+              news={news}
+              denseZone={denseZone}
+              busy={busy}
+              postAction={postAction}
+            />
+          </div>
         ) : null}
       </div>
       </section>
+      <MobileBottomNav platform={platform} workspace={workspace} setWorkspace={setWorkspace} />
     </main>
   );
 }
@@ -291,7 +303,7 @@ function workspaceLabel(id: WorkspaceId, platform: PlatformOverview | null) {
     ai: "AI 大脑",
     agent: "智能体网关",
     execution: "交易执行",
-    data: "数据健康",
+    data: "快讯与数据",
   };
   return zh[id] || platform?.workspaces.find((item) => item.id === id)?.label || id;
 }
@@ -353,10 +365,10 @@ function ShellNav({
     { id: "ai" as WorkspaceId, label: "AI 大脑" },
     { id: "agent" as WorkspaceId, label: "智能体网关" },
     { id: "execution" as WorkspaceId, label: "交易执行" },
-    { id: "data" as WorkspaceId, label: "数据健康" },
+    { id: "data" as WorkspaceId, label: "快讯与数据" },
   ];
   return (
-    <aside className="flex min-h-0 flex-col border-r border-[#1f2a3d] bg-[#08111f] shadow-[10px_0_30px_rgba(0,0,0,0.35)]">
+    <aside className="hidden min-h-0 flex-col border-r border-[#1f2a3d] bg-[#08111f] shadow-[10px_0_30px_rgba(0,0,0,0.35)] md:flex">
       <div className="flex h-16 shrink-0 items-center justify-center gap-2 border-b border-[#1f2a3d] px-2 xl:justify-start xl:px-4">
         <div className="grid h-9 w-9 place-items-center rounded-xl bg-[#2454ff] text-base font-black text-white shadow-lg shadow-blue-950/40">
           Q
@@ -426,7 +438,7 @@ function TopBar({
     setMenuOpen(false);
   };
   return (
-    <header className="relative flex h-16 shrink-0 items-center gap-2 border-b border-[#1f2a3d] bg-[#0b1220] px-2 shadow-sm shadow-black/30 sm:gap-3 sm:px-4">
+    <header className="relative flex min-h-14 shrink-0 items-center gap-2 border-b border-[#1f2a3d] bg-[#0b1220] px-2 shadow-sm shadow-black/30 sm:h-16 sm:gap-3 sm:px-4">
       <button
         className={`grid h-10 w-10 place-items-center rounded-xl border border-[#263246] bg-[#111827] text-[#94a3b8] transition hover:border-[#3b82f6] hover:text-white ${
           menuOpen ? "border-[#3b82f6] text-white shadow-sm" : ""
@@ -472,8 +484,8 @@ function TopBar({
         </div>
       ) : null}
       <div className="min-w-0 flex-1 sm:min-w-[180px] sm:flex-none">
-        <div className="text-[11px] uppercase tracking-wide text-[#94a3b8]">工作区</div>
-        <div className="text-lg font-semibold text-[#e5eefb]">{workspaceLabel(workspace, platform)}</div>
+        <div className="text-[10px] uppercase tracking-wide text-[#94a3b8] sm:text-[11px]">工作区</div>
+        <div className="truncate text-base font-semibold text-[#e5eefb] sm:text-lg">{workspaceLabel(workspace, platform)}</div>
       </div>
       <div className="hidden items-center gap-2 lg:flex">
         <StatusPill label="外壳" value={platformShellLabel(platform?.platform.shell)} />
@@ -481,7 +493,7 @@ function TopBar({
         <StatusPill label="模式" value={executionModeLabel(status?.execution_mode)} />
       </div>
       <div className="ml-auto flex min-w-0 items-center gap-3 text-[11px] text-[#94a3b8]">
-        {warning ? <span className="max-w-[440px] truncate rounded-full border border-[#854d0e] bg-[#241806] px-3 py-2 text-[#facc15]">{warning}</span> : null}
+        {warning ? <span className="hidden max-w-[440px] truncate rounded-full border border-[#854d0e] bg-[#241806] px-3 py-2 text-[#facc15] sm:inline-flex">{warning}</span> : null}
         <label className="hidden h-10 items-center gap-2 rounded-xl border border-[#263246] bg-[#111827] px-2 md:flex sm:px-3">
           <KeyRound size={13} />
           <span className="hidden whitespace-nowrap sm:inline">操作验证码</span>
@@ -503,6 +515,50 @@ function TopBar({
       </div>
     </header>
   );
+}
+
+function MobileBottomNav({
+  platform,
+  workspace,
+  setWorkspace,
+}: {
+  platform: PlatformOverview | null;
+  workspace: WorkspaceId;
+  setWorkspace: (value: WorkspaceId) => void;
+}) {
+  const items: WorkspaceId[] = ["dashboard", "market", "ai", "data", "execution"];
+  return (
+    <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-[#1f2a3d] bg-[#08111f]/96 px-2 pb-[max(env(safe-area-inset-bottom),8px)] pt-2 shadow-[0_-18px_44px_rgba(0,0,0,0.45)] backdrop-blur md:hidden">
+      <div className="grid grid-cols-5 gap-1">
+        {items.map((id) => {
+          const active = workspace === id;
+          return (
+            <button
+              key={id}
+              type="button"
+              className={`grid min-h-12 place-items-center rounded-xl px-1 text-[10px] transition ${
+                active ? "bg-[#1d4ed8] text-white shadow-inner shadow-blue-950/30" : "text-[#94a3b8] hover:bg-[#111827] hover:text-[#e5eefb]"
+              }`}
+              onClick={() => setWorkspace(id)}
+            >
+              {workspaceIcon(id)}
+              <span className="mt-0.5 truncate">{mobileWorkspaceLabel(id, platform)}</span>
+            </button>
+          );
+        })}
+      </div>
+    </nav>
+  );
+}
+
+function mobileWorkspaceLabel(id: WorkspaceId, platform: PlatformOverview | null) {
+  if (id === "dashboard") return "总览";
+  if (id === "market") return "图表";
+  if (id === "strategy") return "策略";
+  if (id === "ai") return "AI";
+  if (id === "data") return "快讯";
+  if (id === "execution") return "交易";
+  return workspaceLabel(id, platform);
 }
 
 function StatusPill({ label, value }: { label: string; value: string }) {
@@ -722,6 +778,8 @@ function WorkspaceBody({
         riskSummary={riskSummary}
         positions={positions}
         orders={orders}
+        busy={busy}
+        postAction={postAction}
       />
     );
   }
@@ -812,7 +870,7 @@ function MarketWorkspace({
           </div>
         }
       >
-        <div className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
           <Metric label="最新价" value={num(latest?.close)} tone={changePct >= 0 ? "good" : "bad"} />
           <Metric label="涨跌幅" value={pct(changePct)} tone={changePct >= 0 ? "good" : "bad"} />
           <Metric label="最高" value={num(latest?.high)} />
@@ -820,7 +878,7 @@ function MarketWorkspace({
           <Metric label="成交量" value={num(volume, 2)} />
           <Metric label="K线数量" value={num(candles.length, 0)} />
         </div>
-        <div className="mt-4 flex flex-wrap items-center gap-2 text-[11px] text-[#94a3b8]">
+        <div className="mt-4 flex gap-2 overflow-x-auto pb-1 text-[11px] text-[#94a3b8] sm:flex-wrap sm:overflow-visible">
           <ChartChip label="EMA" value={String(params.ema_length || 89)} />
           <ChartChip label="KC" value={`${params.kc_length || 20}/${params.kc_scalar || 2.8}`} />
           <ChartChip label="ATR" value={String(params.atr_length || 14)} />
@@ -832,17 +890,17 @@ function MarketWorkspace({
         <div className="mt-3">
           <MarketChart candles={candles} profile={profile} orders={orders} decisions={decisions} denseZone={denseZone?.payload} height={700} />
         </div>
-        <div className="mt-3 flex flex-wrap gap-3 text-[11px] text-[#94a3b8]">
+        <div className="mt-3 flex gap-3 overflow-x-auto pb-1 text-[11px] text-[#94a3b8] sm:flex-wrap sm:overflow-visible">
           <span><span className="text-[#22c55e]">■</span> 阳线 / 成交量</span>
           <span><span className="text-[#fb7185]">■</span> 阴线 / 成交量</span>
-          <span><span className="text-[#1f2937]">━</span> EMA 过滤线</span>
+          <span><span className="text-[#e5e7eb]">━</span> EMA 过滤线</span>
           <span><span className="text-[#2454ff]">━</span> 肯特纳上下轨</span>
           <span><span className="text-[#64748b]">━</span> 肯特纳中轨</span>
         </div>
       </Surface>
       <DenseZonePanel denseZone={denseZone?.payload} />
       <Surface title={<><ShieldCheck size={13} /> 图表交易契约</>}>
-        <div className="grid grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           <Metric label="数据源" value={source} />
           <Metric label="周期" value={timeframe} />
           <Metric label="策略档案" value={profile?.profile_name || "--"} />
@@ -855,7 +913,7 @@ function MarketWorkspace({
 
 function ChartChip({ label, value }: { label: string; value: string }) {
   return (
-    <span className="rounded-full border border-[#263246] bg-[#101a2d] px-3 py-1 text-[#cbd5e1]">
+    <span className="shrink-0 whitespace-nowrap rounded-full border border-[#263246] bg-[#101a2d] px-3 py-1 text-[#cbd5e1]">
       {label}: <span className={mono}>{value}</span>
     </span>
   );
@@ -1295,8 +1353,8 @@ function DashboardWorkspace({
   const latestPrice = realtimePrice != null ? num(realtimePrice) : latestCandle ? num(latestCandle.close) : "--";
   const latestPriceLabel = realtimePrice != null ? "实时价" : "K线收盘";
   return (
-    <section className="min-h-0 space-y-4 overflow-auto pr-1">
-      <div className="rounded-2xl border border-[#263246] bg-[#0b1220] p-4 shadow-[0_18px_44px_rgba(0,0,0,0.30)]">
+    <section className="min-h-0 space-y-3 overflow-auto sm:space-y-4 sm:pr-1">
+      <div className="rounded-2xl border border-[#263246] bg-[#0b1220] p-3 shadow-[0_18px_44px_rgba(0,0,0,0.30)] sm:p-4">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <div className="flex items-center gap-2 text-[12px] font-semibold text-[#60a5fa]">
@@ -1304,7 +1362,7 @@ function DashboardWorkspace({
               AI 量化实盘指挥台
             </div>
             <div className="mt-2 flex flex-wrap items-end gap-x-4 gap-y-2">
-              <h1 className="text-2xl font-semibold tracking-tight text-[#f8fafc]">{shortSymbol(symbol)} 趋势策略</h1>
+              <h1 className="text-xl font-semibold tracking-tight text-[#f8fafc] sm:text-2xl">{shortSymbol(symbol)} 趋势策略</h1>
               <span className={`${mono} rounded-full border border-[#263246] bg-[#101a2d] px-3 py-1 text-xs text-[#cbd5e1]`}>
                 {latestPriceLabel} {latestPrice}
               </span>
@@ -1316,7 +1374,7 @@ function DashboardWorkspace({
               <LiveOpsBadge readiness={readinessOverall} mode={mode} />
             </div>
           </div>
-          <div className="grid min-w-[520px] grid-cols-4 gap-2 max-xl:min-w-0 max-xl:w-full">
+          <div className="grid w-full grid-cols-2 gap-2 sm:grid-cols-4 xl:min-w-[520px] xl:w-auto">
             <DashboardStatusPill label="开仓授权" value={openingAuthorized ? "已授权" : "未授权"} tone={openingAuthorized ? "good" : "bad"} />
             <DashboardStatusPill label="交易所" value={exchangePayload.can_open_new_entries ? "可开仓" : "禁止开仓"} tone={exchangePayload.can_open_new_entries ? "good" : "bad"} />
             <DashboardStatusPill label="DeepSeek" value={aiReady ? "已配置" : "降级"} tone={aiReady ? "good" : "warn"} />
@@ -1324,7 +1382,7 @@ function DashboardWorkspace({
           </div>
         </div>
 
-        <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-3 2xl:grid-cols-6">
+        <div className="mt-4 grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-3 2xl:grid-cols-6">
           <HeroMetric label="持仓状态" value={position ? positionSideLabel(position.side) : "空仓"} tone={position ? "warn" : "good"} />
           <HeroMetric label="浮动盈亏" value={position ? `${num(position.pnl)} USDT` : "--"} tone={pnlTone(position?.pnl)} />
           <HeroMetric label="AI动作" value={dashboardActionLabel(latestDecision)} />
@@ -1334,7 +1392,7 @@ function DashboardWorkspace({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 2xl:grid-cols-[360px_minmax(520px,1fr)_360px]">
+      <div className="grid grid-cols-1 gap-3 sm:gap-4 2xl:grid-cols-[360px_minmax(520px,1fr)_360px]">
         <div className="grid min-w-0 gap-4">
           <DashboardPanel title={<><Wallet size={14} /> 账户与持仓</>}>
             <div className="rounded-xl bg-[#0f172a] p-4 text-white">
@@ -3252,6 +3310,8 @@ function DataWorkspace({
   riskSummary,
   positions,
   orders,
+  busy,
+  postAction,
 }: {
   platform: PlatformOverview | null;
   status: StatusResponse | null;
@@ -3265,6 +3325,8 @@ function DataWorkspace({
   riskSummary: Record<string, unknown> | null;
   positions: Array<DbRow>;
   orders: Array<DbRow>;
+  busy: boolean;
+  postAction: (path: string, body: Record<string, unknown>) => Promise<void>;
 }) {
   const latestCandle = candles.at(-1);
   const visibleItems = visibleNewsItems(news);
@@ -3277,9 +3339,23 @@ function DataWorkspace({
   const newsOk = !newsWarn && visibleItems.length > 0;
   const riskOk = Boolean(riskSummary) && Number(riskSummary?.max_total_leverage || status?.risk?.max_total_leverage || 0) > 0;
   return (
-    <section className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-5 overflow-hidden">
+    <section className="min-h-0 space-y-3 overflow-auto sm:space-y-4">
+      <Surface
+        title={<><Newspaper size={13} /> 新闻快讯</>}
+        action={<button className={button} disabled={busy} onClick={() => postAction("/api/news/refresh", { operator_id: "console" })}>刷新</button>}
+      >
+        {newsWarnings.length ? (
+          <div className="mb-3 rounded-xl border border-[#854d0e] bg-[#241806] p-3 text-xs text-[#facc15]">{newsWarnings.join("; ")}</div>
+        ) : null}
+        <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+          {visibleItems.length ? visibleItems.slice(0, 12).map((item, idx) => <DashboardNewsItem key={idx} item={item} />) : (
+            <div className="rounded-xl border border-[#263246] bg-[#101a2d] p-3 text-xs text-[#94a3b8]">暂无新闻快讯。</div>
+          )}
+        </div>
+      </Surface>
+
       <Surface title={<><Database size={13} /> 数据健康总览</>}>
-        <div className="grid grid-cols-6 gap-3">
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
           <Metric label="K线源" value={marketOk ? "健康" : "告警"} tone={marketOk ? "good" : "warn"} />
           <Metric label="新闻源" value={newsOk ? "健康" : "需检查"} tone={newsOk ? "good" : "warn"} />
           <Metric label="DeepSeek" value={aiConfigured ? "已配置" : "未配置"} tone={aiConfigured ? "good" : "warn"} />
@@ -3289,7 +3365,7 @@ function DataWorkspace({
         </div>
       </Surface>
 
-      <div className="grid min-h-0 grid-cols-1 gap-5 overflow-auto">
+      <div className="grid min-h-0 grid-cols-1 gap-4">
         <Surface title={<><ServerCog size={13} /> 外部依赖状态</>}>
           <div className="grid grid-cols-1 gap-3 2xl:grid-cols-2">
             <HealthCard
