@@ -434,8 +434,10 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
             _readiness_check(
                 "order_lifecycle",
                 "Order lifecycle",
-                "ok" if latest_order_lifecycle else "warn",
-                _freshness_message(latest_order_lifecycle, "Latest order lifecycle event"),
+                "ok",
+                _freshness_message(latest_order_lifecycle, "Latest order lifecycle event")
+                if latest_order_lifecycle
+                else "No order lifecycle event recorded yet; this is normal before the first submitted order.",
                 age_minutes=_row_age_minutes(latest_order_lifecycle),
             ),
             _readiness_check(

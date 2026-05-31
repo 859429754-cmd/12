@@ -102,6 +102,8 @@ def test_console_status_strategy_and_workbench(tmp_path: Path, monkeypatch) -> N
         "worker_heartbeat",
         "runtime_maintenance",
     }
+    order_lifecycle_check = next(item for item in readiness_body["checks"] if item["id"] == "order_lifecycle")
+    assert order_lifecycle_check["status"] == "ok"
     assert "exchange_safety" in readiness_body
     assert "latest_order_lifecycle" in readiness_body
     assert "latest_data_health" in readiness_body
