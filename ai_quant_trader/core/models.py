@@ -201,7 +201,7 @@ class StrategySignal(BaseModel):
     current_price: float
     suggested_qty: float = 0.0
     signal_strength: float = Field(default=0.0, ge=0, le=1)
-    technical_evidence: dict[str, float | str | bool | None] = Field(default_factory=dict)
+    technical_evidence: dict[str, Any] = Field(default_factory=dict)
     generated_at: datetime = Field(default_factory=utc_now)
 
 
