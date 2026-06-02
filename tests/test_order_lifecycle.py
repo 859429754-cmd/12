@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from ai_quant_trader.core.models import OrderRequest, OrderResult
+from ai_quant_trader.core.models import OrderRequest, OrderResult, PositionSnapshot, Side
 from ai_quant_trader.execution.lifecycle import (
     DuplicateClientOrderIdError,
     OrderLifecycleManager,
@@ -58,6 +58,9 @@ class RecordingGateway:
         if self.fail_cancel:
             raise TimeoutError("cancel_timeout")
         return True
+
+    async def fetch_positions(self, symbols: list[str]) -> list[PositionSnapshot]:
+        return [PositionSnapshot(symbol=symbols[0], side=Side.LONG, qty=0.25, mark_price=2000.0)]
 
 
 def make_store(tmp_path: Path) -> SQLiteStore:
@@ -197,6 +200,29 @@ async def test_order_lifecycle_cancel_failure_is_audited(tmp_path: Path) -> None
     assert latest["status"] == "cancel_failed"
     assert latest["error_type"] == "TimeoutError"
     assert latest["reason"] == "cancel_order_failed:stop_123"
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_order_lifecycle_close_position_records_reduce_only_intent(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    manager = OrderLifecycleManager(store)
+    gateway = RecordingGateway(status="closed")
+
+    order = await manager.close_position(
+        gateway,
+        "ETH/USDT:USDT",
+        reason="software_fixed_atr_stop",
+        client_order_id="close_client_id",
+    )
+    events = list(reversed(store.fetch_payloads("order_lifecycle", limit=10)))
+
+    assert order is not None
+    assert order.side == "sell"
+    assert order.amount == pytest.approx(0.25)
+    assert [event["payload"]["status"] for event in events] == ["intent_recorded", "submitting", "filled"]
+    assert events[0]["payload"]["client_order_id"] == "close_client_id"
+    assert events[0]["payload"]["reduce_only"] is True
     store.close()
 
 

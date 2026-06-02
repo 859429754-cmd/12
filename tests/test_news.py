@@ -5,7 +5,7 @@ import re
 from datetime import UTC, datetime, timedelta, timezone
 
 from ai_quant_trader.app import TradingApp
-from ai_quant_trader.core.models import NewsDigest, NewsItem
+from ai_quant_trader.core.models import Alignment, NewsDigest, NewsDirection, NewsItem
 from ai_quant_trader.data.news import NewsCollector
 from ai_quant_trader.data.news_memory import DailyNewsFlashStore, NewsMemoryStore
 from ai_quant_trader.reporting.hourly import HourlyReportBuilder
@@ -185,6 +185,25 @@ async def test_collect_prioritizes_jin10_timeline_over_low_information_fallback(
     assert digest.items[0].source == "金十数据"
     assert "伊朗总统" in digest.items[0].title
     assert all("宏观金融消息更新" not in item.title + item.summary for item in digest.items)
+
+
+def test_news_direction_hint_is_absolute_not_strategy_relative() -> None:
+    collector = NewsCollector([], [])
+    bearish = [
+        NewsItem(title="Fed hawkish hike warning", source="test"),
+        NewsItem(title="sanction risk weighs on crypto", source="test"),
+        NewsItem(title="war risk pressures risk assets", source="test"),
+    ]
+    bullish = [
+        NewsItem(title="ETF approval drives inflow rally", source="test"),
+        NewsItem(title="dovish rate cut supports risk assets", source="test"),
+        NewsItem(title="crypto inflow expands", source="test"),
+    ]
+
+    assert collector._news_direction_hint(bearish) == NewsDirection.BEARISH
+    assert collector._legacy_sentiment_hint(NewsDirection.BEARISH) == Alignment.CONFLICT
+    assert collector._news_direction_hint(bullish) == NewsDirection.BULLISH
+    assert collector._legacy_sentiment_hint(NewsDirection.BULLISH) == Alignment.ALIGNED
 
 
 def test_hourly_news_report_uses_recent_items_only() -> None:

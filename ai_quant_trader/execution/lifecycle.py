@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from ai_quant_trader.core.models import OrderLifecycleEvent, OrderLifecycleStatus, OrderRequest, OrderResult
+from ai_quant_trader.core.models import OrderLifecycleEvent, OrderLifecycleStatus, OrderRequest, OrderResult, Side
 from ai_quant_trader.storage.sqlite import SQLiteStore
 
 logger = logging.getLogger(__name__)
@@ -64,6 +65,29 @@ class OrderLifecycleManager:
             lambda: gateway.create_stop_loss_order(request, stop_price, price_type),
             gateway_mode=gateway_mode,
         )
+
+    async def close_position(
+        self,
+        gateway: Any,
+        symbol: str,
+        *,
+        reason: str,
+        client_order_id: str | None = None,
+        gateway_mode: str | None = None,
+    ) -> OrderResult | None:
+        positions = await gateway.fetch_positions([symbol])
+        position = next((item for item in positions if item.symbol == symbol), None)
+        if position is None or position.side == Side.FLAT or abs(position.qty) <= 0:
+            return None
+        request = OrderRequest(
+            symbol=symbol,
+            side="sell" if position.side == Side.LONG else "buy",
+            amount=abs(position.qty),
+            reduce_only=True,
+            client_order_id=client_order_id or f"aiq_close_{uuid.uuid4().hex[:18]}",
+            reason=reason,
+        )
+        return await self.submit_market_order(gateway, request, gateway_mode=gateway_mode)
 
     async def cancel_order(
         self,

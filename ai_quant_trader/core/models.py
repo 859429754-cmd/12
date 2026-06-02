@@ -38,6 +38,13 @@ class Alignment(StrEnum):
     UNKNOWN = "unknown"
 
 
+class NewsDirection(StrEnum):
+    BULLISH = "bullish"
+    BEARISH = "bearish"
+    NEUTRAL = "neutral"
+    UNKNOWN = "unknown"
+
+
 class VetoAction(StrEnum):
     ALLOW = "allow"
     REDUCE = "reduce"
@@ -322,9 +329,32 @@ class NewsDigest(BaseModel):
     generated_at: datetime = Field(default_factory=utc_now)
     items: list[NewsItem] = Field(default_factory=list)
     macro_risk_level: Literal["low", "medium", "high", "unknown"] = "unknown"
+    news_direction: NewsDirection = NewsDirection.UNKNOWN
+    # Legacy coarse market-direction hint. Historically ALIGNED meant bullish
+    # and CONFLICT meant bearish. Keep it for old payloads, but new code should
+    # use news_direction for absolute news direction and Alignment for
+    # strategy-relative agreement.
     crypto_sentiment: Alignment = Alignment.UNKNOWN
     summary: str = ""
     warnings: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def normalize_news_direction(self) -> "NewsDigest":
+        if self.news_direction == NewsDirection.UNKNOWN and self.crypto_sentiment != Alignment.UNKNOWN:
+            self.news_direction = {
+                Alignment.ALIGNED: NewsDirection.BULLISH,
+                Alignment.CONFLICT: NewsDirection.BEARISH,
+                Alignment.NEUTRAL: NewsDirection.NEUTRAL,
+                Alignment.UNKNOWN: NewsDirection.UNKNOWN,
+            }[self.crypto_sentiment]
+        elif self.crypto_sentiment == Alignment.UNKNOWN and self.news_direction != NewsDirection.UNKNOWN:
+            self.crypto_sentiment = {
+                NewsDirection.BULLISH: Alignment.ALIGNED,
+                NewsDirection.BEARISH: Alignment.CONFLICT,
+                NewsDirection.NEUTRAL: Alignment.NEUTRAL,
+                NewsDirection.UNKNOWN: Alignment.UNKNOWN,
+            }[self.news_direction]
+        return self
 
 
 class ExchangeSafetyState(BaseModel):

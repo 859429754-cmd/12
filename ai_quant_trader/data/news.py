@@ -12,7 +12,7 @@ from xml.etree import ElementTree
 
 import requests
 
-from ai_quant_trader.core.models import Alignment, NewsDigest, NewsItem
+from ai_quant_trader.core.models import Alignment, NewsDigest, NewsDirection, NewsItem
 
 logger = logging.getLogger(__name__)
 
@@ -205,10 +205,12 @@ class NewsCollector:
         )
 
         summary = "；".join(item.summary for item in deduped[:8] if item.summary)
+        news_direction = self._news_direction_hint(deduped)
         return NewsDigest(
             items=deduped[:80],
             macro_risk_level=self._macro_risk(deduped),
-            crypto_sentiment=self._sentiment_hint(deduped),
+            news_direction=news_direction,
+            crypto_sentiment=self._legacy_sentiment_hint(news_direction),
             summary=summary or "最近窗口内没有抓取到可用重点消息。",
             warnings=warnings,
         )
@@ -799,6 +801,22 @@ class NewsCollector:
         risk_words = ("war", "conflict", "sanction", "inflation", "rate hike", "tariff", "crisis", "attack", "government shutdown", "战争", "制裁", "通胀", "政府关门")
         count = sum(1 for item in items if any(word in f"{item.title} {item.summary}".lower() for word in risk_words))
         return "high" if count >= 3 else "medium" if count else "low"
+
+    def _news_direction_hint(self, items: list[NewsItem]) -> NewsDirection:
+        return {
+            Alignment.ALIGNED: NewsDirection.BULLISH,
+            Alignment.CONFLICT: NewsDirection.BEARISH,
+            Alignment.NEUTRAL: NewsDirection.NEUTRAL,
+            Alignment.UNKNOWN: NewsDirection.UNKNOWN,
+        }[self._sentiment_hint(items)]
+
+    def _legacy_sentiment_hint(self, direction: NewsDirection) -> Alignment:
+        return {
+            NewsDirection.BULLISH: Alignment.ALIGNED,
+            NewsDirection.BEARISH: Alignment.CONFLICT,
+            NewsDirection.NEUTRAL: Alignment.NEUTRAL,
+            NewsDirection.UNKNOWN: Alignment.UNKNOWN,
+        }[direction]
 
     def _sentiment_hint(self, items: list[NewsItem]) -> Alignment:
         text = " ".join(f"{item.title} {item.summary}".lower() for item in items[:25])

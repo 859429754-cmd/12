@@ -11,6 +11,7 @@ from ai_quant_trader.core.models import (
     Alignment,
     DenseZone,
     NewsDigest,
+    NewsDirection,
     NewsItem,
     PatternCandidate,
     RegimePattern,
@@ -214,6 +215,32 @@ def test_news_direction_hint_is_converted_relative_to_strategy_direction() -> No
     assert brain._news_direction_hint(bearish_news) == "bearish"
     assert brain._news_alignment_for_signal(bearish_news, short_signal) == Alignment.ALIGNED
     assert brain._news_alignment_for_signal(bearish_news, long_signal) == Alignment.CONFLICT
+
+
+def test_news_direction_field_keeps_absolute_direction_separate_from_strategy_alignment() -> None:
+    brain = DeepSeekBrain(api_key="test-key")
+    bearish_news = NewsDigest(summary="bearish macro", news_direction=NewsDirection.BEARISH)
+    short_signal = StrategySignal(
+        symbol="ETH/USDT:USDT",
+        timeframe="1h",
+        action=SignalAction.SHORT,
+        current_price=1900.0,
+        suggested_qty=1.0,
+    )
+    long_signal = short_signal.model_copy(update={"action": SignalAction.LONG})
+
+    assert bearish_news.crypto_sentiment == Alignment.CONFLICT
+    assert brain._news_direction_hint(bearish_news) == "bearish"
+    assert brain._news_alignment_for_signal(bearish_news, short_signal) == Alignment.ALIGNED
+    assert brain._news_alignment_for_signal(bearish_news, long_signal) == Alignment.CONFLICT
+
+
+def test_legacy_crypto_sentiment_still_normalizes_to_news_direction() -> None:
+    bearish_news = NewsDigest(summary="legacy bearish", crypto_sentiment=Alignment.CONFLICT)
+    bullish_news = NewsDigest(summary="legacy bullish", crypto_sentiment=Alignment.ALIGNED)
+
+    assert bearish_news.news_direction == NewsDirection.BEARISH
+    assert bullish_news.news_direction == NewsDirection.BULLISH
 
 
 @pytest.mark.asyncio

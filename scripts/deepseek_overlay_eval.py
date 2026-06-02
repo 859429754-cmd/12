@@ -728,6 +728,7 @@ async def compact_deepseek_review(
         "news": {
             "summary": news.summary,
             "macro_risk_level": news.macro_risk_level,
+            "news_direction": str(news.news_direction),
             "crypto_sentiment": str(news.crypto_sentiment),
             "warnings": news.warnings,
         },

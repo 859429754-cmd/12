@@ -18,6 +18,7 @@ from ai_quant_trader.core.models import (
     DenseZone,
     MarketRegime,
     NewsDigest,
+    NewsDirection,
     PatternCandidate,
     RegimePattern,
     Side,
@@ -374,24 +375,23 @@ class DeepSeekBrain:
         return compact
 
     def _news_direction_hint(self, news: NewsDigest) -> str:
-        # Historical NewsDigest.crypto_sentiment uses Alignment as a coarse
-        # market-direction hint: ALIGNED = bullish, CONFLICT = bearish.
-        # Convert it before asking AI for strategy-relative alignment.
-        if news.crypto_sentiment == Alignment.ALIGNED:
+        if news.news_direction == NewsDirection.BULLISH:
             return "bullish"
-        if news.crypto_sentiment == Alignment.CONFLICT:
+        if news.news_direction == NewsDirection.BEARISH:
             return "bearish"
-        if news.crypto_sentiment == Alignment.NEUTRAL:
+        if news.news_direction == NewsDirection.NEUTRAL:
             return "neutral"
         return "unknown"
 
     def _news_alignment_for_signal(self, news: NewsDigest, signal: StrategySignal) -> Alignment:
-        if news.crypto_sentiment in {Alignment.NEUTRAL, Alignment.UNKNOWN}:
-            return news.crypto_sentiment
+        if news.news_direction == NewsDirection.NEUTRAL:
+            return Alignment.NEUTRAL
+        if news.news_direction == NewsDirection.UNKNOWN:
+            return Alignment.UNKNOWN
         if signal.action == SignalAction.LONG:
-            return Alignment.ALIGNED if news.crypto_sentiment == Alignment.ALIGNED else Alignment.CONFLICT
+            return Alignment.ALIGNED if news.news_direction == NewsDirection.BULLISH else Alignment.CONFLICT
         if signal.action == SignalAction.SHORT:
-            return Alignment.ALIGNED if news.crypto_sentiment == Alignment.CONFLICT else Alignment.CONFLICT
+            return Alignment.ALIGNED if news.news_direction == NewsDirection.BEARISH else Alignment.CONFLICT
         return Alignment.UNKNOWN
 
     def _fallback_decision(

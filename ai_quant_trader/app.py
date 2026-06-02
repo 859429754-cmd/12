@@ -210,7 +210,7 @@ class TradingApp:
                 )
 
             if risk.allowed and signal.action in {SignalAction.EXIT_LONG, SignalAction.EXIT_SHORT}:
-                order = await self.execution.close_position(symbol_cfg.symbol, reason=risk.reason)
+                order = await self.order_lifecycle.close_position(self.execution, symbol_cfg.symbol, reason=risk.reason)
                 if order:
                     await self._cancel_native_stop_order(symbol_cfg.symbol)
                     self.trend_state.clear(symbol_cfg.symbol)
@@ -264,7 +264,11 @@ class TradingApp:
                     continue
                 opposite = self._opposite_position(signal, positions)
                 if opposite is not None:
-                    close_order = await self.execution.close_position(symbol_cfg.symbol, reason="reverse_signal_close_first")
+                    close_order = await self.order_lifecycle.close_position(
+                        self.execution,
+                        symbol_cfg.symbol,
+                        reason="reverse_signal_close_first",
+                    )
                     if close_order is None:
                         logger.warning("reverse_close_skipped_entry", extra={"symbol": symbol_cfg.symbol})
                         rows.append((signal, ai, aggregated, zone, risk))
@@ -290,7 +294,11 @@ class TradingApp:
                 self.store.insert("orders", order, symbol_cfg.symbol)
                 entry_state = self._record_trend_entry_state(symbol_cfg.symbol, signal, order.price or signal.current_price)
                 if entry_state is None and execution_mode_from_config(self.config) == "live":
-                    close_order = await self.execution.close_position(symbol_cfg.symbol, reason="missing_trend_stop_state_emergency_close")
+                    close_order = await self.order_lifecycle.close_position(
+                        self.execution,
+                        symbol_cfg.symbol,
+                        reason="missing_trend_stop_state_emergency_close",
+                    )
                     if close_order:
                         self.store.insert("orders", close_order, symbol_cfg.symbol)
                     raise RuntimeError("live_entry_missing_trend_stop_state")
@@ -886,7 +894,7 @@ class TradingApp:
         signal = self._fixed_atr_stop_signal(symbol, timeframe, candles_1m, position)
         if signal is None:
             return None
-        order = await self.execution.close_position(symbol, reason="software_fixed_atr_stop")
+        order = await self.order_lifecycle.close_position(self.execution, symbol, reason="software_fixed_atr_stop")
         if order:
             await self._cancel_native_stop_order(symbol)
             self.trend_state.clear(symbol)
@@ -1012,14 +1020,22 @@ class TradingApp:
                 self.store.insert("exchange_health", safety.model_dump(mode="json"))
                 raise RuntimeError("native_stop_loss_state_unknown_manual_gate_required") from exc
             logger.exception("native_stop_loss_submit_failed_emergency_close", extra={"symbol": symbol})
-            close_order = await self.execution.close_position(symbol, reason="native_stop_submit_failed_emergency_close")
+            close_order = await self.order_lifecycle.close_position(
+                self.execution,
+                symbol,
+                reason="native_stop_submit_failed_emergency_close",
+            )
             if close_order:
                 self.store.insert("orders", close_order, symbol)
             self.trend_state.clear(symbol)
             raise RuntimeError("native_stop_loss_submit_failed") from exc
         except Exception as exc:  # noqa: BLE001
             logger.exception("native_stop_loss_submit_failed_emergency_close", extra={"symbol": symbol})
-            close_order = await self.execution.close_position(symbol, reason="native_stop_submit_failed_emergency_close")
+            close_order = await self.order_lifecycle.close_position(
+                self.execution,
+                symbol,
+                reason="native_stop_submit_failed_emergency_close",
+            )
             if close_order:
                 self.store.insert("orders", close_order, symbol)
             self.trend_state.clear(symbol)

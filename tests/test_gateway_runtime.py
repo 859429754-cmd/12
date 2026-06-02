@@ -478,15 +478,19 @@ async def test_trading_app_emergency_closes_when_native_stop_submit_fails(tmp_pa
         async def create_stop_loss_order(self, request, stop_price, price_type=1):
             raise RuntimeError("stop_api_down")
 
-        async def close_position(self, symbol, reason="manual_close"):
+        async def fetch_positions(self, symbols):
+            return [PositionSnapshot(symbol=symbols[0], side=Side.LONG, qty=0.02, mark_price=2200.0)]
+
+        async def create_market_order(self, request):
             self.closed = True
             return OrderResult(
-                symbol=symbol,
-                side="sell",
-                amount=0.02,
+                symbol=request.symbol,
+                side=request.side,
+                amount=request.amount,
                 status="mock_closed",
                 dry_run=True,
                 exchange_order_id="close_123",
+                raw=request.model_dump(mode="json"),
             )
 
         async def close(self):
