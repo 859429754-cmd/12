@@ -10,6 +10,7 @@ from ai_quant_trader.brain.knowledge import TradingKnowledgeBase
 from ai_quant_trader.brain.wakeup import WakeupEngine
 from ai_quant_trader.app import TradingApp
 from ai_quant_trader.core.models import (
+    AggregatedOrderflow,
     AiDecision,
     AiCandidateTradePlan,
     Alignment,
@@ -19,6 +20,8 @@ from ai_quant_trader.core.models import (
     NewsItem,
     SignalAction,
     Side,
+    StrategySignal,
+    WakeupEvent,
     WakeupSeverity,
     VetoAction,
 )
@@ -194,6 +197,97 @@ async def test_major_news_review_skips_deepseek_without_signal_or_position(
         budget = app.store.fetch_payloads("ai_call_budget_events", symbol="ETH/USDT:USDT", limit=5)
         assert budget[0]["payload"]["status"] == "skipped"
         assert budget[0]["payload"]["call_type"] == "major_news_risk_review"
+    finally:
+        await app.close()
+
+
+@pytest.mark.asyncio
+async def test_major_news_review_with_strategy_signal_stays_out_of_trade_decisions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    _write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl")
+    app = TradingApp(str(config_path))
+    try:
+        candles = pd.DataFrame(
+            {
+                "open": [100.0] * 80,
+                "high": [102.0] * 80,
+                "low": [98.0] * 80,
+                "close": [100.0] * 80,
+                "volume": [1000.0] * 80,
+            }
+        )
+
+        async def fake_fetch_ohlcv(symbol: str, timeframe: str, *args, **kwargs):  # noqa: ANN001
+            return candles
+
+        async def fake_fetch_positions(symbols: list[str]):  # noqa: ANN001
+            return []
+
+        def fake_generate_signal(symbol, timeframe, candles_arg, position, equity):  # noqa: ANN001
+            return StrategySignal(
+                symbol=symbol,
+                timeframe=timeframe,
+                action=SignalAction.SHORT,
+                current_price=100.0,
+                suggested_qty=1.0,
+                signal_strength=0.9,
+                technical_evidence={"short_condition": True},
+            )
+
+        async def fake_fetch_summaries(symbol: str):  # noqa: ANN001
+            return []
+
+        def fake_aggregate(symbol, summaries):  # noqa: ANN001
+            return AggregatedOrderflow(symbol=symbol, alignment_hint=Alignment.ALIGNED, data_quality=0.9, source_count=2)
+
+        async def fake_analyze_symbol(signal, orderflow, dense_zone, pattern, news, regime_pattern=None):  # noqa: ANN001
+            assert signal.action == SignalAction.HOLD
+            assert signal.technical_evidence["original_strategy_action"] == "short"
+            return AiDecision(
+                symbol=signal.symbol,
+                regime=MarketRegime.TREND,
+                direction=Side.SHORT,
+                confidence=0.6,
+                multiplier=0.5,
+                news_alignment=Alignment.ALIGNED,
+                orderflow_alignment=Alignment.ALIGNED,
+                trend_confirmation_score=0.7,
+                range_risk_score=0.4,
+                news_risk_score=0.8,
+                orderflow_confirmation_score=0.7,
+                dense_zone_breakout_score=0.5,
+                action_suggestion="reduce",
+                veto_action=VetoAction.REDUCE,
+                brief_reason="重大新闻复评仅审计，不提交订单。",
+            )
+
+        monkeypatch.setattr(app.market, "fetch_ohlcv", fake_fetch_ohlcv)
+        monkeypatch.setattr(app, "_fetch_positions", fake_fetch_positions)
+        monkeypatch.setattr(app, "_generate_local_signal", fake_generate_signal)
+        monkeypatch.setattr(app.orderflow_client, "fetch_summaries", fake_fetch_summaries)
+        monkeypatch.setattr(app.orderflow_aggregator, "aggregate", fake_aggregate)
+        monkeypatch.setattr(app.brain, "analyze_symbol", fake_analyze_symbol)
+
+        await app._review_major_news_for_symbol(
+            WakeupEvent(
+                event_type="news",
+                severity=WakeupSeverity.HIGH,
+                title="突发：宏观风险资产遭遇利空",
+                summary="该消息偏空风险资产。",
+                source="test",
+            ),
+            "ETH/USDT:USDT",
+            "1h",
+        )
+
+        assert app.store.fetch_payloads("ai_decisions", symbol="ETH/USDT:USDT", limit=5) == []
+        reviews = app.store.fetch_payloads("news_risk_reviews", symbol="ETH/USDT:USDT", limit=5)
+        assert reviews
+        assert reviews[0]["payload"]["review_type"] == "major_news_risk_review"
+        assert reviews[0]["payload"]["no_order_submitted"] is True
     finally:
         await app.close()
 

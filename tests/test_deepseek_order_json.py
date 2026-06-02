@@ -8,6 +8,7 @@ from ai_quant_trader.brain.deepseek import DeepSeekBrain
 from ai_quant_trader.core.models import (
     AggregatedOrderflow,
     AiDecision,
+    Alignment,
     DenseZone,
     NewsDigest,
     NewsItem,
@@ -94,6 +95,63 @@ async def test_deepseek_decision_requires_structured_trade_prices(monkeypatch) -
     assert decision.dense_zone_breakout_score == 0.35
 
 
+@pytest.mark.asyncio
+async def test_deepseek_payload_separates_news_direction_from_strategy_alignment(monkeypatch) -> None:
+    brain = DeepSeekBrain(api_key="test-key", model="deepseek-v4-pro")
+
+    async def fake_chat_json(payload, timeout_seconds: int, retries: int):  # noqa: ANN001
+        assert payload["technical_signal"]["action"] == "short"
+        assert payload["news_direction_hint"] == "bearish"
+        assert payload["news_strategy_alignment_hint"] == "aligned"
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "symbol": "ETH/USDT:USDT",
+                                "regime": "trend",
+                                "direction": "short",
+                                "confidence": 0.72,
+                                "multiplier": 0.8,
+                                "news_alignment": "aligned",
+                                "orderflow_alignment": "aligned",
+                                "dense_zone_position": "below_value",
+                                "action_suggestion": "open_short",
+                                "veto_action": "reduce",
+                                "brief_reason": "利空消息与做空信号同向，但事件风险较高，降仓。",
+                            },
+                            ensure_ascii=False,
+                        )
+                    }
+                }
+            ]
+        }
+
+    monkeypatch.setattr(brain, "_chat_json", fake_chat_json)
+    decision = await brain.analyze_symbol(
+        StrategySignal(
+            symbol="ETH/USDT:USDT",
+            timeframe="1h",
+            action=SignalAction.SHORT,
+            current_price=1900.0,
+            suggested_qty=1.0,
+            signal_strength=0.82,
+        ),
+        AggregatedOrderflow(symbol="ETH/USDT:USDT", alignment_hint="aligned", data_quality=0.9, source_count=3),
+        DenseZone(symbol="ETH/USDT:USDT", poc=1950.0, vah=2010.0, val=1920.0, current_position="below_value", strength=0.7),
+        PatternCandidate(symbol="ETH/USDT:USDT", pattern_type="rectangle_breakdown", confidence=0.72),
+        NewsDigest(
+            items=[NewsItem(title="Fed hawkish comments pressure risk assets", source="test")],
+            crypto_sentiment=Alignment.CONFLICT,
+        ),
+    )
+
+    assert decision.direction == "short"
+    assert decision.news_alignment == "aligned"
+    assert decision.veto_action == "reduce"
+
+
 def test_deepseek_normalizes_five_score_fields_conservatively() -> None:
     brain = DeepSeekBrain(api_key="test-key")
 
@@ -139,6 +197,23 @@ def test_deepseek_normalizes_chinese_decision_terms() -> None:
     assert parsed["news_alignment"] == "conflict"
     assert parsed["orderflow_alignment"] == "aligned"
     assert parsed["veto_action"] == "reduce"
+
+
+def test_news_direction_hint_is_converted_relative_to_strategy_direction() -> None:
+    brain = DeepSeekBrain(api_key="test-key")
+    bearish_news = NewsDigest(summary="加息和制裁压制风险资产", crypto_sentiment=Alignment.CONFLICT)
+    short_signal = StrategySignal(
+        symbol="ETH/USDT:USDT",
+        timeframe="1h",
+        action=SignalAction.SHORT,
+        current_price=1900.0,
+        suggested_qty=1.0,
+    )
+    long_signal = short_signal.model_copy(update={"action": SignalAction.LONG})
+
+    assert brain._news_direction_hint(bearish_news) == "bearish"
+    assert brain._news_alignment_for_signal(bearish_news, short_signal) == Alignment.ALIGNED
+    assert brain._news_alignment_for_signal(bearish_news, long_signal) == Alignment.CONFLICT
 
 
 @pytest.mark.asyncio

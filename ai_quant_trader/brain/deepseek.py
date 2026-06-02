@@ -156,6 +156,9 @@ class DeepSeekBrain:
             "价格跌破旧密集区下沿后反抽不过，旧支撑转为阻力，可提高空头确认度；"
             "zone_mid 是密集区内部强弱分界线，站上偏强，跌破偏弱。"
             "如果技术信号与 AI 综合判断同向，且消息面、订单流、密集区至少两项印证，可以 allow 或提高 multiplier。"
+            "重大新闻必须拆分为方向一致性和执行风险：做空信号遇到明确利空、做多信号遇到明确利多，应判定 news_alignment=aligned，"
+            "不能仅因为它是重大新闻就标记为 conflict 或直接 block；同向重大新闻仍可提高 news_risk_score 并降仓，"
+            "但只有流动性抽干、交易所/监管系统性风险、订单流明显反向或密集区突破质量极差等执行风险同时出现时，才允许 veto_action=block。"
             "如果技术信号很强但消息面或订单流冲突，只能 reduce 或 block。"
             "如果出现央行意外、地缘冲突、监管黑天鹅、交易所风险、流动性恶化或数据质量差，必须 reduce 或 block。"
         )
@@ -318,6 +321,8 @@ class DeepSeekBrain:
             "pattern": pattern.model_dump(mode="json"),
             "regime_pattern": regime_pattern.model_dump(mode="json") if regime_pattern else None,
             "news": news.model_dump(mode="json"),
+            "news_direction_hint": self._news_direction_hint(news),
+            "news_strategy_alignment_hint": self._news_alignment_for_signal(news, signal),
             "trading_knowledge": self.knowledge_base.build_context(
                 ["market_regime", "trend_strategy", "orderflow_dense_zone", "macro_news", "risk_control"]
             ),
@@ -332,8 +337,9 @@ class DeepSeekBrain:
                 },
                 "ai_role": "只确认、缩仓或否决本地趋势策略信号，不生成自动开仓方向。",
                 "risk_scores_that_reduce_or_block": [
+                    "news_alignment 是方向一致性：做空+利空、做多+利多为 aligned；做空+利多、做多+利空为 conflict。",
                     "range_risk_score 高代表震荡/假突破风险高，应缩仓或阻断。",
-                    "news_risk_score 高代表重大新闻/事件风险高，应缩仓或阻断。",
+                    "news_risk_score 高代表重大新闻/事件执行风险高；若 news_alignment=aligned，优先缩仓，只有流动性/监管/交易所/订单流/密集区风险同时恶化时才阻断。",
                     "orderflow_confirmation_score 低代表订单流不支持本地技术方向，应缩仓或阻断。",
                     "dense_zone_breakout_score 低代表密集区突破质量差，应缩仓或阻断。",
                 ],
@@ -366,6 +372,27 @@ class DeepSeekBrain:
         news["items"] = items
         compact["news"] = news
         return compact
+
+    def _news_direction_hint(self, news: NewsDigest) -> str:
+        # Historical NewsDigest.crypto_sentiment uses Alignment as a coarse
+        # market-direction hint: ALIGNED = bullish, CONFLICT = bearish.
+        # Convert it before asking AI for strategy-relative alignment.
+        if news.crypto_sentiment == Alignment.ALIGNED:
+            return "bullish"
+        if news.crypto_sentiment == Alignment.CONFLICT:
+            return "bearish"
+        if news.crypto_sentiment == Alignment.NEUTRAL:
+            return "neutral"
+        return "unknown"
+
+    def _news_alignment_for_signal(self, news: NewsDigest, signal: StrategySignal) -> Alignment:
+        if news.crypto_sentiment in {Alignment.NEUTRAL, Alignment.UNKNOWN}:
+            return news.crypto_sentiment
+        if signal.action == SignalAction.LONG:
+            return Alignment.ALIGNED if news.crypto_sentiment == Alignment.ALIGNED else Alignment.CONFLICT
+        if signal.action == SignalAction.SHORT:
+            return Alignment.ALIGNED if news.crypto_sentiment == Alignment.CONFLICT else Alignment.CONFLICT
+        return Alignment.UNKNOWN
 
     def _fallback_decision(
         self,
@@ -444,7 +471,7 @@ class DeepSeekBrain:
             direction=direction,
             confidence=confidence,
             multiplier=0.5,
-            news_alignment=news.crypto_sentiment,
+            news_alignment=self._news_alignment_for_signal(news, signal),
             orderflow_alignment=orderflow.alignment_hint,
             dense_zone_position=dense_zone.current_position,
             pattern_type=pattern.pattern_type,

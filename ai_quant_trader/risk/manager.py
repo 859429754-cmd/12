@@ -246,7 +246,10 @@ class RiskManager:
         elif ai.range_risk_score >= 0.55:
             tier = self._min_tier(tier, "normal")
             warnings.append("range_risk_elevated_caps_normal")
-        if ai.news_risk_score >= 0.85:
+        if ai.news_risk_score >= 0.85 and ai.news_alignment == Alignment.ALIGNED:
+            tier = self._min_tier(tier, "weak")
+            warnings.append("aligned_major_news_extreme_risk_caps_weak")
+        elif ai.news_risk_score >= 0.85:
             tier = "block"
             warnings.append("news_risk_extreme_blocks_entry")
         elif ai.news_risk_score >= 0.70:

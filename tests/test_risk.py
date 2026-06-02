@@ -270,3 +270,32 @@ def test_major_news_aligned_full_size_requires_orderflow_and_dense_zone_quality(
     assert decision.position_tier == "strong"
     assert decision.position_scale == 0.75
     assert "major_news_full_requires_orderflow_and_dense_zone_confirmation" in decision.warnings
+
+
+def test_major_news_aligned_extreme_event_risk_caps_weak_not_hard_block() -> None:
+    state = RuntimeState(opening_paused=False, enabled_symbols={"ETH/USDT:USDT"})
+    manager = RiskManager(RiskConfig(max_total_leverage=4), state)
+    signal = _signal().model_copy(
+        update={"signal_strength": 0.98, "technical_evidence": {"major_news_context": True}}
+    )
+
+    decision = manager.evaluate(
+        signal,
+        _ai(
+            confidence=0.95,
+            news_alignment=Alignment.ALIGNED,
+            trend_confirmation_score=0.95,
+            range_risk_score=0.05,
+            news_risk_score=0.90,
+            orderflow_confirmation_score=0.90,
+            dense_zone_breakout_score=0.90,
+            veto_action=VetoAction.ALLOW,
+        ),
+        1000,
+        [],
+    )
+
+    assert decision.allowed
+    assert decision.position_tier == "weak"
+    assert decision.position_scale == 0.25
+    assert "aligned_major_news_extreme_risk_caps_weak" in decision.warnings

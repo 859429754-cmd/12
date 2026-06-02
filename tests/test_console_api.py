@@ -57,6 +57,47 @@ def test_major_news_budget_cap_is_readiness_warning_not_live_block() -> None:
     assert "Major news" in detail
 
 
+def test_status_latest_decision_excludes_major_news_review_audit(tmp_path: Path, monkeypatch) -> None:
+    for key in ["GATEIO_API_KEY", "GATEIO_API_SECRET", "GATEIO_TREND_API_KEY", "GATEIO_TREND_API_SECRET"]:
+        monkeypatch.setenv(key, "")
+    config_path = tmp_path / "config.yaml"
+    db_path = tmp_path / "trader.sqlite3"
+    audit_path = tmp_path / "audit.jsonl"
+    write_config(config_path, db_path, audit_path, symbols=["ETH/USDT:USDT"])
+    store = SQLiteStore(str(db_path), str(audit_path))
+    try:
+        trade_id = store.insert(
+            "ai_decisions",
+            {
+                "symbol": "ETH/USDT:USDT",
+                "regime": "trend",
+                "direction": "short",
+                "confidence": 0.72,
+                "veto_action": "reduce",
+            },
+            "ETH/USDT:USDT",
+        )
+        store.insert(
+            "ai_decisions",
+            {
+                "review_type": "major_news_risk_review",
+                "no_order_submitted": True,
+                "signal": {"action": "hold", "technical_evidence": {"original_strategy_action": "short"}},
+                "ai": {"veto_action": "block"},
+            },
+            "ETH/USDT:USDT",
+        )
+    finally:
+        store.close()
+
+    client = TestClient(create_app(str(config_path)))
+    body = client.get("/api/status").json()
+
+    latest = body["latest_decisions"]["ETH/USDT:USDT"]
+    assert latest["id"] == trade_id
+    assert latest["payload"]["direction"] == "short"
+
+
 def test_console_status_strategy_and_workbench(tmp_path: Path, monkeypatch) -> None:
     for key in ["GATEIO_API_KEY", "GATEIO_API_SECRET", "GATEIO_TREND_API_KEY", "GATEIO_TREND_API_SECRET"]:
         monkeypatch.setenv(key, "")

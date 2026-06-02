@@ -194,6 +194,21 @@ class TradingApp:
             self.store.insert("ai_drift_checks", drift, symbol_cfg.symbol)
             self.store.insert("ai_decisions", ai, symbol_cfg.symbol)
 
+            if not risk.allowed and signal.action in {SignalAction.LONG, SignalAction.SHORT}:
+                self.store.insert(
+                    "order_lifecycle",
+                    {
+                        "state": "blocked_before_submit",
+                        "symbol": symbol_cfg.symbol,
+                        "reason": risk.reason,
+                        "gateway_mode": execution_mode_from_config(self.config),
+                        "signal": signal.model_dump(mode="json"),
+                        "ai_decision": ai.model_dump(mode="json"),
+                        "risk_decision": risk.model_dump(mode="json"),
+                    },
+                    symbol_cfg.symbol,
+                )
+
             if risk.allowed and signal.action in {SignalAction.EXIT_LONG, SignalAction.EXIT_SHORT}:
                 order = await self.execution.close_position(symbol_cfg.symbol, reason=risk.reason)
                 if order:
@@ -340,27 +355,39 @@ class TradingApp:
             await asyncio.sleep(interval)
 
     async def _hourly_trading_loop(self, equity: float, live_news: bool) -> None:
+        await self._run_trading_cycle_with_heartbeat(
+            equity=equity,
+            live_news=live_news,
+            heartbeat_reason="trading_startup_cycle_ok",
+        )
         while True:
             await asyncio.sleep(self._seconds_until_next_report())
-            try:
-                await self.run_once(equity=equity, live_news=live_news)
-                self.heartbeat.ok(
-                    "trading_worker",
-                    reason="trading_cycle_ok",
-                    interval_seconds=3600,
-                    details={"live_news": live_news},
-                )
-            except Exception as exc:  # noqa: BLE001
-                self.heartbeat.fail(
-                    "trading_worker",
-                    reason="trading_cycle_failed",
-                    status=HealthStatus.BLOCK,
-                    interval_seconds=3600,
-                    details={"error_type": type(exc).__name__},
-                )
-                logger.exception("trading_worker_failed")
-                if execution_mode_from_config(self.config) == "live":
-                    raise
+            await self._run_trading_cycle_with_heartbeat(
+                equity=equity,
+                live_news=live_news,
+                heartbeat_reason="trading_cycle_ok",
+            )
+
+    async def _run_trading_cycle_with_heartbeat(self, equity: float, live_news: bool, heartbeat_reason: str) -> None:
+        try:
+            await self.run_once(equity=equity, live_news=live_news)
+            self.heartbeat.ok(
+                "trading_worker",
+                reason=heartbeat_reason,
+                interval_seconds=3600,
+                details={"live_news": live_news},
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.heartbeat.fail(
+                "trading_worker",
+                reason="trading_cycle_failed",
+                status=HealthStatus.BLOCK,
+                interval_seconds=3600,
+                details={"error_type": type(exc).__name__},
+            )
+            logger.exception("trading_worker_failed")
+            if execution_mode_from_config(self.config) == "live":
+                raise
 
     async def _news_refresh_loop(self) -> None:
         while True:
@@ -640,7 +667,6 @@ class TradingApp:
             "risk": risk.model_dump(mode="json"),
         }
         self.store.insert("news_risk_reviews", payload, symbol)
-        self.store.insert("ai_decisions", payload, symbol)
 
     async def _current_position_for_symbol(self, symbol: str) -> PositionSnapshot:
         try:

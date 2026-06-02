@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -408,6 +409,26 @@ def test_local_trend_state_blocks_same_direction_duplicate_entry(tmp_path: Path)
         "ETH/USDT:USDT",
         StrategySignal(symbol="ETH/USDT:USDT", timeframe="1h", action=SignalAction.SHORT, current_price=2190.0),
     )
+
+
+@pytest.mark.asyncio
+async def test_hourly_trading_loop_runs_startup_cycle_before_sleep(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = tmp_path / "config.yaml"
+    write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl", ["ETH/USDT:USDT"])
+    app = TradingApp(str(config_path))
+    calls: list[str] = []
+
+    async def fake_cycle(*, equity: float, live_news: bool, heartbeat_reason: str) -> None:
+        calls.append(heartbeat_reason)
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(app, "_run_trading_cycle_with_heartbeat", fake_cycle)
+
+    with pytest.raises(asyncio.CancelledError):
+        await app._hourly_trading_loop(equity=1000.0, live_news=False)
+
+    assert calls == ["trading_startup_cycle_ok"]
+    await app.close()
 
 
 @pytest.mark.asyncio

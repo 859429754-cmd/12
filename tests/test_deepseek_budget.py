@@ -203,6 +203,103 @@ async def test_trading_app_budget_wrapper_blocks_second_ai_call(tmp_path: Path, 
 
 
 @pytest.mark.asyncio
+async def test_hourly_cycle_audits_entry_signal_blocked_by_risk_manager(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl")
+    app = TradingApp(str(config_path))
+    app.state.opening_paused = False
+    app.state.authorize_symbol("ETH/USDT:USDT")
+    candles = pd.DataFrame(
+        {
+            "open": [100.0] * 80,
+            "high": [101.0] * 80,
+            "low": [99.0] * 80,
+            "close": [100.0] * 80,
+            "volume": [1000.0] * 80,
+        }
+    )
+
+    async def fake_news(live_news: bool) -> NewsDigest:
+        return NewsDigest(summary="bearish macro", crypto_sentiment=Alignment.CONFLICT)
+
+    async def fake_refresh_exchange_safety(symbols: list[str]):  # noqa: ANN001
+        return None
+
+    async def fake_fetch_positions(symbols: list[str]):  # noqa: ANN001
+        return [PositionSnapshot(symbol=symbols[0], side=Side.FLAT, qty=0.0, mark_price=100.0)]
+
+    async def fake_fetch_ohlcv(symbol: str, timeframe: str, *args, **kwargs):  # noqa: ANN001
+        return candles
+
+    async def fake_fetch_summaries(symbol: str):  # noqa: ANN001
+        return []
+
+    async def fake_reload_runtime_config() -> None:
+        return None
+
+    def fake_analyze_regime(*args, **kwargs):  # noqa: ANN002, ANN003
+        return RegimePattern(
+            symbol="ETH/USDT:USDT",
+            regime_candidate="trend",
+            strategy_allowed="trend",
+            trend_score=0.7,
+            range_score=0.3,
+            reason_codes=["test_trend_allowed"],
+        )
+
+    async def fake_analyze_symbol(*args, **kwargs):  # noqa: ANN002, ANN003
+        return AiDecision(
+            symbol="ETH/USDT:USDT",
+            regime=MarketRegime.TREND,
+            direction=Side.SHORT,
+            confidence=0.65,
+            multiplier=0.7,
+            news_alignment=Alignment.ALIGNED,
+            orderflow_alignment=Alignment.ALIGNED,
+            trend_confirmation_score=0.7,
+            range_risk_score=0.75,
+            news_risk_score=0.8,
+            orderflow_confirmation_score=0.2,
+            dense_zone_breakout_score=0.1,
+            action_suggestion="open_short",
+            veto_action=VetoAction.REDUCE,
+            brief_reason="Aligned bearish news confirms the short, but orderflow and dense-zone quality are weak.",
+        )
+
+    monkeypatch.setattr(app, "_news_for_trading_cycle", fake_news)
+    monkeypatch.setattr(app, "_refresh_exchange_safety", fake_refresh_exchange_safety)
+    monkeypatch.setattr(app, "_fetch_positions", fake_fetch_positions)
+    monkeypatch.setattr(app.market, "fetch_ohlcv", fake_fetch_ohlcv)
+    monkeypatch.setattr(app.orderflow_client, "fetch_summaries", fake_fetch_summaries)
+    monkeypatch.setattr(app, "reload_runtime_config", fake_reload_runtime_config)
+    monkeypatch.setattr(app.regime_patterns, "analyze", fake_analyze_regime)
+    def fake_generate_local_signal(*args, **kwargs):  # noqa: ANN002, ANN003
+        return make_signal(SignalAction.SHORT).model_copy(
+            update={"technical_evidence": {"strategy_allowed": "trend", "major_news_context": True}}
+        )
+
+    monkeypatch.setattr(app, "_generate_local_signal", fake_generate_local_signal)
+    monkeypatch.setattr(app.brain, "analyze_symbol", fake_analyze_symbol)
+
+    try:
+        await app.run_once(equity=1000.0, live_news=False)
+
+        latest = app.store.fetch_latest("order_lifecycle", "ETH/USDT:USDT")
+        assert latest is not None
+        payload = latest["payload"]
+        assert payload["state"] == "blocked_before_submit"
+        assert payload["reason"] == "combined_decision_score_too_low"
+        assert payload["signal"]["action"] == "short"
+        assert payload["ai_decision"]["news_alignment"] == "aligned"
+        assert payload["risk_decision"]["allowed"] is False
+    finally:
+        await app.close()
+
+
+@pytest.mark.asyncio
 async def test_hourly_cycle_skips_deepseek_without_signal_or_position(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

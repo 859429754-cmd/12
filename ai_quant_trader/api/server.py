@@ -296,7 +296,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
                 "status_message": "DeepSeek 已接入" if deepseek_ready else "本地未配置 DeepSeek API，AI 将使用保守降级决策。",
             },
             "symbols": [item.model_dump(mode="json") for item in ctx.config.symbols],
-            "latest_decisions": {symbol: ctx.store.fetch_latest("ai_decisions", symbol) for symbol in symbols},
+            "latest_decisions": {symbol: _latest_trade_ai_decision(ctx, symbol) for symbol in symbols},
             "latest_orderflow": {symbol: ctx.store.fetch_latest("orderflow_summaries", symbol) for symbol in symbols},
             "exchange_safety": ctx.store.fetch_latest("exchange_health"),
             "latest_order_lifecycle": ctx.store.fetch_latest("order_lifecycle"),
@@ -328,7 +328,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         latest_order_lifecycle = ctx.store.fetch_latest("order_lifecycle")
         latest_data_health = ctx.store.fetch_latest("data_health")
         latest_ai_drift = ctx.store.fetch_latest("ai_drift_checks")
-        latest_ai_decision = ctx.store.fetch_latest("ai_decisions")
+        latest_ai_decision = _latest_trade_ai_decision(ctx)
         latest_news_risk = ctx.store.fetch_latest("news_risk_reviews")
         latest_ai_budget = ctx.store.fetch_latest("ai_call_budget_events")
         latest_worker_heartbeats = _worker_heartbeat_rows(ctx)
@@ -1968,6 +1968,33 @@ def _maintenance_status(row: dict[str, Any] | None) -> tuple[Literal["ok", "warn
     if warnings:
         return "warn", "Runtime maintenance warnings: " + ",".join(str(item) for item in warnings)
     return "ok", "Runtime maintenance completed without warnings."
+
+
+def _latest_trade_ai_decision(ctx: ConsoleContext, symbol: str | None = None) -> dict[str, Any] | None:
+    """Return the latest formal trading-cycle decision, not audit-only reviews.
+
+    `ai_decisions` intentionally stores several AI audit surfaces. The console
+    status card must not treat a major-news review or price wakeup as the latest
+    executable trade decision, otherwise a `hold/no_order_submitted` audit record
+    masks the last actual strategy decision.
+    """
+
+    for row in ctx.store.fetch_payloads("ai_decisions", limit=500, symbol=symbol):
+        payload = row.get("payload") or {}
+        if _is_audit_only_ai_payload(payload):
+            continue
+        return row
+    return None
+
+
+def _is_audit_only_ai_payload(payload: dict[str, Any]) -> bool:
+    if payload.get("no_order_submitted") is True:
+        return True
+    if payload.get("review_type") in {"major_news_risk_review"}:
+        return True
+    if "event" in payload:
+        return True
+    return False
 
 
 def _deepseek_readiness_status(
