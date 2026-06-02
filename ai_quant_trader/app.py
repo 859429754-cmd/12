@@ -15,6 +15,7 @@ from ai_quant_trader.core.logging import setup_logging
 from ai_quant_trader.core.models import (
     AggregatedOrderflow,
     AiDecision,
+    AiDriftReport,
     DenseZone,
     HealthStatus,
     NewsDigest,
@@ -177,7 +178,7 @@ class TradingApp:
                     "ai_disabled_for_symbol",
                     regime_pattern,
                 )
-            drift = self.ai_drift.evaluate(symbol_cfg.symbol, ai)
+            drift = self._evaluate_ai_drift_for_signal(symbol_cfg.symbol, signal, position, ai)
             data_health = self.data_health.evaluate_symbol(
                 symbol=symbol_cfg.symbol,
                 timeframe=symbol_cfg.timeframe,
@@ -205,6 +206,23 @@ class TradingApp:
                     risk.allowed = False
                     risk.reason = f"data_health_blocks_new_entry:{data_health.status.value}:{data_health.reason}"
                     risk.warnings.append("market/news/orderflow freshness gate blocked this entry")
+                    rows.append((signal, ai, aggregated, zone, risk))
+                    continue
+                if drift.status == HealthStatus.BLOCK:
+                    risk.allowed = False
+                    risk.reason = f"ai_drift_blocks_new_entry:{drift.reason}"
+                    risk.warnings.append("AI output drift gate blocked this entry; wait for the next actionable signal or review manually.")
+                    self.store.insert(
+                        "order_lifecycle",
+                        {
+                            "state": "blocked_before_submit",
+                            "symbol": symbol_cfg.symbol,
+                            "reason": risk.reason,
+                            "gateway_mode": execution_mode_from_config(self.config),
+                            "risk_state": drift.model_dump(mode="json"),
+                        },
+                        symbol_cfg.symbol,
+                    )
                     rows.append((signal, ai, aggregated, zone, risk))
                     continue
                 safety = self.exchange_safety.state
@@ -640,6 +658,24 @@ class TradingApp:
 
     def _should_call_deepseek_for_signal(self, signal: StrategySignal, position: PositionSnapshot) -> bool:
         return signal.action != SignalAction.HOLD or self._has_open_position(position)
+
+    def _evaluate_ai_drift_for_signal(
+        self,
+        symbol: str,
+        signal: StrategySignal,
+        position: PositionSnapshot,
+        ai: AiDecision,
+    ) -> AiDriftReport:
+        if not self._should_call_deepseek_for_signal(signal, position):
+            return AiDriftReport(
+                symbol=symbol,
+                status=HealthStatus.OK,
+                reason="ai_drift_skipped_no_signal_no_position",
+                sample_size=0,
+                latest_confidence=ai.confidence,
+                latest_direction=ai.direction,
+            )
+        return self.ai_drift.evaluate(symbol, ai)
 
     def _record_skipped_major_news_review(
         self,

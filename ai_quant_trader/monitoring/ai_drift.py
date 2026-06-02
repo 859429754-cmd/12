@@ -89,10 +89,14 @@ class AIDriftMonitor:
 
     def _extract_decision_payload(self, payload: dict[str, Any]) -> dict[str, Any] | None:
         if "confidence" in payload and "veto_action" in payload:
+            reason_codes = payload.get("reason_codes") or []
+            if "deepseek_skipped:no_signal_no_position" in reason_codes:
+                return None
+            direction = str(payload.get("direction") or "flat").lower()
+            action = str(payload.get("action_suggestion") or "hold").lower()
+            if direction == "flat" and action in {"", "hold", "wait", "none", "no_signal"}:
+                return None
             return payload
-        nested = payload.get("ai")
-        if isinstance(nested, dict) and "confidence" in nested and "veto_action" in nested:
-            return nested
         return None
 
     def _dominant_direction(self, decisions: list[AiDecision]) -> Side | None:

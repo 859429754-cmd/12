@@ -104,3 +104,58 @@ def test_ai_drift_blocks_extreme_direction_flip(tmp_path: Path) -> None:
     assert report.reason == "ai_output_drift_block"
     assert report.baseline_direction == Side.LONG
     store.close()
+
+
+def test_ai_drift_ignores_no_signal_fallback_decisions(tmp_path: Path) -> None:
+    store = SQLiteStore(str(tmp_path / "trader.sqlite3"), str(tmp_path / "audit.jsonl"))
+    symbol = "ETH/USDT:USDT"
+    for _ in range(5):
+        payload = make_ai(symbol, Side.LONG, 0.82, 0.85).model_dump(mode="json")
+        payload["reason_codes"] = ["deepseek_skipped:no_signal_no_position", "fallback_conservative"]
+        store.insert("ai_decisions", payload, symbol)
+    monitor = AIDriftMonitor(store, warn_delta=0.3, block_delta=0.55)
+
+    report = monitor.evaluate(symbol, make_ai(symbol, Side.SHORT, 0.88, 0.1))
+
+    assert report.status == HealthStatus.OK
+    assert report.reason == "ai_drift_insufficient_history"
+    assert report.sample_size == 0
+    store.close()
+
+
+def test_ai_drift_ignores_flat_hold_decisions(tmp_path: Path) -> None:
+    store = SQLiteStore(str(tmp_path / "trader.sqlite3"), str(tmp_path / "audit.jsonl"))
+    symbol = "ETH/USDT:USDT"
+    for _ in range(5):
+        store.insert("ai_decisions", make_ai(symbol, Side.FLAT, 0.35, 0.1), symbol)
+    monitor = AIDriftMonitor(store, warn_delta=0.3, block_delta=0.55)
+
+    report = monitor.evaluate(symbol, make_ai(symbol, Side.SHORT, 0.65, 0.7))
+
+    assert report.status == HealthStatus.OK
+    assert report.reason == "ai_drift_insufficient_history"
+    assert report.sample_size == 0
+    store.close()
+
+
+def test_ai_drift_ignores_nested_news_review_ai_payloads(tmp_path: Path) -> None:
+    store = SQLiteStore(str(tmp_path / "trader.sqlite3"), str(tmp_path / "audit.jsonl"))
+    symbol = "ETH/USDT:USDT"
+    for _ in range(5):
+        store.insert(
+            "ai_decisions",
+            {
+                "review_type": "major_news_risk_review",
+                "no_order_submitted": True,
+                "ai": make_ai(symbol, Side.LONG, 0.82, 0.85).model_dump(mode="json"),
+            },
+            symbol,
+        )
+    monitor = AIDriftMonitor(store, warn_delta=0.3, block_delta=0.55)
+
+    report = monitor.evaluate(symbol, make_ai(symbol, Side.SHORT, 0.88, 0.1))
+
+    assert report.status == HealthStatus.OK
+    assert report.reason == "ai_drift_insufficient_history"
+    assert report.sample_size == 0
+    store.close()
