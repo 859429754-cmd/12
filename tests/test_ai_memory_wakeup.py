@@ -104,7 +104,10 @@ def test_wakeup_engine_news_and_price_triggers() -> None:
 
 
 @pytest.mark.asyncio
-async def test_major_news_review_records_audit_without_order(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_major_news_review_skips_deepseek_without_signal_or_position(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     config_path = tmp_path / "config.yaml"
     _write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl")
     app = TradingApp(str(config_path))
@@ -129,7 +132,7 @@ async def test_major_news_review_records_audit_without_order(tmp_path: Path, mon
             return []
 
         async def fake_fetch_summaries(symbol: str):  # noqa: ANN001
-            return []
+            raise AssertionError("Orderflow fetch must not run when major news review is locally skipped.")
 
         async def fake_analyze_symbol(signal, orderflow, dense_zone, pattern, news, regime_pattern=None):  # noqa: ANN001
             assert signal.action == SignalAction.HOLD
@@ -174,17 +177,23 @@ async def test_major_news_review_records_audit_without_order(tmp_path: Path, mon
         reviews = app.store.fetch_payloads("news_risk_reviews", symbol="ETH/USDT:USDT", limit=5)
         orders = app.store.fetch_payloads("orders", limit=5)
 
-        assert rows
-        payload = rows[0]["payload"]
+        assert rows == []
+        assert reviews
+        payload = reviews[0]["payload"]
         assert payload["review_type"] == "major_news_risk_review"
+        assert payload["status"] == "skipped"
+        assert payload["deepseek_called"] is False
+        assert payload["skip_reason"] == "no_signal_no_position"
         assert payload["no_order_submitted"] is True
         assert payload["signal"]["action"] == "hold"
         assert payload["signal"]["technical_evidence"]["major_news_context"] is True
-        assert reviews
         assert reviews[0]["payload"]["event_key"] == payload["event_key"]
         assert payload["risk"]["allowed"] is False
         assert payload["risk"]["reason"] == "major_news_without_strategy_signal"
         assert orders == []
+        budget = app.store.fetch_payloads("ai_call_budget_events", symbol="ETH/USDT:USDT", limit=5)
+        assert budget[0]["payload"]["status"] == "skipped"
+        assert budget[0]["payload"]["call_type"] == "major_news_risk_review"
     finally:
         await app.close()
 

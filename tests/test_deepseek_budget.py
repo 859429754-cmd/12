@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from ai_quant_trader.app import TradingApp
@@ -15,6 +16,7 @@ from ai_quant_trader.core.models import (
     MarketRegime,
     NewsDigest,
     PatternCandidate,
+    PositionSnapshot,
     RegimePattern,
     SignalAction,
     Side,
@@ -196,5 +198,65 @@ async def test_trading_app_budget_wrapper_blocks_second_ai_call(tmp_path: Path, 
         assert second.veto_action == "block"
         assert "deepseek_budget_blocked:hourly_limit_exceeded" in second.reason_codes
         assert calls == 1
+    finally:
+        await app.close()
+
+
+@pytest.mark.asyncio
+async def test_hourly_cycle_skips_deepseek_without_signal_or_position(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl")
+    app = TradingApp(str(config_path))
+    app.state.enable_report("ETH/USDT:USDT")
+
+    candles = pd.DataFrame(
+        {
+            "open": [100.0] * 80,
+            "high": [101.0] * 80,
+            "low": [99.0] * 80,
+            "close": [100.0] * 80,
+            "volume": [1000.0] * 80,
+        }
+    )
+
+    async def fake_news(live_news: bool) -> NewsDigest:
+        return NewsDigest(summary="no major news")
+
+    async def fake_refresh_exchange_safety(symbols: list[str]):  # noqa: ANN001
+        return None
+
+    async def fake_fetch_positions(symbols: list[str]):  # noqa: ANN001
+        return [PositionSnapshot(symbol=symbols[0], side=Side.FLAT, qty=0.0, mark_price=100.0)]
+
+    async def fake_fetch_ohlcv(symbol: str, timeframe: str, *args, **kwargs):  # noqa: ANN001
+        return candles
+
+    async def fake_fetch_summaries(symbol: str):  # noqa: ANN001
+        return []
+
+    async def fake_analyze_symbol(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise AssertionError("DeepSeek must not be called for a flat no-signal hourly cycle.")
+
+    monkeypatch.setattr(app, "_news_for_trading_cycle", fake_news)
+    monkeypatch.setattr(app, "_refresh_exchange_safety", fake_refresh_exchange_safety)
+    monkeypatch.setattr(app, "_fetch_positions", fake_fetch_positions)
+    monkeypatch.setattr(app.market, "fetch_ohlcv", fake_fetch_ohlcv)
+    monkeypatch.setattr(app.orderflow_client, "fetch_summaries", fake_fetch_summaries)
+    monkeypatch.setattr(app, "_generate_local_signal", lambda *args, **kwargs: make_signal(SignalAction.HOLD))
+    monkeypatch.setattr(app.brain, "analyze_symbol", fake_analyze_symbol)
+
+    try:
+        await app.run_once(equity=1000.0, live_news=False)
+
+        budget = app.store.fetch_payloads("ai_call_budget_events", symbol="ETH/USDT:USDT", limit=5)
+        decisions = app.store.fetch_payloads("ai_decisions", symbol="ETH/USDT:USDT", limit=5)
+        assert budget[0]["payload"]["status"] == "skipped"
+        assert budget[0]["payload"]["call_type"] == "trading_cycle"
+        assert budget[0]["payload"]["reason"] == "no_signal_no_position"
+        assert decisions
+        assert "deepseek_skipped:no_signal_no_position" in decisions[0]["payload"]["reason_codes"]
     finally:
         await app.close()

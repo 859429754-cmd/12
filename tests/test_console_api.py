@@ -42,6 +42,21 @@ ai:
     )
 
 
+def test_major_news_budget_cap_is_readiness_warning_not_live_block() -> None:
+    latest = {
+        "payload": {
+            "call_type": "major_news_risk_review",
+            "status": "blocked",
+            "reason": "major_news_hourly_limit_exceeded",
+        }
+    }
+
+    status, detail = server._ai_budget_readiness_status(latest, "live")
+
+    assert status == "warn"
+    assert "Major news" in detail
+
+
 def test_console_status_strategy_and_workbench(tmp_path: Path, monkeypatch) -> None:
     for key in ["GATEIO_API_KEY", "GATEIO_API_SECRET", "GATEIO_TREND_API_KEY", "GATEIO_TREND_API_SECRET"]:
         monkeypatch.setenv(key, "")

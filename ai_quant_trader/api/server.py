@@ -1996,8 +1996,15 @@ def _ai_budget_readiness_status(
     if status == "blocked":
         if reason == "duplicate_event_key":
             return "ok", "Latest DeepSeek call was skipped because the news event was already reviewed."
+        if payload.get("call_type") == "major_news_risk_review" and reason in {
+            "major_news_hourly_limit_exceeded",
+            "major_news_daily_limit_exceeded",
+        }:
+            return "warn", f"Major news DeepSeek review budget is capped; strategy-signal AI calls remain separately guarded: {reason}"
         level = "block" if execution_mode == "live" else "warn"
         return level, f"DeepSeek budget guard blocked the latest call: {reason}"
+    if status == "skipped":
+        return "ok", f"Latest DeepSeek call was skipped by local prefilter: {reason}."
     if status in {"attempt", "success"}:
         return "ok", f"Latest DeepSeek budget event status: {status}."
     return "warn", f"Unknown DeepSeek budget event status: {status}."

@@ -142,7 +142,7 @@ class TradingApp:
             pattern = self.patterns.detect(symbol_cfg.symbol, candles)
             regime_pattern = self.regime_patterns.analyze(symbol_cfg.symbol, candles, zone, pattern)
             signal = self.regime_patterns.enrich_signal(signal, regime_pattern)
-            if self._ai_enabled_for_symbol(symbol_cfg.symbol):
+            if self._ai_enabled_for_symbol(symbol_cfg.symbol) and self._should_call_deepseek_for_signal(signal, position):
                 ai = await self._analyze_with_deepseek_budget(
                     "trading_cycle",
                     signal,
@@ -150,6 +150,21 @@ class TradingApp:
                     zone,
                     pattern,
                     news_digest,
+                    regime_pattern,
+                )
+            elif self._ai_enabled_for_symbol(symbol_cfg.symbol):
+                self.deepseek_budget.record_skipped(
+                    symbol=symbol_cfg.symbol,
+                    call_type="trading_cycle",
+                    reason="no_signal_no_position",
+                )
+                ai = self.brain.local_fallback_decision(
+                    signal,
+                    aggregated,
+                    zone,
+                    pattern,
+                    news_digest,
+                    "deepseek_skipped:no_signal_no_position",
                     regime_pattern,
                 )
             else:
@@ -552,7 +567,8 @@ class TradingApp:
 
     async def _review_major_news_for_symbol(self, event, symbol: str, timeframe: str) -> None:
         candles = await self.market.fetch_ohlcv(symbol, timeframe)
-        position = PositionSnapshot(symbol=symbol, side=Side.FLAT, qty=0.0, mark_price=float(candles["close"].iloc[-1]))
+        position = await self._current_position_for_symbol(symbol)
+        position.mark_price = float(candles["close"].iloc[-1])
         signal = self._generate_local_signal(symbol, timeframe, candles, position, equity=0.0)
         review_signal = signal.model_copy(
             update={
@@ -569,6 +585,9 @@ class TradingApp:
                 },
             }
         )
+        if not self._should_call_deepseek_for_signal(signal, position):
+            self._record_skipped_major_news_review(event, review_signal, symbol, reason="no_signal_no_position")
+            return
         orderflow_summaries = await self.orderflow_client.fetch_summaries(symbol)
         aggregated = self.orderflow_aggregator.aggregate(symbol, orderflow_summaries)
         zone = self.dense_zone.calculate(symbol, candles)
@@ -604,6 +623,56 @@ class TradingApp:
         }
         self.store.insert("news_risk_reviews", payload, symbol)
         self.store.insert("ai_decisions", payload, symbol)
+
+    async def _current_position_for_symbol(self, symbol: str) -> PositionSnapshot:
+        try:
+            positions = await self._fetch_positions([symbol])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("news_risk_review_position_fetch_failed", extra={"symbol": symbol, "error": type(exc).__name__})
+            return PositionSnapshot(symbol=symbol, side=Side.FLAT, qty=0.0, mark_price=0.0)
+        for position in positions:
+            if position.symbol == symbol:
+                return position
+        return PositionSnapshot(symbol=symbol, side=Side.FLAT, qty=0.0, mark_price=0.0)
+
+    def _has_open_position(self, position: PositionSnapshot) -> bool:
+        return position.side != Side.FLAT and abs(float(position.qty or 0.0)) > 0
+
+    def _should_call_deepseek_for_signal(self, signal: StrategySignal, position: PositionSnapshot) -> bool:
+        return signal.action != SignalAction.HOLD or self._has_open_position(position)
+
+    def _record_skipped_major_news_review(
+        self,
+        event,
+        signal: StrategySignal,
+        symbol: str,
+        *,
+        reason: str,
+    ) -> None:
+        event_key = self._news_risk_event_key(event)
+        self.deepseek_budget.record_skipped(
+            symbol=symbol,
+            call_type="major_news_risk_review",
+            reason=reason,
+            event_key=event_key,
+        )
+        payload = {
+            "review_type": "major_news_risk_review",
+            "event_key": event_key,
+            "status": "skipped",
+            "skip_reason": reason,
+            "deepseek_called": False,
+            "no_order_submitted": True,
+            "event": event.model_dump(mode="json"),
+            "signal": signal.model_dump(mode="json"),
+            "ai": None,
+            "risk": {
+                "allowed": False,
+                "reason": "major_news_without_strategy_signal",
+                "warnings": ["deepseek_prefilter_skipped_no_signal_no_position"],
+            },
+        }
+        self.store.insert("news_risk_reviews", payload, symbol)
 
     async def _news_for_trading_cycle(self, live_news: bool) -> NewsDigest:
         if live_news:

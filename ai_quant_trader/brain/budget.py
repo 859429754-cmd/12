@@ -113,6 +113,17 @@ class DeepSeekBudgetGuard:
         )
         self.store.update_payload(self.table, row_id, payload)
 
+    def record_skipped(self, *, symbol: str, call_type: str, reason: str, event_key: str | None = None) -> int:
+        payload = {
+            "symbol": symbol,
+            "call_type": call_type,
+            "event_key": event_key,
+            "status": "skipped",
+            "reason": reason,
+            "checked_at": datetime.now(UTC).isoformat(),
+        }
+        return self.store.insert(self.table, payload, symbol)
+
     def _blocking_reason(self, *, symbol: str, call_type: str, event_key: str | None, now: datetime) -> str | None:
         if event_key:
             duplicate = self._find_event_key(
