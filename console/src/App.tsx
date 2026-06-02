@@ -275,10 +275,11 @@ export function App() {
         news={news}
         positions={positions}
         orders={orders}
-          accountSlots={accountSlots}
-          denseZone={denseZone}
-          riskSummary={riskSummary}
-          readiness={readiness}
+        accountSlots={accountSlots}
+        denseZone={denseZone}
+        riskSummary={riskSummary}
+        readiness={readiness}
+        operationCode={operationCode}
         busy={busy}
         postAction={postAction}
           decisions={decisions}
@@ -783,6 +784,7 @@ function WorkspaceBody({
   denseZone,
   riskSummary,
   readiness,
+  operationCode,
   busy,
   postAction,
   decisions,
@@ -809,6 +811,7 @@ function WorkspaceBody({
   denseZone: DbRow<DenseZonePayload> | null;
   riskSummary: Record<string, unknown> | null;
   readiness: SystemReadiness | null;
+  operationCode: string;
   busy: boolean;
   postAction: (path: string, body: Record<string, unknown>) => Promise<void>;
   decisions: Array<DbRow>;
@@ -866,6 +869,7 @@ function WorkspaceBody({
         orders={orders}
         accountSlots={accountSlots}
         riskSummary={riskSummary}
+        operationCode={operationCode}
         busy={busy}
         postAction={postAction}
       />
@@ -3097,6 +3101,7 @@ function ExecutionWorkspace({
   orders,
   accountSlots,
   riskSummary,
+  operationCode,
   busy,
   postAction,
 }: {
@@ -3108,6 +3113,7 @@ function ExecutionWorkspace({
   orders: Array<DbRow>;
   accountSlots: ExecutionAccountSlot[];
   riskSummary: Record<string, unknown> | null;
+  operationCode: string;
   busy: boolean;
   postAction: (path: string, body: Record<string, unknown>) => Promise<void>;
 }) {
@@ -3172,7 +3178,7 @@ function ExecutionWorkspace({
             当前按你的要求采用“单账户独立风控”：趋势账户和震荡账户各自使用配置的杠杆硬上限（当前 {num(riskCap, 1)}x）。组合总风险允许叠加，但控制台会单独展示，不能把它误认为一个账户限制。
           </div>
         </Surface>
-        <RuntimeModePanel executionMode={executionMode} busy={busy} postAction={postAction} />
+        <RuntimeModePanel executionMode={executionMode} operationCode={operationCode} busy={busy} postAction={postAction} />
       </div>
 
       <AccountSlotManager accountSlots={accountSlots} busy={busy} postAction={postAction} />
@@ -3286,14 +3292,18 @@ function StrategyChannelCard({
 
 function RuntimeModePanel({
   executionMode,
+  operationCode,
   busy,
   postAction,
 }: {
   executionMode: string;
+  operationCode: string;
   busy: boolean;
   postAction: (path: string, body: Record<string, unknown>) => Promise<void>;
 }) {
   const [pin, setPin] = useState("");
+  const operationCodeReady = operationCode.trim().length > 0;
+  const pinReady = pin.trim().length >= 4;
   return (
     <Surface title={<><Power size={13} /> 模拟 / 实盘模式</>}>
       <div className="grid grid-cols-2 gap-2">
@@ -3306,7 +3316,7 @@ function RuntimeModePanel({
         </button>
         <button
           className={`${button} justify-center ${executionMode === "live" ? "border-[#facc15] text-[#facc15]" : ""}`}
-          disabled={busy || pin.trim().length < 4}
+          disabled={busy || !operationCodeReady || !pinReady}
           onClick={() => postAction("/api/control/runtime-mode", { operator_id: "console", dry_run: false, trade_pin: pin })}
         >
           开启实盘
@@ -3320,7 +3330,15 @@ function RuntimeModePanel({
         onChange={(event) => setPin(event.target.value)}
       />
       <div className="mt-2 text-[11px] leading-5 text-[#94a3b8]">
-        实盘按钮只切换网关模式，不代表系统已通过实盘验收。未配置 PIN、API、授权或风控检查失败时后端会拒绝。
+        开启实盘必须同时满足：顶部操作验证码已填写、Trade PIN 正确、Gate 趋势账号已配置、后端风控检查通过。
+      </div>
+      <div className="mt-2 grid grid-cols-2 gap-2 text-[11px]">
+        <div className={`rounded-lg border px-2 py-1.5 ${operationCodeReady ? "border-[#14532d] bg-[#052e1a] text-[#86efac]" : "border-[#854d0e] bg-[#241806] text-[#facc15]"}`}>
+          操作验证码：{operationCodeReady ? "已填写" : "未填写"}
+        </div>
+        <div className={`rounded-lg border px-2 py-1.5 ${pinReady ? "border-[#14532d] bg-[#052e1a] text-[#86efac]" : "border-[#854d0e] bg-[#241806] text-[#facc15]"}`}>
+          Trade PIN：{pinReady ? "已填写" : "未填写"}
+        </div>
       </div>
     </Surface>
   );

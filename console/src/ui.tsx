@@ -15,7 +15,28 @@ export const num = (value: unknown, digits = 2): string => {
 
 export const pct = (value: unknown): string => `${num(value, 2)}%`;
 export const shortSymbol = (symbol: string): string => symbol.split("/")[0] || symbol;
-export const errText = (error: unknown): string => (error instanceof Error ? error.message : String(error || "unknown error"));
+export const errText = (error: unknown): string => {
+  const fallback = error instanceof Error ? error.message : String(error || "unknown error");
+  const maybe = error as { status?: number; body?: unknown } | null;
+  const body = maybe && typeof maybe === "object" ? maybe.body : undefined;
+  if (body && typeof body === "object") {
+    const item = body as Record<string, unknown>;
+    const detail = item.detail;
+    if (detail === "operation_code_required") {
+      return "操作验证码缺失或错误：请在顶部输入操作验证码后重试。";
+    }
+    if (typeof detail === "string" && detail.trim()) return detail;
+    if (typeof item.message === "string" && item.message.trim()) return item.message;
+    if (Array.isArray(detail)) {
+      const first = detail[0] as Record<string, unknown> | undefined;
+      if (first?.msg) return `请求参数错误：${String(first.msg)}`;
+    }
+  }
+  if (fallback === "operation_code_required") {
+    return "操作验证码缺失或错误：请在顶部输入操作验证码后重试。";
+  }
+  return fallback;
+};
 
 export function Surface({ title, action, children }: { title: ReactNode; action?: ReactNode; children: ReactNode }) {
   return (
