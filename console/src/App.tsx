@@ -91,6 +91,19 @@ export function App() {
   }, [markets, platform, status]);
 
   const selectedProfile = platform?.strategy_profiles.find((item) => item.symbol === symbol);
+  const displayCandles = useMemo(() => overlayRealtimePriceOnCandles(candles, ticker, timeframe), [candles, ticker, timeframe]);
+
+  const refreshTicker = useCallback(async () => {
+    try {
+      const nextTicker = await api<MarketTickerResponse>(
+        `/api/market/ticker?symbol=${encodeURIComponent(symbol)}&source=${source === "cryptocompare" ? "auto" : source}`,
+        { retries: 0, timeoutMs: 5000 },
+      );
+      setTicker(nextTicker);
+    } catch {
+      setTicker({ symbol, source: "unavailable", last: null, warning: "实时价格接口暂时未返回。" });
+    }
+  }, [source, symbol]);
 
   const load = useCallback(async () => {
     setWarning("");
@@ -107,16 +120,10 @@ export function App() {
         timeline: [],
         warnings: ["新闻接口暂时未返回，已保留上一轮界面状态。"],
       }).then(setNews);
-      void safe(
-        api<MarketTickerResponse>(
-          `/api/market/ticker?symbol=${encodeURIComponent(symbol)}&source=${source === "cryptocompare" ? "auto" : source}`,
-          { retries: 0, timeoutMs: 8000 },
-        ),
-        { symbol, source: "unavailable", last: null, warning: "实时价格接口暂时未返回。" },
-      ).then(setTicker);
+      void refreshTicker();
       const candleBase = `/api/market/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${timeframe}&source=${source}`;
       const candleLimits = chartCandleLimits(timeframe);
-      void safe(api<CandleResponse>(`${candleBase}&limit=${candleLimits.fast}`, { retries: 0, timeoutMs: 9000 }), {
+      void safe(api<CandleResponse>(`${candleBase}&limit=${candleLimits.fast}&closed_only=false`, { retries: 0, timeoutMs: 9000 }), {
         items: [],
         warning: "K线接口暂时未返回，已保留上一轮界面状态。",
       }).then((nextCandles) => {
@@ -127,7 +134,7 @@ export function App() {
           setWarning(nextCandles.warning || "");
         }
       });
-      void safe(api<CandleResponse>(`${candleBase}&limit=${candleLimits.full}`, { retries: 0, timeoutMs: 25000 }), {
+      void safe(api<CandleResponse>(`${candleBase}&limit=${candleLimits.full}&closed_only=false`, { retries: 0, timeoutMs: 25000 }), {
         items: [],
         warning: "",
       }).then((nextCandles) => {
@@ -176,13 +183,19 @@ export function App() {
     } catch (error) {
       setWarning(errText(error));
     }
-  }, [source, symbol, timeframe]);
+  }, [refreshTicker, source, symbol, timeframe]);
 
   useEffect(() => {
     void load();
     const id = window.setInterval(() => void load(), 60_000);
     return () => window.clearInterval(id);
   }, [load]);
+
+  useEffect(() => {
+    void refreshTicker();
+    const id = window.setInterval(() => void refreshTicker(), 10_000);
+    return () => window.clearInterval(id);
+  }, [refreshTicker]);
 
   useEffect(() => {
     if (window.location.hash.replace("#", "") !== workspace) {
@@ -253,7 +266,7 @@ export function App() {
           setTimeframe={setTimeframe}
           source={source}
           setSource={setSource}
-        candles={candles}
+        candles={displayCandles}
         ticker={ticker}
         warning={warning}
         runtimeStatus={status}
@@ -343,6 +356,77 @@ function tradeModeLabel(value?: string) {
   if (value === "ai_candidate_approval") return "AI候选审批";
   if (value === "pure_ai_paper") return "纯AI纸面";
   return value || "--";
+}
+
+function overlayRealtimePriceOnCandles(candles: Candle[], ticker: MarketTickerResponse | null, timeframe: string): Candle[] {
+  const price = firstFiniteMarketPrice(ticker?.last, ticker?.mark, ticker?.bid && ticker?.ask ? (Number(ticker.bid) + Number(ticker.ask)) / 2 : null);
+  if (!Number.isFinite(price) || !candles.length) return candles;
+
+  const tickerTime = parseTickerTime(ticker?.timestamp);
+  const bucketTime = timeframeBucketIso(tickerTime, timeframe);
+  const latest = candles.at(-1);
+  if (!latest) return candles;
+
+  if (latest.time === bucketTime) {
+    const nextLatest: Candle = {
+      ...latest,
+      high: Math.max(latest.high, price),
+      low: Math.min(latest.low, price),
+      close: price,
+    };
+    return [...candles.slice(0, -1), nextLatest];
+  }
+
+  const nextCandle: Candle = {
+    time: bucketTime,
+    open: latest.close,
+    high: Math.max(latest.close, price),
+    low: Math.min(latest.close, price),
+    close: price,
+    volume: 0,
+  };
+  return [...candles, nextCandle];
+}
+
+function firstFiniteMarketPrice(...values: unknown[]): number {
+  for (const value of values) {
+    const number = Number(value);
+    if (Number.isFinite(number) && number > 0) return number;
+  }
+  return Number.NaN;
+}
+
+function parseTickerTime(value: unknown): Date {
+  const timestamp = typeof value === "string" ? Date.parse(value) : Number.NaN;
+  return Number.isFinite(timestamp) ? new Date(timestamp) : new Date();
+}
+
+function timeframeBucketIso(date: Date, timeframe: string): string {
+  const year = date.getUTCFullYear();
+  const month = date.getUTCMonth();
+  const day = date.getUTCDate();
+  const hour = date.getUTCHours();
+  const minute = date.getUTCMinutes();
+
+  if (timeframe === "15m") {
+    return new Date(Date.UTC(year, month, day, hour, Math.floor(minute / 15) * 15)).toISOString();
+  }
+  if (timeframe === "4h") {
+    return new Date(Date.UTC(year, month, day, Math.floor(hour / 4) * 4)).toISOString();
+  }
+  if (timeframe === "1d") {
+    return new Date(Date.UTC(year, month, day)).toISOString();
+  }
+  if (timeframe === "1w") {
+    const start = new Date(Date.UTC(year, month, day));
+    const dayOfWeek = start.getUTCDay() || 7;
+    start.setUTCDate(start.getUTCDate() - dayOfWeek + 1);
+    return start.toISOString();
+  }
+  if (timeframe === "1M") {
+    return new Date(Date.UTC(year, month, 1)).toISOString();
+  }
+  return new Date(Date.UTC(year, month, day, hour)).toISOString();
 }
 
 function ShellNav({

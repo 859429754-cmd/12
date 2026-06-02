@@ -793,15 +793,17 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         timeframe: str = "1h",
         limit: int = Query(default=5000, ge=120, le=20_000),
         source: Literal["auto", "gateio", "binance", "okx", "cryptocompare"] = "auto",
+        closed_only: bool = Query(default=True),
     ) -> dict[str, Any]:
         market = MarketDataClient()
         try:
-            candles = await market.fetch_ohlcv(symbol, timeframe, limit=limit, source=source)
+            candles = await market.fetch_ohlcv(symbol, timeframe, limit=limit, source=source, closed_only=closed_only)
         finally:
             await market.close()
         return {
             "symbol": symbol,
             "timeframe": timeframe,
+            "closed_only": closed_only,
             "source": candles.attrs.get("data_source", "unknown"),
             "warning": candles.attrs.get("data_warning", ""),
             "items": _candles_for_chart(candles, max_points=limit),

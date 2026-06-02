@@ -136,6 +136,43 @@ def test_console_status_strategy_and_workbench(tmp_path: Path, monkeypatch) -> N
     assert "storage" in metrics_body
 
 
+def test_market_candles_supports_intrabar_display_without_changing_default(tmp_path: Path, monkeypatch) -> None:
+    config_path = tmp_path / "config.yaml"
+    write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl")
+    calls: list[bool] = []
+
+    class StubMarket:
+        async def fetch_ohlcv(self, symbol: str, timeframe: str, limit: int, source: str, closed_only: bool = True):
+            calls.append(closed_only)
+            frame = pd.DataFrame(
+                {
+                    "timestamp": [datetime(2026, 5, 24, 1, 0, tzinfo=UTC)],
+                    "open": [100.0],
+                    "high": [105.0],
+                    "low": [95.0],
+                    "close": [102.0],
+                    "volume": [10.0],
+                }
+            )
+            frame.attrs["data_source"] = source
+            return frame
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(server, "MarketDataClient", StubMarket)
+    client = TestClient(create_app(str(config_path)))
+
+    default_response = client.get("/api/market/candles?symbol=ETH/USDT:USDT&timeframe=1h&limit=120")
+    intrabar_response = client.get("/api/market/candles?symbol=ETH/USDT:USDT&timeframe=1h&limit=120&closed_only=false")
+
+    assert default_response.status_code == 200
+    assert default_response.json()["closed_only"] is True
+    assert intrabar_response.status_code == 200
+    assert intrabar_response.json()["closed_only"] is False
+    assert calls == [True, False]
+
+
 def test_console_can_create_global_max_leverage_proposal(tmp_path: Path, monkeypatch) -> None:
     for key in ["GATEIO_API_KEY", "GATEIO_API_SECRET", "GATEIO_TREND_API_KEY", "GATEIO_TREND_API_SECRET"]:
         monkeypatch.setenv(key, "")
