@@ -165,13 +165,13 @@ async def run_drill(args: argparse.Namespace) -> dict[str, Any]:
             stop_order_id = stop_order.exchange_order_id
             store.insert("orders", stop_order, symbol)
             await asyncio.sleep(max(float(args.hold_seconds), 0.0))
-            close_order = await gateway.close_position(symbol, reason="manual_live_drill_close")
+            close_order = await lifecycle.close_position(gateway, symbol, reason="manual_live_drill_close")
             if close_order:
                 store.insert("orders", close_order, symbol)
         except (OrderRejected, OrderSubmissionUncertain) as exc:
             raise RuntimeError("native_stop_submit_failed_manual_gate_required") from exc
         except Exception:
-            close_order = await gateway.close_position(symbol, reason="manual_live_drill_emergency_close")
+            close_order = await lifecycle.close_position(gateway, symbol, reason="manual_live_drill_emergency_close")
             if close_order:
                 store.insert("orders", close_order, symbol)
             raise

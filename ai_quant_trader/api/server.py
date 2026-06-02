@@ -1313,8 +1313,16 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         symbols = [body.symbol] if body.symbol else ctx.configured_symbols()
         _validate_symbols(symbols, ctx.configured_symbols(), require_any=True)
         execution = create_exchange_gateway(ctx.config, account_slot="trend")
+        lifecycle = OrderLifecycleManager(ctx.store, gateway_mode=execution_mode_from_config(ctx.config))
         try:
-            orders = await execution.close_positions(symbols, reason=f"console_close_{body.operator_id}")
+            orders = [
+                order
+                for order in [
+                    await lifecycle.close_position(execution, symbol, reason=f"console_close_{body.operator_id}")
+                    for symbol in symbols
+                ]
+                if order is not None
+            ]
             await _cancel_trend_native_stops(execution, symbols, ctx.store, execution_mode_from_config(ctx.config))
             for order in orders:
                 ctx.store.insert("orders", order, order.symbol)
@@ -1332,9 +1340,18 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         state = ctx.runtime_state()
         ctx.control.pause(state, [], body.operator_id)
         execution = create_exchange_gateway(ctx.config, account_slot="trend")
+        lifecycle = OrderLifecycleManager(ctx.store, gateway_mode=execution_mode_from_config(ctx.config))
         try:
-            orders = await execution.close_positions(ctx.configured_symbols(), reason=f"console_panic_{body.operator_id}")
-            await _cancel_trend_native_stops(execution, ctx.configured_symbols(), ctx.store, execution_mode_from_config(ctx.config))
+            symbols = ctx.configured_symbols()
+            orders = [
+                order
+                for order in [
+                    await lifecycle.close_position(execution, symbol, reason=f"console_panic_{body.operator_id}")
+                    for symbol in symbols
+                ]
+                if order is not None
+            ]
+            await _cancel_trend_native_stops(execution, symbols, ctx.store, execution_mode_from_config(ctx.config))
             for order in orders:
                 ctx.store.insert("orders", order, order.symbol)
             return {"ok": True, "message": f"已暂停全部新开仓，并提交一键全平请求 {len(orders)} 笔。", "orders": [o.model_dump(mode="json") for o in orders]}
@@ -1864,7 +1881,11 @@ async def _execute_manual_small_entry(ctx: ConsoleContext, symbol: str, side: st
         except (OrderRejected, OrderSubmissionUncertain) as exc:
             if not dry_run:
                 raise HTTPException(status_code=502, detail="native_stop_submit_failed_manual_gate_required") from exc
-            close_order = await execution.close_position(symbol, reason="manual_small_entry_stop_failed_emergency_close")
+            close_order = await lifecycle.close_position(
+                execution,
+                symbol,
+                reason="manual_small_entry_stop_failed_emergency_close",
+            )
             if close_order:
                 ctx.store.insert("orders", close_order, symbol)
             trend_state.clear(symbol)
@@ -1872,7 +1893,11 @@ async def _execute_manual_small_entry(ctx: ConsoleContext, symbol: str, side: st
         except Exception as exc:  # noqa: BLE001
             if not dry_run:
                 raise HTTPException(status_code=502, detail="native_stop_submit_error_manual_gate_required") from exc
-            close_order = await execution.close_position(symbol, reason="manual_small_entry_stop_failed_emergency_close")
+            close_order = await lifecycle.close_position(
+                execution,
+                symbol,
+                reason="manual_small_entry_stop_failed_emergency_close",
+            )
             if close_order:
                 ctx.store.insert("orders", close_order, symbol)
             trend_state.clear(symbol)
