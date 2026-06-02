@@ -9,7 +9,6 @@ sudo cp deploy/systemd/*.service deploy/systemd/*.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now ai-quant-console.service
 sudo systemctl enable --now ai-quant-trader.service
-sudo systemctl enable --now ai-quant-order-status-worker.service
 sudo systemctl enable --now ai-quant-health-watchdog.timer
 sudo systemctl enable --now ai-quant-maintenance.timer
 ```
@@ -19,6 +18,7 @@ Operational notes:
 - The console binds only `127.0.0.1:8090`; keep SSH tunnel access.
 - `.env.runtime` is loaded by systemd as an EnvironmentFile. Do not print it.
 - `ai-quant-trader.service` uses native `sd_notify` readiness and `WatchdogSec`.
-- `ai-quant-order-status-worker.service` is required when the deployment runs decoupled workers; readiness blocks live mode if its heartbeat is missing.
+- Default low-memory deployments should run one consolidated worker through `ai-quant-trader.service`; it owns trading, news refresh, price wakeup, and order-status polling in a single Python process.
+- `ai-quant-order-status-worker.service` is retained only for decoupled-worker deployments. Do not enable it together with `ai-quant-trader.service` unless you intentionally want duplicate order-status polling.
 - The console stays behind the HTTP readiness watchdog timer because uvicorn is launched directly and does not own the trading worker lifecycle.
 - `ai-quant-maintenance.timer` runs SQLite backup, log rotation, backup retention, and disk-space checks.

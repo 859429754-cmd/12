@@ -7,6 +7,9 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=/root/ai-quant-trader
 EnvironmentFile=-/root/ai-quant-trader/.env.runtime
+Environment=MALLOC_ARENA_MAX=2
+Environment=PYTHONMALLOC=malloc
+Environment=PYTHONUNBUFFERED=1
 ExecStart=/root/ai-quant-trader/.venv/bin/uvicorn ai_quant_trader.api.server:app --host 127.0.0.1 --port 8090
 Restart=always
 RestartSec=5

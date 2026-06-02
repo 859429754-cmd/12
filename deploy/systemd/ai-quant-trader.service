@@ -7,6 +7,9 @@ Wants=network-online.target
 Type=notify
 WorkingDirectory=/root/ai-quant-trader
 EnvironmentFile=-/root/ai-quant-trader/.env.runtime
+Environment=MALLOC_ARENA_MAX=2
+Environment=PYTHONMALLOC=malloc
+Environment=PYTHONUNBUFFERED=1
 ExecStart=/root/ai-quant-trader/.venv/bin/python -m ai_quant_trader.app
 Restart=always
 RestartSec=10
