@@ -128,7 +128,7 @@ export function App() {
         warning: "K线接口暂时未返回，已保留上一轮界面状态。",
       }).then((nextCandles) => {
         if (nextCandles.items?.length) {
-          setCandles(nextCandles.items || []);
+          setCandles((current) => fresherCandles(current, nextCandles.items || []));
           setWarning(nextCandles.warning || "");
         } else {
           setWarning(nextCandles.warning || "");
@@ -139,7 +139,7 @@ export function App() {
         warning: "",
       }).then((nextCandles) => {
         if (nextCandles.items?.length) {
-          setCandles(nextCandles.items || []);
+          setCandles((current) => fresherCandles(current, nextCandles.items || []));
           setWarning(nextCandles.warning || "");
         }
       });
@@ -305,6 +305,22 @@ export function App() {
       <MobileBottomNav platform={platform} workspace={workspace} setWorkspace={setWorkspace} />
     </main>
   );
+}
+
+function fresherCandles(current: Candle[], candidate: Candle[]) {
+  if (!candidate.length) return current;
+  if (!current.length) return candidate;
+  const currentLast = candleTimeMs(current.at(-1));
+  const candidateLast = candleTimeMs(candidate.at(-1));
+  if (!Number.isFinite(candidateLast)) return current;
+  if (!Number.isFinite(currentLast)) return candidate;
+  return candidateLast >= currentLast ? candidate : current;
+}
+
+function candleTimeMs(candle?: Candle) {
+  if (!candle?.time) return Number.NaN;
+  const value = new Date(candle.time).getTime();
+  return Number.isFinite(value) ? value : Number.NaN;
 }
 
 function readWorkspaceHash(): WorkspaceId {

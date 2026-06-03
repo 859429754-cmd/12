@@ -10,7 +10,10 @@ import {
 } from "lightweight-charts";
 import type { Candle, DbRow, DenseZonePayload, StrategyProfile } from "./types";
 
-type ChartRange = "7d" | "30d" | "90d" | "all";
+type ChartRange = "1d" | "7d" | "30d" | "90d" | "all";
+type ChartLayer = "kc" | "ema" | "volume" | "orders" | "ai" | "dense" | "levels";
+
+const RANGE_OPTIONS: ChartRange[] = ["1d", "7d", "30d", "90d", "all"];
 
 export function MarketChart({
   candles,
@@ -42,30 +45,34 @@ export function MarketChart({
   const kcUpperRef = useRef<ISeriesApi<"Line"> | null>(null);
   const kcLowerRef = useRef<ISeriesApi<"Line"> | null>(null);
   const denseLinesRef = useRef<IPriceLine[]>([]);
-  const rangeLinesRef = useRef<IPriceLine[]>([]);
+  const levelLinesRef = useRef<IPriceLine[]>([]);
   const candlesByTimeRef = useRef<Map<number, Candle>>(new Map());
   const [hoverCandle, setHoverCandle] = useState<Candle | null>(null);
-  const [range, setRange] = useState<ChartRange>("90d");
+  const [range, setRange] = useState<ChartRange>("30d");
+  const [rangeResetToken, setRangeResetToken] = useState(0);
   const [markerDensity, setMarkerDensity] = useState<"compact" | "full">("compact");
-  const [showKc, setShowKc] = useState(true);
-  const [showEma, setShowEma] = useState(false);
-  const [showVolume, setShowVolume] = useState(true);
-  const [showOrders, setShowOrders] = useState(true);
-  const [showAi, setShowAi] = useState(true);
-  const [showDense, setShowDense] = useState(true);
   const [expanded, setExpanded] = useState(false);
-  const [isMobile, setIsMobile] = useState(() => (typeof window === "undefined" ? false : window.innerWidth < 640));
+  const [layers, setLayers] = useState<Record<ChartLayer, boolean>>({
+    kc: true,
+    ema: false,
+    volume: true,
+    orders: true,
+    ai: false,
+    dense: false,
+    levels: false,
+  });
+  const [isMobile, setIsMobile] = useState(() => (typeof window === "undefined" ? false : window.innerWidth < 720));
 
   useEffect(() => {
-    const update = () => setIsMobile(window.innerWidth < 640);
+    const update = () => setIsMobile(window.innerWidth < 720);
     window.addEventListener("resize", update);
     return () => window.removeEventListener("resize", update);
   }, []);
 
   const effectiveHeight = expanded
-    ? Math.max(560, (typeof window === "undefined" ? 760 : window.innerHeight) - 170)
+    ? Math.max(620, (typeof window === "undefined" ? 780 : window.innerHeight) - 132)
     : isMobile
-      ? Math.min(height, 430)
+      ? Math.min(Math.max(height, 460), 560)
       : height;
   const focus = hoverCandle || candles.at(-1) || null;
   const prev = useMemo(() => {
@@ -74,49 +81,91 @@ export function MarketChart({
     return idx > 0 ? candles[idx - 1] : null;
   }, [candles, focus]);
   const changePct = focus && prev ? ((focus.close - prev.close) / prev.close) * 100 : 0;
-  const visibleCandles = useMemo(() => visibleWindow(candles, range), [candles, range]);
+  const visibleCandles = useMemo(() => visibleWindow(candles, range, timeframe), [candles, range, timeframe]);
   const visibleStats = useMemo(() => visibleWindowStats(visibleCandles), [visibleCandles]);
-  const markerLimit = markerDensity === "compact" ? 60 : 200;
-  const orderMarkerCount = useMemo(() => orderMarkers(orders).length, [orders]);
-  const aiMarkerCount = useMemo(() => decisionMarkers(decisions).length, [decisions]);
+  const markerLimit = markerDensity === "compact" ? 45 : 180;
+  const allOrderMarkers = useMemo(() => orderMarkers(orders), [orders]);
+  const allDecisionMarkers = useMemo(() => decisionMarkers(decisions), [decisions]);
+  const candleData = useMemo(() => candles.map(toCandlePoint), [candles]);
+  const latestPrice = candles.at(-1)?.close;
 
   useEffect(() => {
     if (!rootRef.current) return;
     const chart = createChart(rootRef.current, {
       height: effectiveHeight,
-      layout: { background: { type: ColorType.Solid, color: "#07111f" }, textColor: "#94a3b8" },
-      grid: { vertLines: { color: "#142033" }, horzLines: { color: "#142033" } },
-      rightPriceScale: { borderColor: "#263246", scaleMargins: { top: 0.08, bottom: showVolume ? 0.22 : 0.08 } },
-      timeScale: { borderColor: "#263246", timeVisible: true, secondsVisible: false },
-      crosshair: { mode: 1 },
-      handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
-      handleScale: { axisPressedMouseMove: true, mouseWheel: true, pinch: true },
+      layout: {
+        background: { type: ColorType.Solid, color: "#050b14" },
+        textColor: "#9fb0c6",
+        fontFamily: "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif",
+      },
+      grid: {
+        vertLines: { color: "rgba(51, 65, 85, 0.18)" },
+        horzLines: { color: "rgba(51, 65, 85, 0.22)" },
+      },
+      rightPriceScale: {
+        borderColor: "#1f2a3d",
+        entireTextOnly: true,
+        scaleMargins: { top: 0.08, bottom: 0.2 },
+      },
+      timeScale: {
+        borderColor: "#1f2a3d",
+        timeVisible: true,
+        secondsVisible: false,
+        rightOffset: 12,
+        barSpacing: isMobile ? 5 : 7,
+        minBarSpacing: 1.5,
+        fixLeftEdge: false,
+        fixRightEdge: false,
+        lockVisibleTimeRangeOnResize: true,
+        rightBarStaysOnScroll: true,
+      },
+      crosshair: {
+        mode: 0,
+        vertLine: { color: "#64748b", width: 1, style: LineStyle.Dashed, labelBackgroundColor: "#1d4ed8" },
+        horzLine: { color: "#64748b", width: 1, style: LineStyle.Dashed, labelBackgroundColor: "#1d4ed8" },
+      },
+      handleScroll: {
+        mouseWheel: true,
+        pressedMouseMove: true,
+        horzTouchDrag: true,
+        vertTouchDrag: false,
+      },
+      handleScale: {
+        axisPressedMouseMove: true,
+        mouseWheel: true,
+        pinch: true,
+      },
+      localization: {
+        priceFormatter: (price: number) => formatChartNumber(price, price >= 100 ? 2 : 4),
+        timeFormatter: (time: UTCTimestamp) => formatChartTimeFromSeconds(Number(time)),
+      },
     });
+
     const candlesSeries = chart.addCandlestickSeries({
-      upColor: "#0a9f5a",
-      downColor: "#e11d48",
-      borderUpColor: "#0a9f5a",
-      borderDownColor: "#e11d48",
-      wickUpColor: "#0a9f5a",
-      wickDownColor: "#e11d48",
+      upColor: "#22c55e",
+      downColor: "#f43f5e",
+      borderUpColor: "#22c55e",
+      borderDownColor: "#f43f5e",
+      wickUpColor: "#22c55e",
+      wickDownColor: "#f43f5e",
+      priceLineColor: "#60a5fa",
+      lastValueVisible: true,
+      priceLineVisible: true,
     });
     const volumeSeries = chart.addHistogramSeries({
       priceFormat: { type: "volume" },
       priceScaleId: "",
-      color: "#cbd6e5",
+      color: "#64748b",
     });
-    volumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.78, bottom: 0 } });
+    volumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
     const emaSeries = chart.addLineSeries({ color: "#e5e7eb", lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
-    const kcMidSeries = chart.addLineSeries({ color: "#94a3b8", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+    const kcMidSeries = chart.addLineSeries({ color: "#7c8ca3", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
     const kcUpperSeries = chart.addLineSeries({ color: "#3b82f6", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
     const kcLowerSeries = chart.addLineSeries({ color: "#3b82f6", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+
     chart.subscribeCrosshairMove((param) => {
       const timestamp = Number(param.time);
-      if (!Number.isFinite(timestamp)) {
-        setHoverCandle(null);
-        return;
-      }
-      setHoverCandle(candlesByTimeRef.current.get(timestamp) || null);
+      setHoverCandle(Number.isFinite(timestamp) ? candlesByTimeRef.current.get(timestamp) || null : null);
     });
 
     chartRef.current = chart;
@@ -126,6 +175,7 @@ export function MarketChart({
     kcMidRef.current = kcMidSeries;
     kcUpperRef.current = kcUpperSeries;
     kcLowerRef.current = kcLowerSeries;
+
     const resize = () => {
       chart.applyOptions({ width: rootRef.current?.clientWidth || 800, height: effectiveHeight });
     };
@@ -142,117 +192,157 @@ export function MarketChart({
       kcUpperRef.current = null;
       kcLowerRef.current = null;
       denseLinesRef.current = [];
-      rangeLinesRef.current = [];
+      levelLinesRef.current = [];
     };
-  }, [effectiveHeight, showVolume]);
+  }, [effectiveHeight, isMobile]);
+
+  useEffect(() => {
+    chartRef.current?.applyOptions({
+      rightPriceScale: { scaleMargins: { top: 0.08, bottom: layers.volume ? 0.2 : 0.08 } },
+    });
+  }, [layers.volume]);
 
   useEffect(() => {
     const candleSeries = candleRef.current;
     const volumeSeries = volumeRef.current;
     if (!candleSeries || !volumeSeries) return;
-    const candleData = candles.map((item) => ({
-      time: toTimestamp(item.time),
-      open: item.open,
-      high: item.high,
-      low: item.low,
-      close: item.close,
-    }));
     candlesByTimeRef.current = new Map(candleData.map((item, idx) => [Number(item.time), candles[idx]]));
-    const volumeData = candles.map((item) => ({
-      time: toTimestamp(item.time),
-      value: item.volume,
-      color: item.close >= item.open ? "rgba(10, 159, 90, 0.35)" : "rgba(225, 29, 72, 0.35)",
-    }));
     candleSeries.setData(candleData);
-    volumeSeries.setData(showVolume ? volumeData : []);
+    volumeSeries.setData(layers.volume ? candles.map(toVolumePoint) : []);
+  }, [candleData, candles, layers.volume]);
+
+  useEffect(() => {
     const params = profile?.params || {};
-    const emaLen = Number(params.ema_length || 89);
-    const kcLen = Number(params.kc_length || 20);
-    const atrLen = Number(params.atr_length || 14);
-    const kcMult = Number(params.kc_scalar || 2.8);
+    const emaLen = readNumericParam(params, ["ema_length", "ema_len"], 89);
+    const kcLen = readNumericParam(params, ["kc_length", "kc_len"], 20);
+    const atrLen = readNumericParam(params, ["atr_length", "kc_atr_len", "atr_len"], 14);
+    const kcMult = readNumericParam(params, ["kc_scalar", "kc_mult"], 2.8);
     const closes = candles.map((item) => item.close);
     const emaValues = ema(closes, emaLen);
     const kcMid = ema(closes, kcLen);
     const atrValues = atr(candles, atrLen);
-    emaRef.current?.setData(showEma ? lineData(candles, emaValues) : []);
-    kcMidRef.current?.setData(showKc ? lineData(candles, kcMid) : []);
-    kcUpperRef.current?.setData(showKc ? lineData(candles, kcMid.map((value, idx) => value + atrValues[idx] * kcMult)) : []);
-    kcLowerRef.current?.setData(showKc ? lineData(candles, kcMid.map((value, idx) => value - atrValues[idx] * kcMult)) : []);
-    candleSeries.setMarkers([
-      ...(showOrders ? orderMarkers(orders) : []),
-      ...(showAi ? decisionMarkers(decisions) : []),
-    ].sort((a, b) => Number(a.time) - Number(b.time)).slice(-markerLimit));
+    emaRef.current?.setData(layers.ema ? lineData(candles, emaValues) : []);
+    kcMidRef.current?.setData(layers.kc ? lineData(candles, kcMid) : []);
+    kcUpperRef.current?.setData(layers.kc ? lineData(candles, kcMid.map((value, idx) => value + atrValues[idx] * kcMult)) : []);
+    kcLowerRef.current?.setData(layers.kc ? lineData(candles, kcMid.map((value, idx) => value - atrValues[idx] * kcMult)) : []);
+  }, [candles, layers.ema, layers.kc, profile]);
+
+  useEffect(() => {
+    const candleSeries = candleRef.current;
+    if (!candleSeries) return;
+    candleSeries.setMarkers(
+      [
+        ...(layers.orders ? allOrderMarkers : []),
+        ...(layers.ai ? allDecisionMarkers : []),
+      ]
+        .sort((a, b) => Number(a.time) - Number(b.time))
+        .slice(-markerLimit),
+    );
+  }, [allDecisionMarkers, allOrderMarkers, layers.ai, layers.orders, markerLimit]);
+
+  useEffect(() => {
+    const candleSeries = candleRef.current;
+    if (!candleSeries) return;
     for (const line of denseLinesRef.current) candleSeries.removePriceLine(line);
-    for (const line of rangeLinesRef.current) candleSeries.removePriceLine(line);
-    denseLinesRef.current = showDense ? denseZoneLines(denseZone).map((item) => candleSeries.createPriceLine(item)) : [];
-    rangeLinesRef.current = visibleRangeLines(visibleCandles).map((item) => candleSeries.createPriceLine(item));
-    applyVisibleRange(chartRef.current, candleData, range);
-  }, [candles, decisions, denseZone, markerLimit, orders, profile, range, showAi, showDense, showEma, showKc, showOrders, showVolume, visibleCandles]);
+    for (const line of levelLinesRef.current) candleSeries.removePriceLine(line);
+    denseLinesRef.current = layers.dense ? denseZoneLines(denseZone).map((item) => candleSeries.createPriceLine(item)) : [];
+    levelLinesRef.current = layers.levels ? visibleRangeLines(visibleCandles).map((item) => candleSeries.createPriceLine(item)) : [];
+  }, [denseZone, layers.dense, layers.levels, visibleCandles]);
+
+  useEffect(() => {
+    applyVisibleRange(chartRef.current, candleData, range, timeframe);
+  }, [candleData.length, range, rangeResetToken, timeframe]);
+
+  const toggleLayer = (layer: ChartLayer) => setLayers((value) => ({ ...value, [layer]: !value[layer] }));
+  const resetRange = () => setRangeResetToken((value) => value + 1);
 
   return (
-    <div className={`${expanded ? "fixed inset-2 z-50 flex flex-col sm:inset-4" : ""} overflow-hidden rounded-2xl border border-[#263246] bg-[#07111f] shadow-[0_22px_56px_rgba(0,0,0,0.38)]`}>
-      <div className="grid gap-2 border-b border-[#1e293b] bg-[#0f172a] px-3 py-2 text-xs text-[#cbd5e1] lg:grid-cols-[minmax(0,1fr)_auto]">
+    <div className={`${expanded ? "fixed inset-2 z-50 flex flex-col sm:inset-4" : ""} overflow-hidden rounded-2xl border border-[#1f2a3d] bg-[#050b14] shadow-[0_22px_56px_rgba(0,0,0,0.46)]`}>
+      <div className="flex flex-col gap-3 border-b border-[#1e293b] bg-[#07111f] px-3 py-3 text-xs text-[#cbd5e1]">
         <div className="min-w-0">
-          <div className="mb-1 flex items-center justify-between gap-2 sm:justify-start sm:gap-3">
-            <span className="font-semibold text-white">专业K线</span>
-            <span className={`${changePct >= 0 ? "text-[#22c55e]" : "text-[#f43f5e]"} font-mono`}>
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="flex-none whitespace-nowrap text-sm font-semibold text-white">专业 K 线</span>
+            <span className={`${changePct >= 0 ? "text-[#22c55e]" : "text-[#f43f5e]"} font-mono font-semibold`}>
               {changePct >= 0 ? "+" : ""}{changePct.toFixed(2)}%
             </span>
+            <span className="rounded-full border border-[#1f2a3d] bg-[#0b1220] px-2 py-1 font-mono text-[11px] text-[#93a4ba]">
+              {timeframeLabel(timeframe)} / {rangeLabel(range)}
+            </span>
+            <span className="rounded-full border border-[#1f2a3d] bg-[#0b1220] px-2 py-1 font-mono text-[11px] text-[#e5eefb]">
+              最新 {formatChartNumber(latestPrice)}
+            </span>
           </div>
-          <div className="flex gap-3 overflow-x-auto whitespace-nowrap pb-1">
-            <ChartStat label="O" value={focus?.open} />
-            <ChartStat label="H" value={focus?.high} tone="good" />
-            <ChartStat label="L" value={focus?.low} tone="bad" />
-            <ChartStat label="C" value={focus?.close} tone={changePct >= 0 ? "good" : "bad"} />
+          <div className="mt-2 flex gap-3 overflow-x-auto whitespace-nowrap pb-1">
+            <ChartStat label="开" value={focus?.open} />
+            <ChartStat label="高" value={focus?.high} tone="good" />
+            <ChartStat label="低" value={focus?.low} tone="bad" />
+            <ChartStat label="收" value={focus?.close} tone={changePct >= 0 ? "good" : "bad"} />
             <ChartStat label="量" value={focus?.volume} compact />
+            <span className="font-mono text-[#93a4ba]">{focus ? formatChartTime(focus.time) : "--"}</span>
           </div>
         </div>
-        <div className="min-w-0 space-y-1 lg:flex lg:flex-wrap lg:justify-end lg:gap-1 lg:space-y-0">
+
+        <div className="min-w-0 space-y-2 sm:flex sm:flex-wrap sm:items-start sm:gap-2 sm:space-y-0">
           {timeframeOptions.length ? (
-            <div className="flex flex-wrap items-center gap-1">
-              <ChartToolbarLabel>周期</ChartToolbarLabel>
+            <ToolbarGroup label="周期">
               {timeframeOptions.map((item) => (
                 <ChartButton key={item} active={timeframe === item} onClick={() => onTimeframeChange?.(item)}>
                   {timeframeLabel(item)}
                 </ChartButton>
               ))}
-              <ChartToolbarDivider />
-            </div>
+            </ToolbarGroup>
           ) : null}
-          <div className="flex flex-wrap items-center gap-1">
-            <ChartToolbarLabel>范围</ChartToolbarLabel>
-            {(["7d", "30d", "90d", "all"] as const).map((item) => (
-              <ChartButton key={item} active={range === item} onClick={() => setRange(item)}>{rangeLabel(item)}</ChartButton>
+          <ToolbarGroup label="区间">
+            {RANGE_OPTIONS.map((item) => (
+              <ChartButton key={item} active={range === item} onClick={() => setRange(item)}>
+                {rangeLabel(item)}
+              </ChartButton>
             ))}
-            <ChartToolbarDivider />
-          </div>
-          <div className="flex flex-wrap gap-1 pb-1 lg:pb-0">
-            <ChartButton active={showKc} onClick={() => setShowKc((value) => !value)}>KC</ChartButton>
-            <ChartButton active={showEma} onClick={() => setShowEma((value) => !value)}>EMA</ChartButton>
-            <ChartButton active={showVolume} onClick={() => setShowVolume((value) => !value)}>成交量</ChartButton>
-            <ChartButton active={showOrders} onClick={() => setShowOrders((value) => !value)}>订单</ChartButton>
-            <ChartButton active={showAi} onClick={() => setShowAi((value) => !value)}>AI</ChartButton>
-            <ChartButton active={markerDensity === "full"} onClick={() => setMarkerDensity((value) => value === "compact" ? "full" : "compact")}>
-              {markerDensity === "compact" ? "精简标记" : "全部标记"}
-            </ChartButton>
-            <ChartButton active={showDense} onClick={() => setShowDense((value) => !value)}>密集区</ChartButton>
+          </ToolbarGroup>
+          <ToolbarGroup label="缩放">
+            <ChartButton active={false} onClick={() => zoomChart(chartRef.current, 0.7)}>放大</ChartButton>
+            <ChartButton active={false} onClick={() => zoomChart(chartRef.current, 1.45)}>缩小</ChartButton>
+            <ChartButton active={false} onClick={resetRange}>重置</ChartButton>
             <ChartButton active={false} onClick={() => chartRef.current?.timeScale().scrollToRealTime()}>最新</ChartButton>
-            <ChartButton active={expanded} onClick={() => setExpanded((value) => !value)}>{expanded ? "退出全屏" : "全屏"}</ChartButton>
-          </div>
+          </ToolbarGroup>
         </div>
       </div>
-      <div className="relative flex-1 bg-[#07111f]">
+
+      <div className="flex flex-wrap gap-1 border-b border-[#101827] bg-[#050b14] px-3 py-2">
+        <LayerButton active={layers.kc} onClick={() => toggleLayer("kc")}>KC</LayerButton>
+        <LayerButton active={layers.volume} onClick={() => toggleLayer("volume")}>成交量</LayerButton>
+        <LayerButton active={layers.orders} onClick={() => toggleLayer("orders")}>订单</LayerButton>
+        <LayerButton active={layers.ai} onClick={() => toggleLayer("ai")}>AI 决策</LayerButton>
+        <LayerButton active={layers.dense} onClick={() => toggleLayer("dense")}>密集区</LayerButton>
+        <LayerButton active={layers.levels} onClick={() => toggleLayer("levels")}>区间高低</LayerButton>
+        <LayerButton active={layers.ema} onClick={() => toggleLayer("ema")}>EMA 参考</LayerButton>
+        <LayerButton active={markerDensity === "full"} onClick={() => setMarkerDensity((value) => value === "compact" ? "full" : "compact")}>
+          {markerDensity === "compact" ? "精简标记" : "全部标记"}
+        </LayerButton>
+        <LayerButton active={expanded} onClick={() => setExpanded((value) => !value)}>{expanded ? "退出全屏" : "全屏"}</LayerButton>
+      </div>
+
+      <div className="relative flex-1 bg-[#050b14]">
         {candles.length ? null : (
-          <div className="absolute inset-0 z-10 grid place-items-center bg-[#07111f]/85 text-sm text-[#94a3b8]">等待K线数据加载</div>
+          <div className="absolute inset-0 z-10 grid place-items-center bg-[#050b14]/88 text-sm text-[#93a4ba]">等待 K 线数据加载</div>
         )}
-        {focus && !isMobile ? <ChartHoverPanel candle={focus} prev={prev} visibleStats={visibleStats} /> : null}
         <div ref={rootRef} style={{ height: effectiveHeight }} className="w-full" />
       </div>
-      <div className="grid gap-2 border-t border-[#1f2a3d] bg-[#0b1220] px-3 py-2 text-[11px] text-[#94a3b8] lg:grid-cols-3">
-        <div>图例：蓝色为KC上下轨，灰色为KC中轨，虚线为当前可见区间高低点。</div>
-        <div>当前显示：{rangeLabel(range)} / {visibleCandles.length} 根K线，区间 {formatChartNumber(visibleStats.low)} - {formatChartNumber(visibleStats.high)}。</div>
-        <div>标记：订单 {Math.min(orderMarkerCount, markerLimit)}/{orderMarkerCount}，AI {Math.min(aiMarkerCount, markerLimit)}/{aiMarkerCount}。</div>
+
+      <div className="grid gap-2 border-t border-[#1f2a3d] bg-[#07111f] px-3 py-2 text-[11px] text-[#93a4ba] lg:grid-cols-3">
+        <div>可视区间：{visibleCandles.length} 根 K 线，高 {formatChartNumber(visibleStats.high)}，低 {formatChartNumber(visibleStats.low)}。</div>
+        <div>默认只显示 K 线、KC、成交量和真实订单；AI、密集区、区间线按需开启。</div>
+        <div>标记：订单 {Math.min(allOrderMarkers.length, markerLimit)}/{allOrderMarkers.length}，AI {Math.min(allDecisionMarkers.length, markerLimit)}/{allDecisionMarkers.length}。</div>
       </div>
+    </div>
+  );
+}
+
+function ToolbarGroup({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      <span className="flex h-8 shrink-0 items-center rounded-lg border border-[#1f2a3d] bg-[#0b1220] px-2 text-[10px] text-[#93a4ba]">{label}</span>
+      {children}
     </div>
   );
 }
@@ -262,62 +352,29 @@ function ChartButton({ active, onClick, children }: { active: boolean; onClick: 
     <button
       type="button"
       onClick={onClick}
-      className={`h-8 shrink-0 rounded-lg border px-2.5 text-[11px] transition ${active ? "border-[#60a5fa] bg-[#1d4ed8] text-white shadow-sm" : "border-[#334155] bg-[#111827] text-[#cbd5e1] hover:border-[#64748b]"}`}
+      className={`h-8 shrink-0 rounded-lg border px-2.5 text-[11px] transition ${active ? "border-[#60a5fa] bg-[#1d4ed8] text-white shadow-sm" : "border-[#253348] bg-[#0b1220] text-[#cbd5e1] hover:border-[#64748b] hover:text-white"}`}
     >
       {children}
     </button>
   );
 }
 
-function ChartToolbarLabel({ children }: { children: ReactNode }) {
+function LayerButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
   return (
-    <span className="flex h-8 shrink-0 items-center rounded-lg border border-[#263246] bg-[#0b1220] px-2 text-[10px] text-[#94a3b8]">
+    <button
+      type="button"
+      onClick={onClick}
+      className={`h-7 rounded-full border px-3 text-[11px] transition ${active ? "border-[#3b82f6] bg-[#0f2f65] text-white" : "border-[#1f2a3d] bg-[#07111f] text-[#93a4ba] hover:border-[#475569]"}`}
+    >
       {children}
-    </span>
-  );
-}
-
-function ChartToolbarDivider() {
-  return <span className="mx-1 hidden h-8 w-px shrink-0 bg-[#263246] sm:block" />;
-}
-
-function ChartHoverPanel({ candle, prev, visibleStats }: { candle: Candle; prev: Candle | null; visibleStats: VisibleWindowStats }) {
-  const change = prev ? ((candle.close - prev.close) / prev.close) * 100 : 0;
-  const amplitude = candle.low > 0 ? ((candle.high - candle.low) / candle.low) * 100 : 0;
-  return (
-    <div className="pointer-events-none absolute left-3 top-3 z-20 w-[258px] rounded-xl border border-[#263246] bg-[#08111f]/92 p-3 text-[11px] text-[#cbd5e1] shadow-[0_18px_44px_rgba(0,0,0,0.45)] backdrop-blur">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <span className="font-semibold text-white">十字光标读数</span>
-        <span className="font-mono text-[#94a3b8]">{formatChartTime(candle.time)}</span>
-      </div>
-      <div className="grid grid-cols-2 gap-2">
-        <ChartHoverStat label="开" value={formatChartNumber(candle.open)} />
-        <ChartHoverStat label="高" value={formatChartNumber(candle.high)} tone="good" />
-        <ChartHoverStat label="低" value={formatChartNumber(candle.low)} tone="bad" />
-        <ChartHoverStat label="收" value={formatChartNumber(candle.close)} tone={change >= 0 ? "good" : "bad"} />
-        <ChartHoverStat label="涨跌" value={`${change >= 0 ? "+" : ""}${change.toFixed(2)}%`} tone={change >= 0 ? "good" : "bad"} />
-        <ChartHoverStat label="振幅" value={`${amplitude.toFixed(2)}%`} />
-        <ChartHoverStat label="成交量" value={formatChartNumber(candle.volume, 0)} />
-        <ChartHoverStat label="区间高低" value={`${formatChartNumber(visibleStats.low, 0)}-${formatChartNumber(visibleStats.high, 0)}`} />
-      </div>
-    </div>
-  );
-}
-
-function ChartHoverStat({ label, value, tone = "default" }: { label: string; value: string; tone?: "default" | "good" | "bad" }) {
-  const toneClass = tone === "good" ? "text-[#22c55e]" : tone === "bad" ? "text-[#fb7185]" : "text-[#e5eefb]";
-  return (
-    <div className="rounded-lg border border-[#1f2a3d] bg-[#0f172a] px-2 py-1.5">
-      <div className="text-[10px] text-[#64748b]">{label}</div>
-      <div className={`mt-0.5 truncate font-mono font-semibold ${toneClass}`}>{value}</div>
-    </div>
+    </button>
   );
 }
 
 function ChartStat({ label, value, tone = "default", compact = false }: { label: string; value: unknown; tone?: "default" | "good" | "bad"; compact?: boolean }) {
   const color = tone === "good" ? "text-[#22c55e]" : tone === "bad" ? "text-[#f43f5e]" : "text-[#e2e8f0]";
   const formatted = typeof value === "string" ? value : formatChartNumber(value, compact ? 0 : 2);
-  return <span className={`${color} font-mono`}><span className="text-[#94a3b8]">{label}</span> {formatted}</span>;
+  return <span className={`${color} font-mono`}><span className="text-[#93a4ba]">{label}</span> {formatted}</span>;
 }
 
 function formatChartNumber(value: unknown, digits = 2) {
@@ -327,17 +384,24 @@ function formatChartNumber(value: unknown, digits = 2) {
 }
 
 function rangeLabel(value: ChartRange) {
-  return value === "7d" ? "7D" : value === "30d" ? "30D" : value === "90d" ? "90D" : "ALL";
+  const labels: Record<ChartRange, string> = {
+    "1d": "1D",
+    "7d": "7D",
+    "30d": "30D",
+    "90d": "90D",
+    all: "ALL",
+  };
+  return labels[value];
 }
 
 function timeframeLabel(value: string) {
   const labels: Record<string, string> = {
-    "15m": "15分",
-    "1h": "1小时",
-    "4h": "4小时",
-    "1d": "1日",
-    "1w": "周线",
-    "1M": "月线",
+    "15m": "15m",
+    "1h": "1H",
+    "4h": "4H",
+    "1d": "1D",
+    "1w": "1W",
+    "1M": "1M",
   };
   return labels[value] || value;
 }
@@ -349,10 +413,23 @@ type VisibleWindowStats = {
   lowTime: string;
 };
 
-function visibleWindow(candles: Candle[], range: ChartRange) {
+function visibleWindow(candles: Candle[], range: ChartRange, timeframe: string) {
   if (range === "all") return candles;
-  const bars = range === "7d" ? 24 * 7 : range === "30d" ? 24 * 30 : 24 * 90;
+  const bars = barsForRange(range, timeframe);
   return candles.slice(-Math.min(candles.length, bars));
+}
+
+function barsForRange(range: ChartRange, timeframe: string) {
+  const seconds = rangeSeconds(range);
+  return Math.max(20, Math.ceil(seconds / timeframeSeconds(timeframe)));
+}
+
+function rangeSeconds(range: ChartRange) {
+  if (range === "1d") return 86400;
+  if (range === "7d") return 7 * 86400;
+  if (range === "30d") return 30 * 86400;
+  if (range === "90d") return 90 * 86400;
+  return Number.POSITIVE_INFINITY;
 }
 
 function visibleWindowStats(candles: Candle[]): VisibleWindowStats {
@@ -405,20 +482,52 @@ function formatChartTime(value: string) {
   if (!value) return "--";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return `${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:00`;
+  return `${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
 
-function applyVisibleRange(chart: IChartApi | null, candleData: Array<{ time: UTCTimestamp }>, range: ChartRange) {
+function formatChartTimeFromSeconds(seconds: number) {
+  return formatChartTime(new Date(seconds * 1000).toISOString());
+}
+
+function applyVisibleRange(chart: IChartApi | null, candleData: Array<{ time: UTCTimestamp }>, range: ChartRange, timeframe: string) {
   if (!chart || !candleData.length) return;
   if (range === "all") {
     chart.timeScale().fitContent();
     return;
   }
-  const bars = range === "7d" ? 24 * 7 : range === "30d" ? 24 * 30 : 24 * 90;
+  const bars = barsForRange(range, timeframe);
   const visible = candleData.slice(-Math.min(candleData.length, bars));
   const from = visible[0]?.time;
   const to = visible.at(-1)?.time;
   if (from && to) chart.timeScale().setVisibleRange({ from, to });
+}
+
+function zoomChart(chart: IChartApi | null, factor: number) {
+  if (!chart) return;
+  const logicalRange = chart.timeScale().getVisibleLogicalRange();
+  if (!logicalRange) return;
+  const width = Math.max(8, logicalRange.to - logicalRange.from);
+  const nextWidth = Math.min(Math.max(width * factor, 12), 2500);
+  const center = (logicalRange.from + logicalRange.to) / 2;
+  chart.timeScale().setVisibleLogicalRange({ from: center - nextWidth / 2, to: center + nextWidth / 2 });
+}
+
+function toCandlePoint(item: Candle) {
+  return {
+    time: toTimestamp(item.time),
+    open: item.open,
+    high: item.high,
+    low: item.low,
+    close: item.close,
+  };
+}
+
+function toVolumePoint(item: Candle) {
+  return {
+    time: toTimestamp(item.time),
+    value: item.volume,
+    color: item.close >= item.open ? "rgba(34, 197, 94, 0.32)" : "rgba(244, 63, 94, 0.32)",
+  };
 }
 
 function lineData(candles: Candle[], values: number[]) {
@@ -455,18 +564,20 @@ function atr(candles: Candle[], length: number): number[] {
 function orderMarkers(orders: DbRow[]) {
   return orders
     .map((row) => {
-      const payload = row.payload || {};
+      const payload = objectPayload(row.payload);
       const side = String(payload.side || payload.action || "").toLowerCase();
       if (!side) return null;
       const isBuy = side === "buy" || side.includes("long");
-      const isSell = side === "sell" || side.includes("short");
+      const isSell = side === "sell" || side.includes("short") || side.includes("close");
       if (!isBuy && !isSell) return null;
+      const timestamp = parseTimestamp(row.created_at || String(payload.created_at || ""));
+      if (!timestamp) return null;
       return {
-        time: toTimestamp(row.created_at || String(payload.created_at || "")),
+        time: timestamp,
         position: isBuy ? "belowBar" as const : "aboveBar" as const,
-        color: isBuy ? "#0a9f5a" : "#e11d48",
+        color: isBuy ? "#22c55e" : "#f43f5e",
         shape: isBuy ? "arrowUp" as const : "arrowDown" as const,
-        text: isBuy ? "开仓/买入" : "平仓/卖出",
+        text: isBuy ? "买入/做多" : side.includes("close") ? "平仓" : "卖出/做空",
       };
     })
     .filter((item): item is NonNullable<typeof item> => Boolean(item));
@@ -475,19 +586,25 @@ function orderMarkers(orders: DbRow[]) {
 function decisionMarkers(decisions: DbRow[]) {
   return decisions
     .map((row) => {
-      const payload = row.payload || {};
-      const confidence = Number(payload.confidence);
-      const action = String(payload.action_suggestion || payload.veto_action || "").toLowerCase();
-      const color = action === "block" ? "#b7791f" : action === "reduce" ? "#f59e0b" : "#2454ff";
+      const payload = objectPayload(row.payload);
+      if (payload.review_type || payload.no_order_submitted) return null;
+      const risk = objectPayload(payload.risk);
+      const ai = objectPayload(payload.ai);
+      const confidence = readNumber(payload.confidence ?? ai.confidence ?? risk.confidence);
+      const action = String(payload.action_suggestion || payload.veto_action || risk.action || payload.action || "").toLowerCase();
+      const tier = String(risk.position_tier || payload.position_tier || "").toLowerCase();
+      const color = action === "block" || tier === "block" ? "#f59e0b" : action === "reduce" ? "#f97316" : "#60a5fa";
+      const timestamp = parseTimestamp(row.created_at);
+      if (!timestamp) return null;
       return {
-        time: toTimestamp(row.created_at),
+        time: timestamp,
         position: "inBar" as const,
         color,
         shape: "circle" as const,
         text: Number.isFinite(confidence) ? `AI ${Math.round(confidence * 100)}%` : "AI",
       };
     })
-    .filter((item) => Number.isFinite(Number(item.time)));
+    .filter((item): item is NonNullable<typeof item> => Boolean(item));
 }
 
 function denseZoneLines(zone?: DenseZonePayload) {
@@ -497,9 +614,9 @@ function denseZoneLines(zone?: DenseZonePayload) {
     const value = Number(price);
     if (Number.isFinite(value) && value > 0) lines.push({ price: value, color, title, lineWidth });
   };
-  add(zone.zone_high ?? zone.vah, "#b7791f", "密集区上沿", 2);
-  add(zone.zone_mid ?? zone.poc, "#2454ff", "POC/中位", 1);
-  add(zone.zone_low ?? zone.val, "#0a9f5a", "密集区下沿", 2);
+  add(zone.zone_high ?? zone.vah, "#f59e0b", "密集区上沿", 2);
+  add(zone.zone_mid ?? zone.poc, "#3b82f6", "POC / 中位", 1);
+  add(zone.zone_low ?? zone.val, "#22c55e", "密集区下沿", 2);
   add(zone.next_zone_low, "#7c3aed", "下一密集区下沿", 1);
   add(zone.previous_zone_high, "#64748b", "前一密集区上沿", 1);
   return lines.map((line) => ({
@@ -511,6 +628,43 @@ function denseZoneLines(zone?: DenseZonePayload) {
   }));
 }
 
-function toTimestamp(value: string) {
-  return Math.floor(new Date(value).getTime() / 1000) as UTCTimestamp;
+function toTimestamp(value: unknown) {
+  return (parseTimestamp(value) || Math.floor(Date.now() / 1000)) as UTCTimestamp;
+}
+
+function parseTimestamp(value: unknown): UTCTimestamp | null {
+  if (typeof value !== "string" || !value) return null;
+  const ms = new Date(value).getTime();
+  if (!Number.isFinite(ms)) return null;
+  return Math.floor(ms / 1000) as UTCTimestamp;
+}
+
+function timeframeSeconds(timeframe: string) {
+  const raw = String(timeframe || "1h");
+  const value = Number.parseInt(raw.slice(0, -1), 10);
+  const amount = Number.isFinite(value) && value > 0 ? value : 1;
+  const unit = raw.slice(-1);
+  if (unit === "m") return amount * 60;
+  if (unit === "h") return amount * 3600;
+  if (unit === "d") return amount * 86400;
+  if (unit === "w") return amount * 7 * 86400;
+  if (unit === "M") return amount * 30 * 86400;
+  return 3600;
+}
+
+function readNumericParam(params: Record<string, unknown>, keys: string[], fallback: number) {
+  for (const key of keys) {
+    const value = readNumber(params[key]);
+    if (Number.isFinite(value) && value > 0) return value;
+  }
+  return fallback;
+}
+
+function readNumber(value: unknown) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : Number.NaN;
+}
+
+function objectPayload(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
