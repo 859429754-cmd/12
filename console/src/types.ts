@@ -112,8 +112,20 @@ export type SystemReadiness = {
   latest_news_risk_review?: DbRow | null;
   latest_ai_budget?: DbRow | null;
   latest_worker_heartbeats?: Record<string, DbRow | null>;
+  worker_heartbeat_details?: WorkerHeartbeatDetail[];
   latest_maintenance?: DbRow | null;
   checks: ReadinessCheck[];
+};
+
+export type WorkerHeartbeatDetail = {
+  worker: string;
+  status: string;
+  reason: string;
+  age_seconds?: number | null;
+  allowed_seconds?: number | null;
+  checked_at?: string | null;
+  last_success_at?: string | null;
+  row_id?: number | null;
 };
 
 export type ExecutionAccountSlot = {

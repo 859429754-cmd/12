@@ -38,6 +38,7 @@ import type {
   SystemReadiness,
   StatusResponse,
   StrategyProfile,
+  WorkerHeartbeatDetail,
   WorkspaceId,
 } from "./types";
 import { JsonBlock, Metric, Surface, button, danger, errText, input, mono, num, pct, shortSymbol } from "./ui";
@@ -2120,6 +2121,7 @@ function ReadinessPanel({ readiness }: { readiness: SystemReadiness | null }) {
   const aiDriftPayload = readiness?.latest_ai_drift?.payload || {};
   const newsRiskPayload = readiness?.latest_news_risk_review?.payload || {};
   const workerHeartbeats = readiness?.latest_worker_heartbeats || {};
+  const workerHeartbeatDetails = readiness?.worker_heartbeat_details || [];
   const blockedReasons = (readiness?.checks || []).filter((check) => check.status === "block").map((check) => readinessCheckLabel(check.label));
   return (
     <Surface
@@ -2156,6 +2158,21 @@ function ReadinessPanel({ readiness }: { readiness: SystemReadiness | null }) {
           <div className="font-semibold text-[#e5eefb]">最新新闻风险审计</div>
           <div className="mt-1 leading-relaxed">{newsRiskSummary(newsRiskPayload)}</div>
         </div>
+      </div>
+      <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-4">
+        {(workerHeartbeatDetails.length ? workerHeartbeatDetails : fallbackWorkerHeartbeatDetails(workerHeartbeats)).map((worker) => (
+          <div key={worker.worker} className="rounded-xl border border-[#263246] bg-[#0b1220] p-3 text-xs">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-semibold text-[#e5eefb]">{workerLabel(worker.worker)}</span>
+              <span className={`rounded-full px-2 py-1 text-[10px] ${workerToneClass(worker.status)}`}>{workerStatusLabel(worker.status)}</span>
+            </div>
+            <div className="mt-2 grid gap-1 text-[11px] text-[#94a3b8]">
+              <BoundaryLine label="最后心跳" value={worker.checked_at ? formatTime(worker.checked_at) : "--"} />
+              <BoundaryLine label="年龄" value={heartbeatAgeLabel(worker.age_seconds, worker.allowed_seconds)} />
+              <BoundaryLine label="原因" value={workerReasonLabel(worker.reason)} />
+            </div>
+          </div>
+        ))}
       </div>
       <div className="mt-3 grid grid-cols-2 gap-2">
         {(readiness?.checks || []).map((check) => (
@@ -2245,6 +2262,80 @@ function workerHeartbeatSummary(rows: Record<string, DbRow | null>) {
     .filter(([, row]) => !row || String(row.payload?.status || "warn") !== "ok")
     .map(([worker]) => worker.replace("_worker", ""));
   return failed.length ? `Worker 心跳异常：${failed.join(" / ")}` : "Worker 心跳正常";
+}
+
+function fallbackWorkerHeartbeatDetails(rows: Record<string, DbRow | null>): WorkerHeartbeatDetail[] {
+  return Object.entries(rows).map(([worker, row]) => {
+    const payload = row?.payload || {};
+    return {
+      worker,
+      status: String(payload.status || (row ? "warn" : "missing")),
+      reason: String(payload.reason || (row ? "heartbeat_unstructured" : "heartbeat_missing")),
+      checked_at: typeof payload.checked_at === "string" ? payload.checked_at : row?.created_at || null,
+      last_success_at: typeof payload.last_success_at === "string" ? payload.last_success_at : null,
+      age_seconds: null,
+      allowed_seconds: null,
+      row_id: row?.id ?? null,
+    };
+  });
+}
+
+function workerLabel(worker: string) {
+  const labels: Record<string, string> = {
+    trading_worker: "交易循环",
+    news_worker: "新闻刷新",
+    price_monitor_worker: "价格监控",
+    order_status_worker: "订单轮询",
+  };
+  return labels[worker] || worker.replace(/_/g, " ");
+}
+
+function workerStatusLabel(status: unknown) {
+  const value = String(status || "warn");
+  const labels: Record<string, string> = {
+    ok: "正常",
+    warn: "警告",
+    block: "失败",
+    stale: "过期",
+    missing: "缺失",
+  };
+  return labels[value] || value;
+}
+
+function workerToneClass(status: unknown) {
+  const value = String(status || "warn");
+  if (value === "ok") return "bg-[#052e1a] text-[#22c55e]";
+  if (value === "block" || value === "missing" || value === "stale") return "bg-[#2a0f14] text-[#fb7185]";
+  return "bg-[#241806] text-[#facc15]";
+}
+
+function heartbeatAgeLabel(ageSeconds?: number | null, allowedSeconds?: number | null) {
+  if (ageSeconds == null || !Number.isFinite(ageSeconds)) return "--";
+  const age = ageSeconds < 60 ? `${Math.max(0, Math.round(ageSeconds))}秒` : `${Math.round(ageSeconds / 60)}分钟`;
+  if (allowedSeconds == null || !Number.isFinite(allowedSeconds)) return age;
+  const limit = allowedSeconds < 60 ? `${Math.round(allowedSeconds)}秒` : `${Math.round(allowedSeconds / 60)}分钟`;
+  return `${age} / 上限 ${limit}`;
+}
+
+function workerReasonLabel(reason: unknown) {
+  const text = String(reason || "--");
+  const labels: Record<string, string> = {
+    worker_ok: "运行正常",
+    cycle_ok: "交易循环完成",
+    news_refresh_ok: "新闻刷新完成",
+    price_monitor_ok: "价格监控完成",
+    order_status_refresh_ok: "订单轮询完成",
+    heartbeat_missing: "没有心跳记录",
+    heartbeat_stale: "心跳过期",
+    heartbeat_unstructured: "旧版心跳记录",
+  };
+  return labels[text] || text;
+}
+
+function formatTime(value: string) {
+  const time = new Date(value);
+  if (Number.isNaN(time.getTime())) return value;
+  return time.toLocaleString("zh-CN", { hour12: false });
 }
 
 function readinessLabel(status: string) {

@@ -109,6 +109,7 @@ async def run_drill(args: argparse.Namespace) -> dict[str, Any]:
             },
         )
         signal = RegimePatternAnalyzer().enrich_signal(signal, regime_pattern)
+        signal = _apply_regime_drill_override(signal, args.allow_regime_block_override, regime_pattern.strategy_allowed)
         brain = DeepSeekBrain(base_url=config.ai.base_url, model=args.model or config.ai.emergency_screening_model)
         ai = await brain.analyze_symbol(signal, orderflow, dense_zone, pattern, news_digest, regime_pattern)
         store.insert("ai_decisions", ai, symbol)
@@ -242,6 +243,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run a minimal live Gate.io signal drill with native stop and immediate close.")
     parser.add_argument("--execute-live", action="store_true", help="Required. Places and closes a real minimum-size live order.")
     parser.add_argument("--allow-ai-block-override", action="store_true", help="Allow the drill to continue when AI vetoes the fake signal.")
+    parser.add_argument(
+        "--allow-regime-block-override",
+        action="store_true",
+        help="Execution-path drill only. Marks the synthetic signal as trend-allowed while preserving AI/RiskManager/exchange hard gates.",
+    )
     parser.add_argument("--config", default="config/config.yaml")
     parser.add_argument("--env-file", default=".env.runtime")
     parser.add_argument("--symbol", default="ETH/USDT:USDT")
@@ -256,6 +262,25 @@ def main() -> None:
     args = parser.parse_args()
     result = asyncio.run(run_drill(args))
     print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+def _apply_regime_drill_override(
+    signal: StrategySignal,
+    enabled: bool,
+    original_strategy_allowed: str,
+) -> StrategySignal:
+    if not enabled or original_strategy_allowed == "trend":
+        return signal
+    evidence = dict(signal.technical_evidence)
+    evidence.update(
+        {
+            "strategy_allowed": "trend",
+            "live_drill_regime_override": True,
+            "live_drill_original_strategy_allowed": original_strategy_allowed,
+            "live_drill_override_scope": "execution_path_only",
+        }
+    )
+    return signal.model_copy(update={"technical_evidence": evidence})
 
 
 def _latest_cached_news(store: SQLiteStore) -> NewsDigest:

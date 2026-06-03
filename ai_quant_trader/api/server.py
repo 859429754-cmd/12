@@ -332,6 +332,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         latest_news_risk = ctx.store.fetch_latest("news_risk_reviews")
         latest_ai_budget = ctx.store.fetch_latest("ai_call_budget_events")
         latest_worker_heartbeats = _worker_heartbeat_rows(ctx)
+        worker_heartbeat_details = _worker_heartbeat_details(ctx, latest_worker_heartbeats)
         latest_maintenance = ctx.store.fetch_latest("maintenance_runs")
         exchange_payload = (latest_exchange or {}).get("payload") or {}
         exchange_status = str(exchange_payload.get("status") or ("ok" if execution_mode == "mock" else "blocked"))
@@ -480,6 +481,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
             "latest_news_risk_review": latest_news_risk,
             "latest_ai_budget": latest_ai_budget,
             "latest_worker_heartbeats": latest_worker_heartbeats,
+            "worker_heartbeat_details": worker_heartbeat_details,
             "latest_maintenance": latest_maintenance,
             "checks": checks,
         }
@@ -1933,6 +1935,52 @@ def _latest_exchange_safety_allows_new_entries(ctx: ConsoleContext) -> bool:
 
 def _worker_heartbeat_rows(ctx: ConsoleContext) -> dict[str, dict[str, Any] | None]:
     return {worker: ctx.store.fetch_latest("worker_heartbeats", worker) for worker in _expected_worker_intervals(ctx)}
+
+
+def _worker_heartbeat_details(
+    ctx: ConsoleContext,
+    rows: dict[str, dict[str, Any] | None],
+) -> list[dict[str, Any]]:
+    now = datetime.now(UTC)
+    details: list[dict[str, Any]] = []
+    intervals = _expected_worker_intervals(ctx)
+    stale_floor = int(ctx.config.risk.stale_data_seconds)
+    for worker, expected_seconds in intervals.items():
+        row = rows.get(worker)
+        allowed_seconds = max(int(expected_seconds), stale_floor)
+        if row is None:
+            details.append(
+                {
+                    "worker": worker,
+                    "status": "missing",
+                    "reason": "heartbeat_missing",
+                    "age_seconds": None,
+                    "allowed_seconds": allowed_seconds,
+                    "checked_at": None,
+                    "last_success_at": None,
+                    "row_id": None,
+                }
+            )
+            continue
+        payload = row.get("payload") or {}
+        checked_at = _parse_readiness_datetime(str(payload.get("checked_at") or row.get("created_at") or ""))
+        age_seconds = (now - checked_at).total_seconds() if checked_at else None
+        raw_status = str(payload.get("status") or "warn")
+        stale = checked_at is None or (age_seconds is not None and age_seconds > allowed_seconds)
+        status = "stale" if stale and raw_status == "ok" else raw_status
+        details.append(
+            {
+                "worker": worker,
+                "status": status,
+                "reason": str(payload.get("reason") or ("heartbeat_stale" if stale else "heartbeat_ok")),
+                "age_seconds": age_seconds,
+                "allowed_seconds": allowed_seconds,
+                "checked_at": checked_at.isoformat() if checked_at else None,
+                "last_success_at": payload.get("last_success_at"),
+                "row_id": row.get("id"),
+            }
+        )
+    return details
 
 
 def _expected_worker_intervals(ctx: ConsoleContext) -> dict[str, int]:

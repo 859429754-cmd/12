@@ -167,6 +167,14 @@ def test_console_status_strategy_and_workbench(tmp_path: Path, monkeypatch) -> N
     assert "latest_news_risk_review" in readiness_body
     assert "latest_ai_budget" in readiness_body
     assert "latest_worker_heartbeats" in readiness_body
+    assert "worker_heartbeat_details" in readiness_body
+    assert {item["worker"] for item in readiness_body["worker_heartbeat_details"]} >= {
+        "trading_worker",
+        "news_worker",
+        "price_monitor_worker",
+        "order_status_worker",
+    }
+    assert all("allowed_seconds" in item for item in readiness_body["worker_heartbeat_details"])
     assert "latest_maintenance" in readiness_body
 
     metrics = client.get("/api/system/metrics")
