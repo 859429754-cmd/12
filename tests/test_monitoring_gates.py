@@ -39,6 +39,35 @@ def test_data_health_blocks_stale_ohlcv() -> None:
     assert "ohlcv_stale" in report.reason
 
 
+def test_data_health_uses_candle_close_time_for_freshness() -> None:
+    candles = pd.DataFrame(
+        [
+            {
+                "timestamp": datetime.now(UTC) - timedelta(minutes=45),
+                "open": 1.0,
+                "high": 1.0,
+                "low": 1.0,
+                "close": 1.0,
+                "volume": 1.0,
+            }
+        ]
+    )
+    monitor = DataHealthMonitor(stale_data_seconds=300, news_max_age_hours=6)
+
+    report = monitor.evaluate_symbol(
+        symbol="ETH/USDT:USDT",
+        timeframe="15m",
+        candles=candles,
+        news=NewsDigest(),
+        orderflow=AggregatedOrderflow(symbol="ETH/USDT:USDT", data_quality=0.9, source_count=2),
+    )
+
+    assert report.status == HealthStatus.OK
+    ohlcv_check = next(check for check in report.checks if check.name == "ohlcv")
+    assert ohlcv_check.age_seconds is not None
+    assert 25 * 60 <= ohlcv_check.age_seconds <= 31 * 60
+
+
 def test_data_health_distinguishes_month_from_minute_timeframe() -> None:
     monitor = DataHealthMonitor(stale_data_seconds=300, news_max_age_hours=6)
 

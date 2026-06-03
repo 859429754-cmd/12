@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pandas as pd
@@ -86,6 +87,27 @@ def test_trend_strategy_generates_short_signal() -> None:
     )
     assert signal.action == SignalAction.SHORT
     assert signal.signal_strength > 0.5
+
+
+def test_trend_strategy_records_signal_candle_timestamps() -> None:
+    candles = _candles_with_breakout("short")
+    start = datetime(2026, 6, 1, 0, 0, tzinfo=UTC)
+    candles["timestamp"] = [start + timedelta(hours=i) for i in range(len(candles))]
+    strategy = TrendStrategy(TrendStrategyConfig())
+
+    signal = strategy.generate_signal(
+        "ETH/USDT:USDT",
+        "1h",
+        candles,
+        PositionSnapshot(symbol="ETH/USDT:USDT"),
+        equity=1000,
+        ai_multiplier=1.0,
+    )
+
+    assert signal.action == SignalAction.SHORT
+    assert signal.technical_evidence["signal_candle_time"] == "2026-06-05T23:00:00Z"
+    assert signal.technical_evidence["signal_candle_close_time"] == "2026-06-06T00:00:00Z"
+    assert signal.technical_evidence["prev_candle_close_time"] == "2026-06-05T23:00:00Z"
 
 
 def test_trend_backtest_uses_atr_stop_multiple_in_trade_ledger() -> None:

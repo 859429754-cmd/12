@@ -233,6 +233,14 @@ class TrendStrategy(BaseStrategy):
             suggested_qty=qty,
             signal_strength=signal_strength,
             technical_evidence={
+                "signal_candle_time": self._timestamp_to_iso(last.get("timestamp")),
+                "signal_candle_close_time": self._timestamp_to_iso(
+                    self._timestamp_plus_timeframe(last.get("timestamp"), timeframe)
+                ),
+                "prev_candle_time": self._timestamp_to_iso(prev.get("timestamp")),
+                "prev_candle_close_time": self._timestamp_to_iso(
+                    self._timestamp_plus_timeframe(prev.get("timestamp"), timeframe)
+                ),
                 "close": close,
                 "prev_close": prev_close,
                 "ema_89": float(last["ema_89"]),
@@ -266,6 +274,47 @@ class TrendStrategy(BaseStrategy):
                 "exit_short": exit_short,
             },
         )
+
+    def _timestamp_to_iso(self, value: Any) -> str | None:
+        if value is None:
+            return None
+        try:
+            timestamp = pd.Timestamp(value)
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.tz_localize("UTC")
+            else:
+                timestamp = timestamp.tz_convert("UTC")
+            return timestamp.isoformat().replace("+00:00", "Z")
+        except Exception:  # noqa: BLE001
+            return str(value)
+
+    def _timestamp_plus_timeframe(self, value: Any, timeframe: str) -> Any:
+        if value is None:
+            return None
+        try:
+            timestamp = pd.Timestamp(value)
+            return timestamp + pd.Timedelta(seconds=self._timeframe_seconds(timeframe))
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _timeframe_seconds(self, timeframe: str) -> int:
+        raw = str(timeframe or "1h").strip()
+        unit = raw[-1:]
+        try:
+            value = int(raw[:-1])
+        except ValueError:
+            return 3600
+        if unit == "m":
+            return value * 60
+        if unit == "h":
+            return value * 3600
+        if unit == "d":
+            return value * 86400
+        if unit == "w":
+            return value * 7 * 86400
+        if unit == "M":
+            return value * 30 * 86400
+        return 3600
 
     def _momentum_required_columns(self) -> list[str]:
         cfg = self.config

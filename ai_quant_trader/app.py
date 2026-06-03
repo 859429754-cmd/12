@@ -509,16 +509,32 @@ class TradingApp:
         position = positions[0]
         position.mark_price = float(candles["close"].iloc[-1])
         signal = self._generate_local_signal(event.symbol, symbol_cfg.timeframe, candles, position, equity)
-        signal = self._attach_major_news_context(signal, self.wakeup_engine.events_from_news(news_digest))
+        original_signal = self._attach_major_news_context(signal, self.wakeup_engine.events_from_news(news_digest))
+        review_signal = original_signal.model_copy(
+            update={
+                "action": SignalAction.HOLD,
+                "suggested_qty": 0.0,
+                "signal_strength": 0.0,
+                "technical_evidence": {
+                    **original_signal.technical_evidence,
+                    "price_wakeup_review": True,
+                    "review_only_no_order": True,
+                    "original_strategy_action": original_signal.action.value,
+                    "price_wakeup_event_type": event.event_type,
+                    "price_wakeup_event_created_at": event.created_at.isoformat(),
+                    "price_wakeup_reason": "price_move_review_does_not_submit_orders",
+                },
+            }
+        )
         orderflow_summaries = await self.orderflow_client.fetch_summaries(event.symbol)
         aggregated = self.orderflow_aggregator.aggregate(event.symbol, orderflow_summaries)
         zone = self.dense_zone.calculate(event.symbol, candles)
         pattern = self.patterns.detect(event.symbol, candles)
         regime_pattern = self.regime_patterns.analyze(event.symbol, candles, zone, pattern)
-        signal = self.regime_patterns.enrich_signal(signal, regime_pattern)
+        review_signal = self.regime_patterns.enrich_signal(review_signal, regime_pattern)
         ai = await self._analyze_with_deepseek_budget(
             "price_wakeup",
-            signal,
+            review_signal,
             aggregated,
             zone,
             pattern,
@@ -533,10 +549,13 @@ class TradingApp:
             news=news_digest,
             orderflow=aggregated,
         )
-        risk = self.risk.evaluate(signal, ai, equity, positions)
+        risk = self.risk.evaluate(review_signal, ai, equity, positions)
         payload = {
+            "review_type": "price_wakeup_review",
+            "no_order_submitted": True,
             "event": event.model_dump(mode="json"),
-            "signal": signal.model_dump(mode="json"),
+            "original_signal": original_signal.model_dump(mode="json"),
+            "signal": review_signal.model_dump(mode="json"),
             "ai": ai.model_dump(mode="json"),
             "risk": risk.model_dump(mode="json"),
             "data_health": data_health.model_dump(mode="json"),

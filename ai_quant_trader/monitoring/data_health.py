@@ -49,7 +49,8 @@ class DataHealthMonitor:
             return DataHealthCheck(name="ohlcv", status=HealthStatus.WARN, reason="ohlcv_timestamp_unreadable")
         if last_ts is None:
             return DataHealthCheck(name="ohlcv", status=HealthStatus.WARN, reason="ohlcv_timestamp_missing")
-        age_seconds = max((datetime.now(UTC) - last_ts).total_seconds(), 0.0)
+        candle_close_ts = last_ts + self._timeframe_delta(timeframe)
+        age_seconds = max((datetime.now(UTC) - candle_close_ts).total_seconds(), 0.0)
         threshold = max(self.stale_data_seconds, self._timeframe_seconds(timeframe) * 2.5)
         if age_seconds > threshold:
             return DataHealthCheck(name="ohlcv", status=HealthStatus.BLOCK, reason="ohlcv_stale", age_seconds=age_seconds)
@@ -112,3 +113,8 @@ class DataHealthMonitor:
         if unit == "M":
             return value * 30 * 86400
         return 3600
+
+    def _timeframe_delta(self, timeframe: str):
+        from datetime import timedelta
+
+        return timedelta(seconds=self._timeframe_seconds(timeframe))
