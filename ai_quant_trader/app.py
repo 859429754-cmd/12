@@ -1132,7 +1132,22 @@ class TradingApp:
             )
 
     def _active_followers(self) -> list[FollowerAccountConfig]:
-        return [follower for follower in self.config.followers if follower.enabled]
+        return [follower for follower in self.config.followers if follower.enabled and self._follower_route_configured(follower)]
+
+    def _follower_route_configured(self, follower: FollowerAccountConfig) -> bool:
+        if execution_mode_from_config(self.config) != "live":
+            return True
+        account_slot = self._canonical_follower_slot(follower.account_slot)
+        if account_slot != FOLLOWER_ACCOUNT_SLOT:
+            return False
+        has_follower_pair = bool(os.getenv("GATEIO_FOLLOWER_API_KEY", "").strip()) and bool(
+            os.getenv("GATEIO_FOLLOWER_API_SECRET", "").strip()
+        )
+        if has_follower_pair:
+            return True
+        legacy_key = os.getenv("GATEIO_RANGE_API_KEY", "").strip()
+        legacy_secret = os.getenv("GATEIO_RANGE_API_SECRET", "").strip()
+        return bool(legacy_key and legacy_secret)
 
     async def _mirror_exit_to_followers(
         self,

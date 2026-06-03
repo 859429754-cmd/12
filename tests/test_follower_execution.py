@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from ai_quant_trader.app import TradingApp
@@ -54,3 +56,30 @@ async def test_follower_entry_qty_clips_by_own_equity_leverage_and_existing_posi
     assert qty == pytest.approx(0.9)
     assert reason == "follower_sized_from_shared_ai_decision"
 
+
+def test_live_mode_does_not_activate_follower_without_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("GATEIO_FOLLOWER_API_KEY", raising=False)
+    monkeypatch.delenv("GATEIO_FOLLOWER_API_SECRET", raising=False)
+    monkeypatch.delenv("GATEIO_RANGE_API_KEY", raising=False)
+    monkeypatch.delenv("GATEIO_RANGE_API_SECRET", raising=False)
+
+    app = TradingApp.__new__(TradingApp)
+    app.config = SimpleNamespace(
+        runtime=SimpleNamespace(execution_mode="live"),
+        followers=[FollowerAccountConfig(enabled=True)],
+    )
+
+    assert app._active_followers() == []
+
+
+def test_mock_mode_can_activate_follower_without_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("GATEIO_FOLLOWER_API_KEY", raising=False)
+    monkeypatch.delenv("GATEIO_FOLLOWER_API_SECRET", raising=False)
+
+    app = TradingApp.__new__(TradingApp)
+    app.config = SimpleNamespace(
+        runtime=SimpleNamespace(execution_mode="mock"),
+        followers=[FollowerAccountConfig(enabled=True)],
+    )
+
+    assert len(app._active_followers()) == 1
