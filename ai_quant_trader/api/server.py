@@ -7,6 +7,7 @@ import json
 import os
 import re
 import secrets
+import threading
 import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
@@ -200,20 +201,35 @@ class ConsoleContext:
     def __init__(self, config_path: str = "config/config.yaml"):
         self.config_path = config_path
         self.store: SQLiteStore | None = None
-        self.reload()
+        self._reload_lock = threading.RLock()
+        self._config_mtime_ns: int | None = None
+        self._retired_stores: list[SQLiteStore] = []
+        self.reload(force=True)
 
-    def reload(self) -> None:
-        old_store = getattr(self, "store", None)
-        if old_store is not None:
-            old_store.close()
-        self.config = load_config(self.config_path)
-        self.store = SQLiteStore(self.config.runtime.database_path, self.config.runtime.audit_log_path)
-        self.control = RuntimeControlManager(self.store, self.config_path)
+    def reload(self, *, force: bool = False) -> None:
+        with self._reload_lock:
+            config_mtime_ns = Path(self.config_path).stat().st_mtime_ns
+            if not force and self.store is not None and config_mtime_ns == self._config_mtime_ns:
+                return
+
+            old_store = getattr(self, "store", None)
+            self.config = load_config(self.config_path)
+            self.store = SQLiteStore(self.config.runtime.database_path, self.config.runtime.audit_log_path)
+            self.control = RuntimeControlManager(self.store, self.config_path)
+            self._config_mtime_ns = config_mtime_ns
+
+            if old_store is not None:
+                self._retired_stores.append(old_store)
+                if len(self._retired_stores) > 32:
+                    self._retired_stores.pop(0).close()
 
     def close(self) -> None:
-        if self.store is not None:
-            self.store.close()
-            self.store = None
+        with self._reload_lock:
+            if self.store is not None:
+                self.store.close()
+                self.store = None
+            while self._retired_stores:
+                self._retired_stores.pop().close()
 
     def configured_symbols(self) -> list[str]:
         return [item.symbol for item in self.config.symbols]

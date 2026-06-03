@@ -8,7 +8,7 @@ import pandas as pd
 from fastapi.testclient import TestClient
 
 from ai_quant_trader.api import server
-from ai_quant_trader.api.server import create_app
+from ai_quant_trader.api.server import ConsoleContext, create_app
 from ai_quant_trader.core.models import NewsDigest, NewsItem
 from ai_quant_trader.storage.sqlite import SQLiteStore
 
@@ -55,6 +55,37 @@ def test_major_news_budget_cap_is_readiness_warning_not_live_block() -> None:
 
     assert status == "warn"
     assert "Major news" in detail
+
+
+def test_console_context_reload_does_not_close_inflight_store(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    db_path = tmp_path / "trader.sqlite3"
+    audit_path = tmp_path / "audit.jsonl"
+    write_config(config_path, db_path, audit_path, symbols=["ETH/USDT:USDT"])
+
+    ctx = ConsoleContext(str(config_path))
+    old_store = ctx.store
+    assert old_store is not None
+    old_store.insert("ai_decisions", {"symbol": "ETH/USDT:USDT", "message": "inflight"}, "ETH/USDT:USDT")
+
+    try:
+        ctx.reload(force=True)
+        assert old_store.fetch_latest("ai_decisions", "ETH/USDT:USDT") is not None
+    finally:
+        ctx.close()
+
+
+def test_console_context_reload_reuses_store_when_config_is_unchanged(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl", symbols=["ETH/USDT:USDT"])
+
+    ctx = ConsoleContext(str(config_path))
+    try:
+        first_store = ctx.store
+        ctx.reload()
+        assert ctx.store is first_store
+    finally:
+        ctx.close()
 
 
 def test_status_latest_decision_excludes_major_news_review_audit(tmp_path: Path, monkeypatch) -> None:
