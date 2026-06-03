@@ -74,20 +74,21 @@ export function MarketChart({
     : isMobile
       ? Math.min(Math.max(height, 460), 560)
       : height;
-  const focus = hoverCandle || candles.at(-1) || null;
+  const chartCandles = useMemo(() => sanitizeCandles(candles), [candles]);
+  const focus = hoverCandle || chartCandles.at(-1) || null;
   const prev = useMemo(() => {
     if (!focus) return null;
-    const idx = candles.findIndex((item) => item.time === focus.time);
-    return idx > 0 ? candles[idx - 1] : null;
-  }, [candles, focus]);
+    const idx = chartCandles.findIndex((item) => item.time === focus.time);
+    return idx > 0 ? chartCandles[idx - 1] : null;
+  }, [chartCandles, focus]);
   const changePct = focus && prev ? ((focus.close - prev.close) / prev.close) * 100 : 0;
-  const visibleCandles = useMemo(() => visibleWindow(candles, range, timeframe), [candles, range, timeframe]);
+  const visibleCandles = useMemo(() => visibleWindow(chartCandles, range, timeframe), [chartCandles, range, timeframe]);
   const visibleStats = useMemo(() => visibleWindowStats(visibleCandles), [visibleCandles]);
   const markerLimit = markerDensity === "compact" ? 45 : 180;
   const allOrderMarkers = useMemo(() => orderMarkers(orders), [orders]);
   const allDecisionMarkers = useMemo(() => decisionMarkers(decisions), [decisions]);
-  const candleData = useMemo(() => candles.map(toCandlePoint), [candles]);
-  const latestPrice = candles.at(-1)?.close;
+  const candleData = useMemo(() => chartCandles.map(toCandlePoint), [chartCandles]);
+  const latestPrice = chartCandles.at(-1)?.close;
 
   useEffect(() => {
     if (!rootRef.current) return;
@@ -206,10 +207,10 @@ export function MarketChart({
     const candleSeries = candleRef.current;
     const volumeSeries = volumeRef.current;
     if (!candleSeries || !volumeSeries) return;
-    candlesByTimeRef.current = new Map(candleData.map((item, idx) => [Number(item.time), candles[idx]]));
+    candlesByTimeRef.current = new Map(candleData.map((item, idx) => [Number(item.time), chartCandles[idx]]));
     candleSeries.setData(candleData);
-    volumeSeries.setData(layers.volume ? candles.map(toVolumePoint) : []);
-  }, [candleData, candles, layers.volume]);
+    volumeSeries.setData(layers.volume ? chartCandles.map(toVolumePoint) : []);
+  }, [candleData, chartCandles, layers.volume]);
 
   useEffect(() => {
     const params = profile?.params || {};
@@ -217,15 +218,15 @@ export function MarketChart({
     const kcLen = readNumericParam(params, ["kc_length", "kc_len"], 20);
     const atrLen = readNumericParam(params, ["atr_length", "kc_atr_len", "atr_len"], 14);
     const kcMult = readNumericParam(params, ["kc_scalar", "kc_mult"], 2.8);
-    const closes = candles.map((item) => item.close);
+    const closes = chartCandles.map((item) => item.close);
     const emaValues = ema(closes, emaLen);
     const kcMid = ema(closes, kcLen);
-    const atrValues = atr(candles, atrLen);
-    emaRef.current?.setData(layers.ema ? lineData(candles, emaValues) : []);
-    kcMidRef.current?.setData(layers.kc ? lineData(candles, kcMid) : []);
-    kcUpperRef.current?.setData(layers.kc ? lineData(candles, kcMid.map((value, idx) => value + atrValues[idx] * kcMult)) : []);
-    kcLowerRef.current?.setData(layers.kc ? lineData(candles, kcMid.map((value, idx) => value - atrValues[idx] * kcMult)) : []);
-  }, [candles, layers.ema, layers.kc, profile]);
+    const atrValues = atr(chartCandles, atrLen);
+    emaRef.current?.setData(layers.ema ? lineData(chartCandles, emaValues) : []);
+    kcMidRef.current?.setData(layers.kc ? lineData(chartCandles, kcMid) : []);
+    kcUpperRef.current?.setData(layers.kc ? lineData(chartCandles, kcMid.map((value, idx) => value + atrValues[idx] * kcMult)) : []);
+    kcLowerRef.current?.setData(layers.kc ? lineData(chartCandles, kcMid.map((value, idx) => value - atrValues[idx] * kcMult)) : []);
+  }, [chartCandles, layers.ema, layers.kc, profile]);
 
   useEffect(() => {
     const candleSeries = candleRef.current;
@@ -323,7 +324,7 @@ export function MarketChart({
       </div>
 
       <div className="relative flex-1 bg-[#050b14]">
-        {candles.length ? null : (
+        {chartCandles.length ? null : (
           <div className="absolute inset-0 z-10 grid place-items-center bg-[#050b14]/88 text-sm text-[#93a4ba]">等待 K 线数据加载</div>
         )}
         <div ref={rootRef} style={{ height: effectiveHeight }} className="w-full" />
@@ -510,6 +511,34 @@ function zoomChart(chart: IChartApi | null, factor: number) {
   const nextWidth = Math.min(Math.max(width * factor, 12), 2500);
   const center = (logicalRange.from + logicalRange.to) / 2;
   chart.timeScale().setVisibleLogicalRange({ from: center - nextWidth / 2, to: center + nextWidth / 2 });
+}
+
+function sanitizeCandles(candles: Candle[]): Candle[] {
+  const byTime = new Map<number, Candle>();
+  for (const item of candles) {
+    const time = parseTimestamp(item.time);
+    const open = Number(item.open);
+    const high = Number(item.high);
+    const low = Number(item.low);
+    const close = Number(item.close);
+    if (time === null || ![open, high, low, close].every((value) => Number.isFinite(value) && value > 0)) {
+      continue;
+    }
+    const normalizedHigh = Math.max(high, open, close);
+    const normalizedLow = Math.min(low, open, close);
+    byTime.set(Number(time), {
+      ...item,
+      time: new Date(Number(time) * 1000).toISOString(),
+      open,
+      high: normalizedHigh,
+      low: normalizedLow,
+      close,
+      volume: Number.isFinite(Number(item.volume)) && Number(item.volume) >= 0 ? Number(item.volume) : 0,
+    });
+  }
+  return Array.from(byTime.entries())
+    .sort(([left], [right]) => left - right)
+    .map(([, item]) => item);
 }
 
 function toCandlePoint(item: Candle) {
