@@ -22,7 +22,7 @@ Production-grade:
 ## Requirements
 
 - No public unauthenticated console.
-- Trade PIN remains mandatory for mock-to-live switch.
+- Mock/live switching is admin-only under console account RBAC. ADR-0005 supersedes the older Trade PIN requirement.
 - Sensitive endpoints must log operator identity.
 - Failed auth must not reveal config or runtime secrets.
 
@@ -32,4 +32,3 @@ Production-grade:
 - Local development can still run with explicit dev auth configuration.
 - Tests cover authenticated and unauthenticated API calls.
 - Frontend shows auth failure clearly, not infinite loading.
-

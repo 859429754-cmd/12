@@ -21,7 +21,8 @@ Use the project's existing terms:
 - Gateway separation
 - MockExchangeGateway
 - GateRealGateway
-- Trade PIN
+- console account RBAC
+- admin/account1/account2/range console roles
 - cold-start lock
 - per-symbol authorization
 - total leverage hard cap
@@ -34,6 +35,8 @@ Use the project's existing terms:
 - news timeline
 
 Do not rename these concepts casually. If a new term is needed, define it in `CONTEXT.md` or an ADR.
+
+Current authority note: ADR-0005 supersedes the earlier Trade PIN console model. Future work should use authenticated console sessions plus role permissions as the console safety interface.
 
 ## Conflict handling
 

@@ -277,14 +277,14 @@ def test_trading_app_reads_cached_news_digest(tmp_path) -> None:
     write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl", ["ETH/USDT:USDT"])
     app = TradingApp(str(config_path))
     digest = NewsDigest(
-        summary="??GDP????????",
-        items=[NewsItem(title="??GDP???????", source="????", summary="??GDP????????")],
+        summary="美国GDP增长2.4%",
+        items=[NewsItem(title="美国GDP增长高于预期", source="金十数据", summary="美国GDP增长2.4%")],
     )
     app.store.insert("news_summaries", digest.model_dump(mode="json"))
 
     cached = app._latest_cached_news_digest()
 
     assert cached is not None
-    assert cached.summary == "??GDP????????"
-    assert cached.items[0].source == "????"
+    assert cached.summary == "美国GDP增长2.4%"
+    assert cached.items[0].source == "金十数据"
     app.store.close()

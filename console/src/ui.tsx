@@ -22,9 +22,8 @@ export const errText = (error: unknown): string => {
   if (body && typeof body === "object") {
     const item = body as Record<string, unknown>;
     const detail = item.detail;
-    if (detail === "operation_code_required") {
-      return "操作验证码缺失或错误：请在顶部输入操作验证码后重试。";
-    }
+    if (detail === "auth_required") return "请先登录 AI 量化控制台账号。";
+    if (detail === "permission_denied") return "当前账号没有执行该操作的权限。";
     if (typeof detail === "string" && detail.trim()) return detail;
     if (typeof item.message === "string" && item.message.trim()) return item.message;
     if (Array.isArray(detail)) {
@@ -32,9 +31,8 @@ export const errText = (error: unknown): string => {
       if (first?.msg) return `请求参数错误：${String(first.msg)}`;
     }
   }
-  if (fallback === "operation_code_required") {
-    return "操作验证码缺失或错误：请在顶部输入操作验证码后重试。";
-  }
+  if (fallback === "auth_required") return "请先登录 AI 量化控制台账号。";
+  if (fallback === "permission_denied") return "当前账号没有执行该操作的权限。";
   return fallback;
 };
 

@@ -44,10 +44,10 @@ export type StrategyProfile = {
 };
 
 export type StrategyChannel = {
-  channel: "trend" | "follower";
+  channel: "trend" | "follower" | "range";
   label: string;
-  strategy_type: "trend" | "trend_follower";
-  account_slot: "trend" | "follower";
+  strategy_type: "trend" | "trend_follower" | "range_reserved";
+  account_slot: "trend" | "follower" | "range";
   account_label: string;
   enabled: boolean;
   executable: boolean;
@@ -129,10 +129,10 @@ export type WorkerHeartbeatDetail = {
 };
 
 export type ExecutionAccountSlot = {
-  slot: "trend" | "follower";
+  slot: "trend" | "follower" | "range";
   label: string;
   exchange: string;
-  strategy_type: "trend" | "trend_follower";
+  strategy_type: "trend" | "trend_follower" | "range_reserved";
   configured: boolean;
   version: number;
   key_tail: string;
@@ -140,6 +140,29 @@ export type ExecutionAccountSlot = {
   gateway_binding: string;
   live_routing: string;
   credential_source?: string;
+  max_leverage?: number;
+};
+
+export type ConsoleSession = {
+  ok: boolean;
+  auth_required: boolean;
+  auth_configured?: boolean;
+  authenticated: boolean;
+  user: null | {
+    username: string;
+    role: "admin" | "account1" | "account2" | "range";
+    label: string;
+    account_slot: "trend" | "follower" | "range" | null;
+    visible_account_slots: Array<"trend" | "follower" | "range">;
+    capabilities: {
+      manage_runtime: boolean;
+      manage_strategy_parameters: boolean;
+      manage_api_keys: boolean;
+      execute_manual_orders: boolean;
+      edit_own_leverage: boolean;
+      view_all_accounts: boolean;
+    };
+  };
 };
 
 export type WorkspaceId = "dashboard" | "market" | "strategy" | "ai" | "agent" | "execution" | "data";

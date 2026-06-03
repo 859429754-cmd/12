@@ -261,17 +261,21 @@ def test_console_can_create_global_max_leverage_proposal(tmp_path: Path, monkeyp
     accounts = client.get("/api/execution/accounts")
     assert accounts.status_code == 200
     account_body = accounts.json()
-    assert [item["slot"] for item in account_body["items"]] == ["trend", "follower"]
+    assert [item["slot"] for item in account_body["items"]] == ["trend", "follower", "range"]
     assert account_body["items"][0]["live_routing"] == "blocked_missing_credentials"
+    assert "max_leverage" in account_body["items"][0]
 
     channels = client.get("/api/strategy/channels")
     assert channels.status_code == 200
     channel_body = channels.json()
-    assert [item["channel"] for item in channel_body["items"]] == ["trend", "follower"]
+    assert [item["channel"] for item in channel_body["items"]] == ["trend", "follower", "range"]
     assert channel_body["items"][0]["account_slot"] == "trend"
     assert channel_body["items"][0]["executable"] is True
     assert channel_body["items"][1]["account_slot"] == "follower"
     assert channel_body["items"][1]["executable"] is False
+    assert channel_body["items"][2]["account_slot"] == "range"
+    assert channel_body["items"][2]["strategy_type"] == "range_reserved"
+    assert channel_body["items"][2]["executable"] is False
 
     dense = client.get("/api/dense-zones/latest?symbol=ETH%2FUSDT%3AUSDT")
     assert dense.status_code == 200
@@ -322,9 +326,9 @@ def test_account_balance_prefers_gate_readonly_when_mock_has_configured_account(
     assert body["usdt_total"] == 321.5
 
 
-def test_account_balance_canonicalizes_legacy_range_slot_to_follower(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("GATEIO_FOLLOWER_API_KEY", "follower_key")
-    monkeypatch.setenv("GATEIO_FOLLOWER_API_SECRET", "follower_secret")
+def test_account_balance_keeps_range_slot_distinct(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("GATEIO_RANGE_API_KEY", "range_key")
+    monkeypatch.setenv("GATEIO_RANGE_API_SECRET", "range_secret")
     config_path = tmp_path / "config.yaml"
     write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl", ["ETH/USDT:USDT"])
     created: list[tuple[str, str]] = []
@@ -350,8 +354,8 @@ def test_account_balance_canonicalizes_legacy_range_slot_to_follower(tmp_path: P
 
     response = client.get("/api/account/balance?account_slot=range")
     assert response.status_code == 200
-    assert response.json()["account_slot"] == "follower"
-    assert created == [("live", "follower")]
+    assert response.json()["account_slot"] == "range"
+    assert created == [("live", "range")]
 
 
 def test_account_balance_does_not_fallback_to_mock_when_gate_readonly_fails(tmp_path: Path, monkeypatch) -> None:
@@ -484,6 +488,7 @@ def test_live_readiness_blocks_recent_deepseek_budget_failure(tmp_path: Path, mo
 
 
 def test_console_basic_auth_blocks_when_configured(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("CONSOLE_AUTH_DISABLED", "0")
     monkeypatch.setenv("CONSOLE_BASIC_USER", "admin")
     monkeypatch.setenv("CONSOLE_BASIC_PASSWORD", "secret")
     config_path = tmp_path / "config.yaml"
@@ -492,13 +497,14 @@ def test_console_basic_auth_blocks_when_configured(tmp_path: Path, monkeypatch) 
 
     blocked = client.get("/api/status")
     assert blocked.status_code == 401
-    assert blocked.headers["www-authenticate"] == 'Basic realm="AI Quant Console"'
+    assert blocked.json()["detail"] == "auth_required"
 
     health = client.get("/api/health")
     assert health.status_code == 200
 
 
 def test_console_basic_auth_accepts_valid_credentials(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("CONSOLE_AUTH_DISABLED", "0")
     monkeypatch.setenv("CONSOLE_BASIC_USER", "admin")
     monkeypatch.setenv("CONSOLE_BASIC_PASSWORD", "secret")
     config_path = tmp_path / "config.yaml"
@@ -512,23 +518,58 @@ def test_console_basic_auth_accepts_valid_credentials(tmp_path: Path, monkeypatc
     assert response.json()["execution_mode"] == "mock"
 
 
-def test_console_operation_code_blocks_mutating_requests_when_enabled(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("CONSOLE_REQUIRE_OPERATION_CODE", "1")
-    monkeypatch.setenv("CONSOLE_OPERATION_CODE", "yx")
+def test_console_account_rbac_replaces_operation_code_for_mutating_requests(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("CONSOLE_AUTH_DISABLED", "0")
+    monkeypatch.setenv("CONSOLE_ADMIN_PASSWORD", "admin-secret")
+    monkeypatch.setenv("CONSOLE_ACCOUNT1_PASSWORD", "account-secret")
     config_path = tmp_path / "config.yaml"
     write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl", ["ETH/USDT:USDT"])
     client = TestClient(create_app(str(config_path)))
 
     body = {"operator_id": "tester", "symbols": ["ETH/USDT:USDT"]}
     blocked = client.post("/api/control/authorize", json=body)
-    assert blocked.status_code == 403
-    assert blocked.json()["detail"] == "operation_code_required"
+    assert blocked.status_code == 401
+    assert blocked.json()["detail"] == "auth_required"
 
-    wrong = client.post("/api/control/authorize", json=body, headers={"X-Operation-Code": "wrong"})
+    login = client.post("/api/auth/login", json={"username": "account1", "password": "account-secret"})
+    assert login.status_code == 200
+    wrong = client.post("/api/control/authorize", json=body)
     assert wrong.status_code == 403
+    assert wrong.json()["detail"] == "permission_denied"
 
-    ok = client.post("/api/control/authorize", json=body, headers={"X-Operation-Code": "yx"})
+    leverage = client.post(
+        "/api/execution/accounts/leverage",
+        json={"operator_id": "tester", "account_slot": "trend", "max_leverage": 3.5},
+    )
+    assert leverage.status_code == 200
+    assert leverage.json()["max_leverage"] == 3.5
+
+    client.post("/api/auth/logout", json={})
+    admin_login = client.post("/api/auth/login", json={"username": "admin", "password": "admin-secret"})
+    assert admin_login.status_code == 200
+    ok = client.post("/api/control/authorize", json=body)
     assert ok.status_code == 200
+
+
+def test_console_auth_fails_closed_when_enabled_without_users(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("CONSOLE_AUTH_DISABLED", "0")
+    config_path = tmp_path / "config.yaml"
+    write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl", ["ETH/USDT:USDT"])
+    client = TestClient(create_app(str(config_path)))
+
+    session = client.get("/api/auth/session")
+    assert session.status_code == 200
+    assert session.json()["auth_required"] is True
+    assert session.json()["auth_configured"] is False
+    assert session.json()["authenticated"] is False
+
+    blocked = client.get("/api/status")
+    assert blocked.status_code == 503
+    assert blocked.json()["detail"] == "console_auth_not_configured"
+
+    login = client.post("/api/auth/login", json={"username": "admin", "password": "secret"})
+    assert login.status_code == 503
+    assert login.json()["detail"] == "console_auth_not_configured"
 
 
 def test_agent_gateway_requires_token(tmp_path: Path, monkeypatch) -> None:

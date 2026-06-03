@@ -1,101 +1,68 @@
-# AI量化交易系统复制安装手册
+# AI 量化系统复制安装手册
 
-本文档用于把当前这套 AI 量化交易控制台完整复制到另一台电脑或云服务器。除交易所 API、DeepSeek API、公网域名/IP、运行账号不同外，代码框架、策略逻辑、AI 大脑、控制台、风控和运维脚本都可以照搬。
+本手册用于把当前 AI 量化交易系统复制到另一台电脑或云服务器。除 API 密钥、账号密码、公网地址、Gate.io IP 白名单和运行模式外，其他代码和框架应保持一致。
 
-## 当前可复制交付物
-
-- 仓库地址：`https://github.com/859429754-cmd/12`
-- 后端：`Python 3.11+ / FastAPI / asyncio / SQLite WAL / ccxt async`
-- 前端：`React / TypeScript / Vite / Tailwind / lightweight-charts`
-- 交易所：`Gate.io USDT 永续`
-- 默认实盘策略：`ETH/USDT:USDT` 趋势策略
-- 默认运行目录：`/root/ai-quant-trader`
-- 默认控制台端口：`127.0.0.1:8090`
-- 云端服务模板：`deploy/systemd/`
-
-## 当前实盘策略合同
-
-当前 ETH 趋势策略只使用以下主信号参数：
-
-```text
-周期：1h
-KC中轨：EMA20
-KC通道：EMA20 ± ATR14 * 2.8
-成交量过滤：volume > SMA(volume, 20) * 2.5
-KDJ：9, 3, 3
-ATR固定止损：1.5 * ATR14
-退出：反向穿越 KC 中轨
-仓位：按 risk.max_total_leverage 和 AI 五档裁剪
-```
-
-当前不使用 EMA89 作为开仓过滤：
-
-```yaml
-use_ema_filter: false
-ema_length: 89
-```
-
-EMA 字段保留给历史兼容、回测研究和未来重新启用，但当前实盘主参数面板不展示 EMA。
-
-## AI 大脑运行边界
-
-DeepSeek 只做信号质量评估和仓位裁剪，不直接发明交易方向。
-
-执行链路：
-
-```text
-本地趋势策略产生 1h 技术信号
--> 本地形态/密集区/订单流/新闻上下文整理
--> DeepSeek 输出五分制评分
--> RiskManager 映射仓位档
--> Gateway 执行 Gate.io 订单
--> SQLite + JSONL 审计落库
-```
-
-五档仓位：
-
-```text
-block  = 0%
-weak   = 25%
-normal = 50%
-strong = 75%
-full   = 100%
-```
-
-硬边界：
-
-- AI 不能绕过策略信号。
-- AI 不能绕过逐标的授权。
-- AI 不能绕过开仓暂停。
-- AI 不能绕过交易所对账。
-- AI 不能突破杠杆硬上限。
-- DeepSeek JSON 无效时禁止新开仓。
-
-## 需要在新机器上替换的内容
-
-只改这些：
-
-- `.env.runtime`
-- `config/config.yaml` 中的公网环境相关项
-- Nginx / 反向代理域名或 IP
-- systemd `WorkingDirectory`，如果不是 `/root/ai-quant-trader`
-- Gate.io API Key / Secret
-- DeepSeek API Key
-- `TRADE_PIN`
-- `CONSOLE_OPERATION_CODE`
+## 1. 绝对不能复制的内容
 
 不要复制这些运行期文件：
 
-- 本机 `.env.runtime`
+- `.env.runtime`
 - `data/`
 - `logs/`
 - `output/`
 - `console/dist/` 以外的临时构建产物
-- 任何真实密钥截图或备份
+- SQLite 数据库
+- 当前订单、持仓、止损、审计状态
+- 真实 Gate.io / DeepSeek API Key
+- 当前服务器 SSH Key
+- 任意密钥截图、日志、备份
 
-## 本地开发机安装
+原因：这些内容属于当前账户真实运行状态。复制给别人会造成账户串联、状态污染、误判持仓、误下单或密钥泄露。
 
-Windows PowerShell 示例：
+## 2. 新机器必须重新填写的内容
+
+在新机器上创建 `.env.runtime`，至少配置：
+
+```text
+DEEPSEEK_API_KEY=
+DEEPSEEK_BACKUP_API_KEY=
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+
+GATEIO_TREND_API_KEY=
+GATEIO_TREND_API_SECRET=
+
+GATEIO_FOLLOWER_API_KEY=
+GATEIO_FOLLOWER_API_SECRET=
+
+GATEIO_RANGE_API_KEY=
+GATEIO_RANGE_API_SECRET=
+
+CONSOLE_ADMIN_PASSWORD=
+CONSOLE_ACCOUNT1_PASSWORD=
+CONSOLE_ACCOUNT2_PASSWORD=
+CONSOLE_RANGE_PASSWORD=
+CONSOLE_AUTH_DISABLED=
+```
+
+说明：
+
+- `GATEIO_TREND_*` 是账户1，运行当前 ETH 趋势策略。
+- `GATEIO_FOLLOWER_*` 是账户2，复用账户1策略信号和一次 DeepSeek 决策跟随执行。
+- `GATEIO_RANGE_*` 是震荡策略预留账户，当前默认不执行。
+- 控制台安全使用账号登录/RBAC，不再使用 Trade PIN 或操作验证码。
+- 若公网开放控制台，必须使用强密码，不能使用弱口令。
+- 生产默认 fail-closed：不要设置 `CONSOLE_AUTH_DISABLED=1`。如果未配置账号密码，控制台特权 API 会拒绝访问。
+
+还需要按新环境修改：
+
+- 公网 IP / 域名
+- Nginx 或反向代理配置
+- systemd `WorkingDirectory`
+- Gate.io API IP 白名单
+- mock/live 运行模式
+- 每个账户的杠杆上限
+
+## 3. Windows 本地安装
 
 ```powershell
 git clone https://github.com/859429754-cmd/12.git ai-quant-trader
@@ -116,9 +83,10 @@ cd ..
 
 python -m compileall ai_quant_trader tests scripts
 python -m pytest -q
+python scripts/public_repo_preflight.py
 ```
 
-本地启动控制台：
+启动控制台：
 
 ```powershell
 uvicorn ai_quant_trader.api.server:app --host 127.0.0.1 --port 8090
@@ -130,9 +98,7 @@ uvicorn ai_quant_trader.api.server:app --host 127.0.0.1 --port 8090
 http://127.0.0.1:8090/
 ```
 
-## 云服务器安装
-
-Linux 示例：
+## 4. Linux 云服务器安装
 
 ```bash
 cd /root
@@ -146,55 +112,50 @@ python -m pip install -r requirements.txt
 
 cp .env.example .env.runtime
 nano .env.runtime
-```
 
-前端构建：
-
-```bash
-cd /root/ai-quant-trader/console
+cd console
 npm install
 npm run build
 cd /root/ai-quant-trader
-```
 
-验证：
-
-```bash
 python -m compileall ai_quant_trader tests scripts
 python -m pytest -q
 python scripts/public_repo_preflight.py
 ```
 
-## 必填环境变量
+只读对账：
 
-`.env.runtime` 必须至少配置：
-
-```text
-DEEPSEEK_API_KEY=
-DEEPSEEK_BASE_URL=https://api.deepseek.com
-
-GATEIO_TREND_API_KEY=
-GATEIO_TREND_API_SECRET=
-
-TRADE_PIN=
-CONSOLE_OPERATION_CODE=
+```bash
+python scripts/gate_live_readiness.py --config config/config.yaml --env-file .env.runtime
 ```
 
-如果后续启用震荡策略独立账户，再配置：
+必须确认：
 
 ```text
-GATEIO_RANGE_API_KEY=
-GATEIO_RANGE_API_SECRET=
+balance_ok: true
+reconciliation.status: ok
+issues: []
 ```
 
-可选：
+安装 systemd：
 
-```text
-CRYPTOPANIC_API_KEY=
-FRED_API_KEY=
+```bash
+sudo cp deploy/systemd/*.service deploy/systemd/*.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now ai-quant-console.service
+sudo systemctl enable --now ai-quant-trader.service
+sudo systemctl enable --now ai-quant-health-watchdog.timer
+sudo systemctl enable --now ai-quant-maintenance.timer
 ```
 
-## 首次运行安全流程
+验收：
+
+```bash
+curl -s http://127.0.0.1:8090/api/health
+curl -s http://127.0.0.1:8090/api/system/readiness
+```
+
+## 5. 首次运行安全流程
 
 1. 保持 `config/config.yaml`：
 
@@ -205,138 +166,62 @@ runtime:
 ```
 
 2. 启动服务。
-3. 打开控制台确认：
+3. 登录控制台，确认：
 
 ```text
-账户余额来源
+账号余额来源正确
 DeepSeek 已接入
 新闻刷新正常
 K线加载正常
-readiness 无 block
+readiness 没有 block
+Gate 只读对账正常
 ```
 
-4. 跑 Gate 只读对账：
+4. 只有管理员账号可以切换 live。
+5. 切换 live 前必须确认 Gate.io API IP 白名单、最小权限、原生止损、订单生命周期和 readiness 均正常。
 
-```bash
-cd /root/ai-quant-trader
-. .venv/bin/activate
-python scripts/gate_live_readiness.py --config config/config.yaml --env-file .env.runtime
-```
+## 6. 当前策略合同
 
-必须看到：
+当前生产策略是 ETH 1h 趋势突破：
 
 ```text
-balance_ok: true
-reconciliation.status: ok
-issues: []
+KC 中轨 = EMA20
+KC 通道 = EMA20 ± ATR14 * 2.8
+成交量过滤 = Volume > SMA20 * 2.5
+KDJ = 9,3,3
+多头过滤 = K > D 且 J >= 50
+空头过滤 = K < D 且 J <= 50
+ATR 固定止损 = 1.5 * ATR14
+退出 = 反向穿越 KC 中轨
+同向加仓 = 禁止
+反手 = 允许，先平旧方向再开新方向
 ```
 
-5. 确认无误后再通过控制台或 API 切换 `live`。
+EMA89 当前不作为开仓过滤器。
 
-## systemd 部署
-
-安装模板：
-
-```bash
-cd /root/ai-quant-trader
-sudo cp deploy/systemd/*.service deploy/systemd/*.timer /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now ai-quant-console.service
-sudo systemctl enable --now ai-quant-trader.service
-sudo systemctl enable --now ai-quant-order-status-worker.service
-sudo systemctl enable --now ai-quant-health-watchdog.timer
-sudo systemctl enable --now ai-quant-maintenance.timer
-```
-
-检查：
-
-```bash
-systemctl status ai-quant-console.service --no-pager -l
-systemctl status ai-quant-trader.service --no-pager -l
-systemctl status ai-quant-order-status-worker.service --no-pager -l
-```
-
-健康检查：
-
-```bash
-curl -fsS http://127.0.0.1:8090/api/health
-curl -fsS http://127.0.0.1:8090/api/system/readiness
-```
-
-## 公网访问
-
-推荐方式：
+## 7. AI 和账户逻辑
 
 ```text
-公网域名/IP -> Nginx/反向代理 -> 127.0.0.1:8090
+本地趋势策略产生方向
+  -> DeepSeek 分析一次
+  -> RiskManager 输出 block/weak/normal/strong/full
+  -> 账户1 trend 执行
+  -> 账户2 follower 复用同一决策跟随执行
+  -> 账户3 range 当前预留
 ```
 
-控制台可以公开访问，但所有修改运行参数、切换 live、手动交易等 mutating API 必须带 `x-operation-code`。不要把 `.env.runtime` 或 API 密钥暴露到前端。
+DeepSeek 不允许发明方向，不能绕过本地策略、RiskManager、账户权限、授权、冷启动和杠杆上限。
 
-最低建议：
+## 8. 交付给新机器使用者的信息
 
-- 云服务器安全组只开放需要的 HTTP/HTTPS 端口。
-- SSH 只允许密钥登录。
-- Gate API 开启 IP 白名单。
-- Gate API 禁止提现权限。
+交付时只提供：
 
-## 复制后必须跑的验收命令
+- GitHub 仓库地址
+- 安装手册路径：`docs/clone-install-runbook.md`
+- 需要自行填写的 `.env.runtime` 字段清单
+- 控制台地址
+- 当前运行模式 mock/live
+- readiness 状态
+- 当前策略合同
 
-本地或云端每次迁移后必须跑：
-
-```bash
-python -m compileall ai_quant_trader tests scripts
-python -m pytest -q
-cd console && npm run build
-cd ..
-python scripts/public_repo_preflight.py
-python scripts/gate_live_readiness.py --config config/config.yaml --env-file .env.runtime
-curl -fsS http://127.0.0.1:8090/api/system/readiness
-```
-
-合格标准：
-
-```text
-pytest 全部通过
-frontend build 通过
-public_repo_preflight ok=true
-Gate readiness status=ok
-/api/system/readiness overall=ok
-```
-
-## 实盘启动标准
-
-可以切 live 的最低条件：
-
-- `.env.runtime` 配置完整。
-- Gate 只读对账 `ok`。
-- 当前无幽灵订单。
-- 当前本地状态与交易所持仓一致。
-- DeepSeek 可调用。
-- 新闻缓存和订单流可用。
-- `ETH/USDT:USDT` 已授权。
-- 开仓未暂停。
-- readiness 无 block。
-
-切 live 后系统不会立即乱下单；只有当 1h 策略出现真实信号，且 AI 与 RiskManager 均通过后才会提交 Gate 订单。
-
-## 当前不建议复制的内容
-
-不要复制当前服务器的：
-
-- `.env.runtime`
-- `data/trader.sqlite3`
-- `data/state_trend.json`
-- `logs/audit.jsonl`
-- `data/backups/`
-
-这些是当前账户的真实运行状态。给别人安装时必须从干净状态启动。
-
-## 故障排查入口
-
-- 服务状态：`systemctl status ai-quant-console.service --no-pager -l`
-- readiness：`curl -fsS http://127.0.0.1:8090/api/system/readiness`
-- 余额：`curl -fsS 'http://127.0.0.1:8090/api/account/balance?account_slot=trend'`
-- Gate 对账：`python scripts/gate_live_readiness.py --config config/config.yaml --env-file .env.runtime`
-- 维护备份：`python scripts/runtime_maintenance.py --config config/config.yaml --backup-keep 24 --min-free-ratio 0.05`
-
+不要交付任何真实 API Key、日志、SQLite、运行数据或备份。

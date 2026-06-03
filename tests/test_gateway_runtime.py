@@ -264,28 +264,20 @@ def test_trend_state_records_native_stop_order_id(tmp_path: Path) -> None:
     assert store.get("ETH/USDT:USDT").native_stop_order_id == "stop_123"
 
 
-def test_runtime_mode_requires_trade_pin_for_live(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_runtime_mode_requires_configured_trend_account_for_live(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     for key in ["GATEIO_API_KEY", "GATEIO_API_SECRET", "GATEIO_TREND_API_KEY", "GATEIO_TREND_API_SECRET"]:
         monkeypatch.setenv(key, "")
     config_path = tmp_path / "config.yaml"
     write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl", ["ETH/USDT:USDT"])
     client = TestClient(create_app(str(config_path)))
 
-    monkeypatch.delenv("TRADE_PIN", raising=False)
-    missing_pin = client.post("/api/control/runtime-mode", json={"operator_id": "tester", "dry_run": False})
-    assert missing_pin.status_code == 403
-
-    monkeypatch.setenv("TRADE_PIN", "246810")
-    wrong_pin = client.post("/api/control/runtime-mode", json={"operator_id": "tester", "dry_run": False, "trade_pin": "000000"})
-    assert wrong_pin.status_code == 403
-
-    missing_account = client.post("/api/control/runtime-mode", json={"operator_id": "tester", "dry_run": False, "trade_pin": "246810"})
+    missing_account = client.post("/api/control/runtime-mode", json={"operator_id": "tester", "dry_run": False})
     assert missing_account.status_code == 403
 
     monkeypatch.setenv("GATEIO_TREND_API_KEY", "trend_key")
     monkeypatch.setenv("GATEIO_TREND_API_SECRET", "trend_secret")
 
-    ok = client.post("/api/control/runtime-mode", json={"operator_id": "tester", "dry_run": False, "trade_pin": "246810"})
+    ok = client.post("/api/control/runtime-mode", json={"operator_id": "tester", "dry_run": False})
     assert ok.status_code == 200
     live_status = client.get("/api/status").json()
     assert live_status["dry_run"] is False
@@ -336,16 +328,16 @@ def test_live_gateway_can_bind_follower_account_slot(monkeypatch: pytest.MonkeyP
     assert gateway.api_secret_env == "GATEIO_FOLLOWER_API_SECRET"
 
 
-def test_live_gateway_uses_legacy_range_key_for_follower_slot(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_live_gateway_uses_range_key_for_range_slot(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("GATEIO_FOLLOWER_API_KEY", raising=False)
     monkeypatch.delenv("GATEIO_FOLLOWER_API_SECRET", raising=False)
-    monkeypatch.setenv("GATEIO_RANGE_API_KEY", "legacy_follower_key")
-    monkeypatch.setenv("GATEIO_RANGE_API_SECRET", "legacy_follower_secret")
+    monkeypatch.setenv("GATEIO_RANGE_API_KEY", "range_key")
+    monkeypatch.setenv("GATEIO_RANGE_API_SECRET", "range_secret")
 
-    gateway = create_exchange_gateway("live", account_slot="follower")
+    gateway = create_exchange_gateway("live", account_slot="range")
 
     assert isinstance(gateway, GateRealGateway)
-    assert gateway.account_slot == "follower"
+    assert gateway.account_slot == "range"
     assert gateway.api_key_env == "GATEIO_RANGE_API_KEY"
     assert gateway.api_secret_env == "GATEIO_RANGE_API_SECRET"
 

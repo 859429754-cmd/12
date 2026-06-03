@@ -43,6 +43,13 @@ followers:
   max_leverage: 4.0
   mirror_entries: true
   mirror_exits: true
+- enabled: false
+  account_slot: range
+  label: 震荡策略预留账户
+  follow_ratio: 1.0
+  max_leverage: 4.0
+  mirror_entries: false
+  mirror_exits: false
 symbols:
 - symbol: ETH/USDT:USDT
   timeframe: 1h

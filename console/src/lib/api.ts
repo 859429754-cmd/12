@@ -63,6 +63,15 @@ function parseBody(text: string): unknown {
 function extractMessage(body: unknown, status: number): string {
   if (body && typeof body === "object") {
     const item = body as Record<string, unknown>;
+    if (item.detail === "console_auth_not_configured") {
+      return "控制台账号未配置，已拒绝访问。请先在 .env.runtime 配置管理员账号密码。";
+    }
+    if (item.detail === "auth_required") {
+      return "请先登录 AI 量化控制台账号。";
+    }
+    if (item.detail === "permission_denied") {
+      return "当前账号没有执行该操作的权限。";
+    }
     return String(item.detail || item.message || `HTTP ${status}`);
   }
   return `HTTP ${status}`;

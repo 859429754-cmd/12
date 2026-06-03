@@ -101,7 +101,7 @@ AI may not:
 - Bypass per-symbol authorization
 - Bypass total leverage cap
 - Bypass no same-direction duplicate add rule
-- Bypass Trade PIN
+- Bypass console account RBAC
 
 AI output must be structured Pydantic JSON and include:
 
@@ -165,10 +165,10 @@ Business rule:
 
 Live switching safety:
 
-- Live to mock: one-click allowed
-- Mock to live: requires `TRADE_PIN`
-- `TRADE_PIN` comes from `.env.runtime` or environment
-- If no `TRADE_PIN`, backend rejects live switching
+- Live to mock: admin-only operation.
+- Mock to live: admin-only operation under console account RBAC.
+- The old `TRADE_PIN` model is superseded by ADR-0005.
+- Public console exposure is forbidden unless account login/RBAC is configured.
 
 Existing endpoint:
 
@@ -176,7 +176,7 @@ Existing endpoint:
 
 Existing UI:
 
-- Trade PIN modal
+- Console login session with role-scoped permissions.
 
 ## 7. Backtesting State and Requirements
 
@@ -317,7 +317,7 @@ Implemented:
 - Recent events
 - API client with timeout, retry, `ApiError`
 - ErrorBoundary
-- Trade PIN modal
+- Console login session
 
 Still missing:
 
@@ -354,7 +354,7 @@ Smoke endpoints:
 - `/api/markets/symbols`: 200
 - `/api/strategy-lab/versions`: 200
 - `/api/news/latest?limit=1`: 200
-- `/api/control/runtime-mode`: 403 when switching live without `TRADE_PIN`, 200 when switching back to mock
+- `/api/control/runtime-mode`: protected by console account login/RBAC; admin-only runtime control
 - `/api/manual-small-entry/execute`: mock order success
 - `/api/backtest/trend/job`: background job completes
 
@@ -363,7 +363,7 @@ Browser automation:
 - Page opens
 - No infinite connection page
 - K-line loads
-- Trade PIN modal opens/closes
+- Console login session opens/closes
 - No frontend render crash found
 
 Do not assume these remain true. Re-run relevant checks after changes.
@@ -375,12 +375,12 @@ Do not assume these remain true. Re-run relevant checks after changes.
 - Scan and fix encoding corruption
 - Sync latest local code to cloud
 - Add console authentication before any public exposure
-- Configure `TRADE_PIN`
+- Configure console account passwords and keep `CONSOLE_AUTH_DISABLED` unset in production
 - Run under systemd 24/7
 - Add cloud health check script
 - Add Playwright E2E:
   - page load
-  - mock/live PIN modal
+  - console login and RBAC-protected runtime control
   - K-line load
   - news refresh
   - backtest start
@@ -515,7 +515,7 @@ Highest priority order:
 1. Absolute total position <= total equity * 4
 2. Cold start defaults to opening paused
 3. Per-symbol authorization
-4. Live switch requires Trade PIN
+4. Console account RBAC controls live switching and dangerous operations
 5. AI may veto
 6. Local technical signal must confirm unless human-approved AI candidate mode
 7. No duplicate same-direction add
@@ -543,3 +543,23 @@ Before changing production trading behavior, ask what happens during:
 - SQLite write failure
 - clock skew
 - cloud reboot
+
+## 16. Current Console Account Model
+
+As of 2026-06-04, console security is account-login based. This supersedes earlier Trade PIN and operation-code designs for console operations.
+
+Authoritative roles:
+
+- `admin`: can switch mock/live mode, update API secrets, change strategy parameters, approve proposals, authorize/pause symbols and use dangerous manual controls.
+- `account1`: trend account view; view-only except its own account-level leverage cap.
+- `account2`: follower account view; view-only except its own account-level leverage cap.
+- `range`: reserved range-strategy account view; view-only except its own account-level leverage cap after the range strategy is implemented.
+
+Trading semantics:
+
+- Strategy direction is generated once by the local ETH trend strategy.
+- DeepSeek analysis runs once for the shared strategy signal.
+- The final AI/RiskManager decision fans out to configured accounts.
+- Account balances, leverage caps, positions, order lifecycle, native stops and gateway health remain account-specific.
+
+Ignore older plans that require Trade PIN, a separate operation code, or using the range account slot as the follower account. ADR-0005 is the current console safety ADR.

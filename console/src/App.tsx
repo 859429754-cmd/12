@@ -27,6 +27,7 @@ import type {
   BacktestTrade,
   Candle,
   CandleResponse,
+  ConsoleSession,
   DenseZonePayload,
   DbRow,
   ExecutionAccountSlot,
@@ -45,7 +46,6 @@ import { JsonBlock, Metric, Surface, button, danger, errText, input, mono, num, 
 
 const DEFAULT_SYMBOL = "ETH/USDT:USDT";
 const WORKSPACE_IDS: WorkspaceId[] = ["dashboard", "market", "strategy", "ai", "agent", "execution", "data"];
-const OPERATION_CODE_STORAGE_KEY = "aiq_operation_code";
 const CHART_TIMEFRAMES = ["15m", "1h", "4h", "1d", "1w", "1M"];
 
 function chartCandleLimits(timeframe: string) {
@@ -62,6 +62,7 @@ function chartCandleLimits(timeframe: string) {
 
 export function App() {
   const [workspace, setWorkspace] = useState<WorkspaceId>(() => readWorkspaceHash());
+  const [session, setSession] = useState<ConsoleSession | null>(null);
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [platform, setPlatform] = useState<PlatformOverview | null>(null);
   const [balance, setBalance] = useState<Record<string, unknown> | null>(null);
@@ -83,7 +84,9 @@ export function App() {
   const [warning, setWarning] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
-  const [operationCode, setOperationCode] = useState(() => window.localStorage.getItem(OPERATION_CODE_STORAGE_KEY) || "");
+  const capabilities = session?.user?.capabilities;
+  const visibleSlots = session?.user?.visible_account_slots || ["trend", "follower", "range"];
+  const isAdmin = Boolean(capabilities?.manage_strategy_parameters);
 
   const symbols = useMemo(() => {
     const fromMarkets = markets.items.map((item) => item.symbol);
@@ -108,6 +111,7 @@ export function App() {
   }, [source, symbol]);
 
   const load = useCallback(async () => {
+    if (session?.auth_required && !session.authenticated) return;
     setWarning("");
     try {
       const safe = async <T,>(promise: Promise<T>, fallback: T): Promise<T> => {
@@ -192,13 +196,20 @@ export function App() {
     } catch (error) {
       setWarning(errText(error));
     }
-  }, [refreshTicker, source, symbol, timeframe]);
+  }, [refreshTicker, session?.auth_required, session?.authenticated, source, symbol, timeframe]);
 
   useEffect(() => {
+    void api<ConsoleSession>("/api/auth/session", { retries: 0, timeoutMs: 5000 })
+      .then(setSession)
+      .catch(() => setSession({ ok: false, auth_required: true, authenticated: false, user: null }));
+  }, []);
+
+  useEffect(() => {
+    if (!session) return;
     void load();
     const id = window.setInterval(() => void load(), 60_000);
     return () => window.clearInterval(id);
-  }, [load]);
+  }, [load, session]);
 
   useEffect(() => {
     void refreshTicker();
@@ -212,21 +223,11 @@ export function App() {
     }
   }, [workspace]);
 
-  useEffect(() => {
-    const code = operationCode.trim();
-    if (code) {
-      window.localStorage.setItem(OPERATION_CODE_STORAGE_KEY, code);
-    } else {
-      window.localStorage.removeItem(OPERATION_CODE_STORAGE_KEY);
-    }
-  }, [operationCode]);
-
   const postAction = async (path: string, body: Record<string, unknown>) => {
     setBusy(true);
     setMessage("");
     try {
-      const headers = operationCode.trim() ? { "X-Operation-Code": operationCode.trim() } : undefined;
-      const result = await api<Record<string, unknown>>(path, { method: "POST", body: JSON.stringify(body), headers, timeoutMs: 15000 });
+      const result = await api<Record<string, unknown>>(path, { method: "POST", body: JSON.stringify(body), timeoutMs: 15000 });
       setMessage(String(result.message || "ok"));
       await load();
     } catch (error) {
@@ -237,6 +238,39 @@ export function App() {
   };
 
   const showRightRail = workspace !== "dashboard";
+
+  const login = async (username: string, password: string) => {
+    setBusy(true);
+    setMessage("");
+    try {
+      const nextSession = await api<ConsoleSession>("/api/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ username, password }),
+        retries: 0,
+        timeoutMs: 8000,
+      });
+      setSession(nextSession);
+      setMessage("登录成功。");
+      await load();
+    } catch (error) {
+      setMessage(errText(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const logout = async () => {
+    await api<Record<string, unknown>>("/api/auth/logout", { method: "POST", body: JSON.stringify({}), retries: 0 });
+    setSession({ ok: true, auth_required: true, authenticated: false, user: null });
+  };
+
+  if (!session) {
+    return <div className="min-h-[100dvh] bg-[#07111f] text-[#e5eefb]" />;
+  }
+
+  if (session.auth_required && !session.authenticated) {
+    return <LoginScreen busy={busy} message={message} onLogin={login} />;
+  }
 
   return (
     <main className="flex min-h-[100dvh] flex-col overflow-hidden bg-[#07111f] text-[#e5eefb] md:grid md:h-screen md:grid-cols-[68px_minmax(0,1fr)] xl:grid-cols-[252px_minmax(0,1fr)]">
@@ -252,6 +286,8 @@ export function App() {
         balance={balance}
         busy={busy}
         message={message}
+        session={session}
+        logout={logout}
         postAction={postAction}
       />
       <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
@@ -262,8 +298,8 @@ export function App() {
         setWorkspace={setWorkspace}
         refresh={load}
         warning={warning}
-        operationCode={operationCode}
-        setOperationCode={setOperationCode}
+        session={session}
+        logout={logout}
       />
       <div className={`grid min-h-0 flex-1 gap-3 overflow-auto px-2 py-3 pb-24 sm:gap-4 sm:p-4 ${showRightRail ? "grid-cols-[minmax(0,1fr)] xl:grid-cols-[minmax(0,1fr)_320px]" : "grid-cols-[minmax(0,1fr)]"}`}>
         <WorkspaceBody
@@ -289,7 +325,8 @@ export function App() {
         denseZone={denseZone}
         riskSummary={riskSummary}
         readiness={readiness}
-        operationCode={operationCode}
+        visibleSlots={visibleSlots}
+        isAdmin={isAdmin}
         busy={busy}
         postAction={postAction}
           decisions={decisions}
@@ -456,6 +493,40 @@ function timeframeBucketIso(date: Date, timeframe: string): string {
   return new Date(Date.UTC(year, month, day, hour)).toISOString();
 }
 
+function LoginScreen({
+  busy,
+  message,
+  onLogin,
+}: {
+  busy: boolean;
+  message: string;
+  onLogin: (username: string, password: string) => Promise<void>;
+}) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  return (
+    <main className="grid min-h-[100dvh] place-items-center bg-[#07111f] px-4 text-[#e5eefb]">
+      <div className="w-full max-w-md rounded-3xl border border-[#263246] bg-[#0b1220] p-6 shadow-2xl shadow-black/40">
+        <div className="flex items-center gap-3">
+          <div className="grid h-11 w-11 place-items-center rounded-2xl bg-[#2454ff] text-lg font-black text-white">Q</div>
+          <div>
+            <div className="text-xl font-bold">AI 量化控制台登录</div>
+            <div className="mt-1 text-xs text-[#94a3b8]">账号权限决定可见账户和可执行操作。</div>
+          </div>
+        </div>
+        <div className="mt-6 grid gap-3">
+          <input className={`${input} h-12 w-full`} value={username} placeholder="用户名" autoComplete="username" onChange={(event) => setUsername(event.target.value)} />
+          <input className={`${input} h-12 w-full`} type="password" value={password} placeholder="密码" autoComplete="current-password" onChange={(event) => setPassword(event.target.value)} />
+          <button className={`${button} h-12 justify-center border-[#3b82f6] bg-[#1d4ed8] text-white`} disabled={busy || !username.trim() || !password} onClick={() => onLogin(username, password)}>
+            登录
+          </button>
+        </div>
+        {message ? <div className="mt-4 rounded-xl border border-[#263246] bg-[#101a2d] px-3 py-2 text-xs text-[#cbd5e1]">{message}</div> : null}
+      </div>
+    </main>
+  );
+}
+
 function ShellNav({
   platform,
   workspace,
@@ -468,6 +539,8 @@ function ShellNav({
   balance,
   busy,
   message,
+  session,
+  logout,
   postAction,
 }: {
   platform: PlatformOverview | null;
@@ -481,6 +554,8 @@ function ShellNav({
   balance: Record<string, unknown> | null;
   busy: boolean;
   message: string;
+  session: ConsoleSession;
+  logout: () => Promise<void>;
   postAction: (path: string, body: Record<string, unknown>) => Promise<void>;
 }) {
   const workspaces = platform?.workspaces?.length ? platform.workspaces : [
@@ -521,6 +596,12 @@ function ShellNav({
         })}
       </nav>
       <div className="hidden min-h-0 flex-1 overflow-auto border-t border-[#1f2a3d] bg-[#07111f] p-2 xl:block">
+        <div className="mb-3 rounded-2xl border border-[#263246] bg-[#101a2d] p-3">
+          <div className="text-[11px] text-[#94a3b8]">当前登录</div>
+          <div className="mt-1 truncate text-sm font-semibold text-[#e5eefb]">{session.user?.label || session.user?.username || "未登录"}</div>
+          <div className="mt-1 text-[11px] text-[#64748b]">{session.user?.role || "unknown"}</div>
+          <button className={`${button} mt-3 h-9 w-full justify-center`} onClick={logout}>退出登录</button>
+        </div>
         <LeftRail
           workspace={workspace}
           symbol={symbol}
@@ -531,6 +612,7 @@ function ShellNav({
           balance={balance}
           busy={busy}
           message={message}
+          canControl={Boolean(session.user?.capabilities.manage_runtime)}
           postAction={postAction}
         />
       </div>
@@ -545,8 +627,8 @@ function TopBar({
   setWorkspace,
   refresh,
   warning,
-  operationCode,
-  setOperationCode,
+  session,
+  logout,
 }: {
   platform: PlatformOverview | null;
   status: StatusResponse | null;
@@ -554,8 +636,8 @@ function TopBar({
   setWorkspace: (value: WorkspaceId) => void;
   refresh: () => void;
   warning: string;
-  operationCode: string;
-  setOperationCode: (value: string) => void;
+  session: ConsoleSession;
+  logout: () => Promise<void>;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const switchWorkspace = (id: WorkspaceId) => {
@@ -619,21 +701,16 @@ function TopBar({
       </div>
       <div className="ml-auto flex min-w-0 items-center gap-3 text-[11px] text-[#94a3b8]">
         {warning ? <span className="hidden max-w-[440px] truncate rounded-full border border-[#854d0e] bg-[#241806] px-3 py-2 text-[#facc15] sm:inline-flex">{warning}</span> : null}
-        <label className="hidden h-10 items-center gap-2 rounded-xl border border-[#263246] bg-[#111827] px-2 md:flex sm:px-3">
+        <div className="hidden h-10 items-center gap-2 rounded-xl border border-[#263246] bg-[#111827] px-2 md:flex sm:px-3">
           <KeyRound size={13} />
-          <span className="hidden whitespace-nowrap sm:inline">操作验证码</span>
-          <input
-            className={`${input} h-7 w-20 border-0 bg-[#0b1220] px-2 py-0 text-xs`}
-            type="password"
-            value={operationCode}
-            placeholder="yx"
-            autoComplete="off"
-            onChange={(event) => setOperationCode(event.target.value)}
-          />
-        </label>
+          <span className="hidden whitespace-nowrap sm:inline">{session.user?.label || "账号"}</span>
+        </div>
         <span className={`hidden rounded-full border px-3 py-2 sm:inline-flex ${status?.opening_paused ? "border-[#854d0e] bg-[#241806] text-[#facc15]" : "border-[#14532d] bg-[#052e1a] text-[#22c55e]"}`}>
           {status?.opening_paused ? "开仓已暂停" : "允许开仓"}
         </span>
+        <button className="hidden h-10 rounded-xl border border-[#263246] bg-[#111827] px-3 text-[#94a3b8] hover:text-white md:inline-flex md:items-center" onClick={logout}>
+          退出
+        </button>
         <button className={button} onClick={refresh}>
           <RefreshCcw size={13} />
         </button>
@@ -705,6 +782,7 @@ function LeftRail({
   balance,
   busy,
   message,
+  canControl,
   postAction,
 }: {
   workspace: WorkspaceId;
@@ -716,6 +794,7 @@ function LeftRail({
   balance: Record<string, unknown> | null;
   busy: boolean;
   message: string;
+  canControl: boolean;
   postAction: (path: string, body: Record<string, unknown>) => Promise<void>;
 }) {
   const rawBalance = objectPayload(balance?.raw);
@@ -746,7 +825,7 @@ function LeftRail({
             <Metric label="报告" value={profile?.report_enabled ? "开启" : "关闭"} />
           </div>
         )}
-        <div className="mt-2 grid grid-cols-2 gap-1">
+        {canControl ? <div className="mt-2 grid grid-cols-2 gap-1">
           <button className={button} disabled={busy} onClick={() => postAction("/api/control/authorize", { operator_id: "console", symbols: [symbol] })}>
             授权开仓
           </button>
@@ -759,7 +838,7 @@ function LeftRail({
           <button className={button} disabled={busy} onClick={() => postAction("/api/control/disable-report", { operator_id: "console", symbols: [symbol] })}>
             关闭报告
           </button>
-        </div>
+        </div> : null}
         {message ? <div className="mt-2 rounded-xl border border-[#263246] bg-[#101a2d] p-2 text-[11px] text-[#cbd5e1]">{message}</div> : null}
       </Surface>
 
@@ -774,7 +853,7 @@ function LeftRail({
         </Surface>
       ) : null}
 
-      <Surface title={<><Power size={13} /> 执行控制</>}>
+      {canControl ? <Surface title={<><Power size={13} /> 执行控制</>}>
         <div className="grid grid-cols-1 gap-1">
           <button className={danger} disabled={busy} onClick={() => postAction("/api/control/close-position", { operator_id: "console", symbol })}>
             平仓 {shortSymbol(symbol)}
@@ -783,7 +862,7 @@ function LeftRail({
             紧急全平
           </button>
         </div>
-      </Surface>
+      </Surface> : null}
     </aside>
   );
 }
@@ -811,7 +890,8 @@ function WorkspaceBody({
   denseZone,
   riskSummary,
   readiness,
-  operationCode,
+  visibleSlots,
+  isAdmin,
   busy,
   postAction,
   decisions,
@@ -839,7 +919,8 @@ function WorkspaceBody({
   denseZone: DbRow<DenseZonePayload> | null;
   riskSummary: Record<string, unknown> | null;
   readiness: SystemReadiness | null;
-  operationCode: string;
+  visibleSlots: Array<"trend" | "follower" | "range">;
+  isAdmin: boolean;
   busy: boolean;
   postAction: (path: string, body: Record<string, unknown>) => Promise<void>;
   decisions: Array<DbRow>;
@@ -856,6 +937,7 @@ function WorkspaceBody({
         profile={selectedProfile}
         riskSummary={riskSummary}
         status={runtimeStatus}
+        isAdmin={isAdmin}
       />
     );
   }
@@ -897,8 +979,9 @@ function WorkspaceBody({
         positions={positions}
         orders={orders}
         accountSlots={accountSlots}
+        visibleSlots={visibleSlots}
         riskSummary={riskSummary}
-        operationCode={operationCode}
+        isAdmin={isAdmin}
         busy={busy}
         postAction={postAction}
       />
@@ -1118,6 +1201,7 @@ function StrategyWorkspace({
   profile,
   riskSummary,
   status,
+  isAdmin,
 }: {
   symbol: string;
   setSymbol: (value: string) => void;
@@ -1126,6 +1210,7 @@ function StrategyWorkspace({
   profile: StrategyProfile | undefined;
   riskSummary: Record<string, unknown> | null;
   status: StatusResponse | null;
+  isAdmin: boolean;
 }) {
   return (
     <section className="min-h-0 space-y-5 overflow-auto pr-1">
@@ -1158,7 +1243,7 @@ function StrategyWorkspace({
           </div>
         </Surface>
       </div>
-      <StrategyParameterEditor symbol={symbol} profile={profile} riskSummary={riskSummary} status={status} />
+      <StrategyParameterEditor symbol={symbol} profile={profile} riskSummary={riskSummary} status={status} isAdmin={isAdmin} />
       <BacktestPanel symbol={symbol} setSymbol={setSymbol} symbols={symbols} profile={profile} />
     </section>
   );
@@ -1272,17 +1357,20 @@ function StrategyParameterEditor({
   profile,
   riskSummary,
   status,
+  isAdmin,
 }: {
   symbol: string;
   profile?: StrategyProfile;
   riskSummary: Record<string, unknown> | null;
   status: StatusResponse | null;
+  isAdmin: boolean;
 }) {
   const [values, setValues] = useState<Record<string, string>>({});
   const [proposals, setProposals] = useState<Array<DbRow>>([]);
   const [submitting, setSubmitting] = useState("");
   const [message, setMessage] = useState("");
   const params = profile?.params || {};
+  const editableParams = isAdmin ? EDITABLE_STRATEGY_PARAMS : [];
 
   const loadProposals = useCallback(async () => {
     try {
@@ -1358,10 +1446,12 @@ function StrategyParameterEditor({
   return (
     <Surface title={<><ShieldCheck size={13} /> 策略参数修改</>}>
       <div className="mb-3 rounded-xl border border-[#854d0e] bg-[#241806] p-3 text-[11px] leading-relaxed text-[#facc15]">
-        修改不会直接写入实盘配置，只会创建待审批提案；审批通过后才热加载到策略运行参数。这是为了避免误操作把回测参数直接推到实盘。
+        {isAdmin
+          ? "修改不会直接写入实盘配置，只会创建待审批提案；审批通过后才热加载到策略运行参数。普通账户只能在交易执行页修改自己账户的杠杆上限。"
+          : "当前账号只有查看权限。策略参数由管理员维护；你只能在交易执行页修改自己账户的杠杆上限。"}
       </div>
-      <div className="grid grid-cols-1 gap-3 xl:grid-cols-2 2xl:grid-cols-4">
-        {EDITABLE_STRATEGY_PARAMS.map((item) => {
+      {editableParams.length ? <div className="grid grid-cols-1 gap-3 xl:grid-cols-2 2xl:grid-cols-4">
+        {editableParams.map((item) => {
           const current = item.scope === "global"
             ? riskSummary?.max_total_leverage ?? status?.risk?.max_total_leverage ?? 4
             : params[item.key];
@@ -1397,8 +1487,8 @@ function StrategyParameterEditor({
             </div>
           );
         })}
-      </div>
-      <div className="mt-4 overflow-hidden rounded-2xl border border-[#263246] bg-[#0b1220]">
+      </div> : null}
+      {isAdmin ? <div className="mt-4 overflow-hidden rounded-2xl border border-[#263246] bg-[#0b1220]">
         <div className="flex h-10 items-center justify-between border-b border-[#e6edf5] px-3 text-xs">
           <span className="font-semibold text-[#e5eefb]">待审批参数提案</span>
           <button className={button} onClick={() => void loadProposals()}>刷新提案</button>
@@ -1418,7 +1508,7 @@ function StrategyParameterEditor({
             <div className="px-3 py-6 text-center text-xs text-[#7b8798]">暂无待审批参数提案。</div>
           )}
         </div>
-      </div>
+      </div> : null}
       {message ? <div className="mt-3 rounded-xl border border-[#263246] bg-[#0b1220] p-3 text-xs text-[#94a3b8]">{message}</div> : null}
     </Surface>
   );
@@ -3221,7 +3311,8 @@ function ExecutionWorkspace({
   orders,
   accountSlots,
   riskSummary,
-  operationCode,
+  visibleSlots,
+  isAdmin,
   busy,
   postAction,
 }: {
@@ -3234,7 +3325,8 @@ function ExecutionWorkspace({
   orders: Array<DbRow>;
   accountSlots: ExecutionAccountSlot[];
   riskSummary: Record<string, unknown> | null;
-  operationCode: string;
+  visibleSlots: Array<"trend" | "follower" | "range">;
+  isAdmin: boolean;
   busy: boolean;
   postAction: (path: string, body: Record<string, unknown>) => Promise<void>;
 }) {
@@ -3247,8 +3339,10 @@ function ExecutionWorkspace({
   const followerEquity = Number(followerBalance?.total_usdt ?? followerBalance?.usdt_total ?? followerUsdt.total ?? 0);
   const maxNotional = totalEquity > 0 ? totalEquity * riskCap : 0;
   const channels = platform?.strategy_channels || [];
+  const visibleChannels = channels.filter((item) => visibleSlots.includes(item.account_slot));
   const trendChannel = channels.find((item) => item.channel === "trend");
   const followerChannel = channels.find((item) => item.channel === "follower");
+  const rangeChannel = channels.find((item) => item.channel === "range");
   return (
     <section className="min-h-0 space-y-4 overflow-auto sm:space-y-5 sm:pr-1">
       <Surface title={<><ShieldCheck size={13} /> 实盘安全链路</>}>
@@ -3273,7 +3367,7 @@ function ExecutionWorkspace({
       <div className="grid grid-cols-1 gap-5 2xl:grid-cols-[minmax(0,1fr)_430px]">
         <Surface title={<><ServerCog size={13} /> 策略运行通道</>}>
           <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-            <StrategyChannelCard
+            {visibleSlots.includes("trend") ? <StrategyChannelCard
               title="趋势策略运行"
               account={trendChannel?.account_label || "账号1：趋势策略 API"}
               status={trendChannel?.live_ready ? "实盘就绪" : trendChannel?.executable ? "可运行" : "阻断"}
@@ -3285,8 +3379,8 @@ function ExecutionWorkspace({
                 `账户 ${trendChannel?.account_configured ? "已配置" : "未配置"}`,
                 `单账户上限 ${num(riskCap, 1)}x`,
               ]}
-            />
-            <StrategyChannelCard
+            /> : null}
+            {visibleSlots.includes("follower") ? <StrategyChannelCard
               title="账号2跟随执行"
               account={followerChannel?.account_label || "账号2：趋势跟随 API"}
               status={followerChannel?.live_ready ? "跟随就绪" : followerChannel?.executable ? "等待主账户信号" : "未启用"}
@@ -3298,16 +3392,29 @@ function ExecutionWorkspace({
                 "AI 决策 复用账号1",
                 `路由 ${followerChannel?.gateway_binding === "active" ? "已备好" : "待配置"}`,
               ]}
-            />
+            /> : null}
+            {visibleSlots.includes("range") ? <StrategyChannelCard
+              title="震荡策略预留"
+              account={rangeChannel?.account_label || "账号3：震荡策略 API"}
+              status={rangeChannel?.status || "预留"}
+              body="震荡策略账户通道已保留，但当前没有生产级震荡策略信号。未来接入震荡策略后，仍会复用同一套账号登录、AI 裁剪和 Gateway 风控。"
+              enabled={Boolean(rangeChannel?.enabled)}
+              liveReady={Boolean(rangeChannel?.live_ready)}
+              details={[
+                `账户 ${rangeChannel?.account_configured ? "已配置" : "未配置"}`,
+                "当前禁止自动执行",
+                `单账户上限 ${num(accountSlots.find((item) => item.slot === "range")?.max_leverage ?? 4, 1)}x`,
+              ]}
+            /> : null}
           </div>
           <div className="mt-3 rounded-xl border border-[#854d0e] bg-[#241806] p-3 text-xs leading-5 text-[#facc15]">
             当前按你的要求采用“一次策略信号 + 一次 DeepSeek 决策 + 多账户独立裁剪”：账号1先执行，账号2跟随复制同一订单意图。每个 Gate 账户按自己的余额、杠杆上限和跟随比例单独计算仓位。
           </div>
         </Surface>
-        <RuntimeModePanel executionMode={executionMode} operationCode={operationCode} busy={busy} postAction={postAction} />
+        <RuntimeModePanel executionMode={executionMode} isAdmin={isAdmin} busy={busy} postAction={postAction} />
       </div>
 
-      <AccountSlotManager accountSlots={accountSlots} busy={busy} postAction={postAction} />
+      <AccountSlotManager accountSlots={accountSlots} visibleSlots={visibleSlots} isAdmin={isAdmin} busy={busy} postAction={postAction} />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 2xl:grid-cols-4">
         <Surface title={<><Wallet size={13} /> 账户与风控</>}>
@@ -3320,7 +3427,7 @@ function ExecutionWorkspace({
             <Metric label="最低AI置信度" value={num(riskSummary?.min_confidence_to_trade ?? status?.risk?.min_confidence_to_trade, 2)} />
           </div>
         </Surface>
-        <Surface title={<><Power size={13} /> 人工危险操作</>}>
+        {isAdmin ? <Surface title={<><Power size={13} /> 人工危险操作</>}>
           <div className="grid gap-2">
             <button className={danger} disabled={busy} onClick={() => postAction("/api/control/close-position", { operator_id: "console", symbol })}>
               平仓 {shortSymbol(symbol)}
@@ -3330,9 +3437,14 @@ function ExecutionWorkspace({
             </button>
             <div className="text-[11px] leading-5 text-[#94a3b8]">这里不提供手动开仓入口。真实开仓必须由策略信号、AI、本地风控和交易网关串联通过。</div>
           </div>
-        </Surface>
+        </Surface> : <Surface title={<><Power size={13} /> 交易权限</>}>
+          <div className="rounded-xl border border-[#263246] bg-[#101a2d] p-3 text-xs leading-5 text-[#94a3b8]">
+            当前账号只能查看交易链路和修改自己账户的杠杆上限，不能切换实盘/模拟、不能手动平仓、不能修改策略参数。
+          </div>
+        </Surface>}
         <Surface title={<><ServerCog size={13} /> 网关边界</>}>
           <div className="grid gap-2 text-xs text-[#94a3b8]">
+            <BoundaryLine label="可见通道" value={`${visibleChannels.length}/${channels.length || visibleSlots.length}`} />
             <BoundaryLine label="业务层" value="不写 dry_run 分支" />
             <BoundaryLine label="模拟运行" value="本地模拟网关，本地记账" />
             <BoundaryLine label="真实运行" value="Gate.io 真实网关，固定 dry_run=false" />
@@ -3420,18 +3532,15 @@ function StrategyChannelCard({
 
 function RuntimeModePanel({
   executionMode,
-  operationCode,
+  isAdmin,
   busy,
   postAction,
 }: {
   executionMode: string;
-  operationCode: string;
+  isAdmin: boolean;
   busy: boolean;
   postAction: (path: string, body: Record<string, unknown>) => Promise<void>;
 }) {
-  const [pin, setPin] = useState("");
-  const operationCodeReady = operationCode.trim().length > 0;
-  const pinReady = pin.trim().length >= 4;
   return (
     <Surface title={<><Power size={13} /> 模拟 / 实盘模式</>}>
       <div className="grid grid-cols-2 gap-2">
@@ -3444,28 +3553,21 @@ function RuntimeModePanel({
         </button>
         <button
           className={`${button} justify-center ${executionMode === "live" ? "border-[#facc15] text-[#facc15]" : ""}`}
-          disabled={busy || !operationCodeReady || !pinReady}
-          onClick={() => postAction("/api/control/runtime-mode", { operator_id: "console", dry_run: false, trade_pin: pin })}
+          disabled={busy || !isAdmin}
+          onClick={() => postAction("/api/control/runtime-mode", { operator_id: "console", dry_run: false })}
         >
           开启实盘
         </button>
       </div>
-      <input
-        className={`${input} ${mono} mt-3 w-full`}
-        type="password"
-        value={pin}
-        placeholder="实盘 Trade PIN"
-        onChange={(event) => setPin(event.target.value)}
-      />
       <div className="mt-2 text-[11px] leading-5 text-[#94a3b8]">
-        开启实盘必须同时满足：顶部操作验证码已填写、Trade PIN 正确、Gate 趋势账号已配置、后端风控检查通过。
+        实盘/模拟切换不再使用 Trade PIN 或操作验证码。只有管理员账号可以切换；普通账号只能查看和调整自己账户的杠杆上限。
       </div>
       <div className="mt-2 grid grid-cols-2 gap-2 text-[11px]">
-        <div className={`rounded-lg border px-2 py-1.5 ${operationCodeReady ? "border-[#14532d] bg-[#052e1a] text-[#86efac]" : "border-[#854d0e] bg-[#241806] text-[#facc15]"}`}>
-          操作验证码：{operationCodeReady ? "已填写" : "未填写"}
+        <div className={`rounded-lg border px-2 py-1.5 ${isAdmin ? "border-[#14532d] bg-[#052e1a] text-[#86efac]" : "border-[#854d0e] bg-[#241806] text-[#facc15]"}`}>
+          当前权限：{isAdmin ? "管理员" : "只读账户"}
         </div>
-        <div className={`rounded-lg border px-2 py-1.5 ${pinReady ? "border-[#14532d] bg-[#052e1a] text-[#86efac]" : "border-[#854d0e] bg-[#241806] text-[#facc15]"}`}>
-          Trade PIN：{pinReady ? "已填写" : "未填写"}
+        <div className={`rounded-lg border px-2 py-1.5 ${executionMode === "live" ? "border-[#854d0e] bg-[#241806] text-[#facc15]" : "border-[#14532d] bg-[#052e1a] text-[#86efac]"}`}>
+          当前模式：{executionMode === "live" ? "实盘" : "模拟"}
         </div>
       </div>
     </Surface>
@@ -3474,21 +3576,27 @@ function RuntimeModePanel({
 
 function AccountSlotManager({
   accountSlots,
+  visibleSlots,
+  isAdmin,
   busy,
   postAction,
 }: {
   accountSlots: ExecutionAccountSlot[];
+  visibleSlots: Array<"trend" | "follower" | "range">;
+  isAdmin: boolean;
   busy: boolean;
   postAction: (path: string, body: Record<string, unknown>) => Promise<void>;
 }) {
   return (
-    <Surface title={<><KeyRound size={13} /> 双账户 API 槽位</>}>
-      <div className="grid grid-cols-1 gap-3 2xl:grid-cols-2">
-        {(["trend", "follower"] as const).map((slot) => (
+    <Surface title={<><KeyRound size={13} /> 账户 API 与杠杆槽位</>}>
+      <div className="grid grid-cols-1 gap-3 2xl:grid-cols-3">
+        {visibleSlots.map((slot) => (
           <AccountSlotCard
             key={slot}
             slot={slot}
             item={accountSlots.find((account) => account.slot === slot)}
+            canEditSecret={isAdmin}
+            canEditLeverage
             busy={busy}
             postAction={postAction}
           />
@@ -3501,17 +3609,25 @@ function AccountSlotManager({
 function AccountSlotCard({
   slot,
   item,
+  canEditSecret,
+  canEditLeverage,
   busy,
   postAction,
 }: {
-  slot: "trend" | "follower";
+  slot: "trend" | "follower" | "range";
   item?: ExecutionAccountSlot;
+  canEditSecret: boolean;
+  canEditLeverage: boolean;
   busy: boolean;
   postAction: (path: string, body: Record<string, unknown>) => Promise<void>;
 }) {
   const [apiKey, setApiKey] = useState("");
   const [apiSecret, setApiSecret] = useState("");
-  const label = slot === "trend" ? "账号1：趋势策略" : "账号2：趋势跟随";
+  const [maxLeverage, setMaxLeverage] = useState(String(item?.max_leverage ?? 4));
+  const label = accountSlotUiLabel(slot);
+  useEffect(() => {
+    setMaxLeverage(String(item?.max_leverage ?? 4));
+  }, [item?.max_leverage, slot]);
   const submit = async () => {
     await postAction("/api/execution/accounts/secret", {
       operator_id: "console",
@@ -3523,12 +3639,21 @@ function AccountSlotCard({
     setApiKey("");
     setApiSecret("");
   };
+  const updateLeverage = async () => {
+    const value = Number(maxLeverage);
+    if (!Number.isFinite(value) || value <= 0) return;
+    await postAction("/api/execution/accounts/leverage", {
+      operator_id: "console",
+      account_slot: slot,
+      max_leverage: value,
+    });
+  };
   return (
     <div className="rounded-2xl border border-[#263246] bg-[#101a2d] p-4">
       <div className="flex items-center justify-between gap-3">
         <div>
           <div className="font-semibold text-[#e5eefb]">{item?.label || label}</div>
-          <div className="mt-1 text-[11px] text-[#7b8798]">Gate.io USDT 永续 / {slot === "trend" ? "趋势策略" : "趋势跟随"}</div>
+          <div className="mt-1 text-[11px] text-[#7b8798]">Gate.io USDT 永续 / {accountSlotStrategyLabel(slot)}</div>
         </div>
         <span className={`rounded-full px-3 py-1 text-[11px] ${item?.configured ? "bg-[#052e1a] text-[#22c55e]" : "bg-[#241806] text-[#facc15]"}`}>
           {item?.configured ? "已配置" : "未配置"}
@@ -3539,23 +3664,51 @@ function AccountSlotCard({
         <Metric label="Key尾号" value={item?.key_tail || "-"} />
         <Metric label="实盘路由" value={item?.gateway_binding === "active" ? "已绑定" : "待绑定"} tone={item?.gateway_binding === "active" ? "good" : "warn"} />
       </div>
+      <div className="mt-3 grid grid-cols-[minmax(0,1fr)_96px] gap-2">
+        <input
+          className={`${input} ${mono}`}
+          type="number"
+          min={0.1}
+          max={50}
+          step={0.1}
+          value={maxLeverage}
+          onChange={(event) => setMaxLeverage(event.target.value)}
+          disabled={!canEditLeverage}
+          placeholder="杠杆上限"
+        />
+        <button className={button} disabled={busy || !canEditLeverage || Number(maxLeverage) <= 0} onClick={updateLeverage}>
+          更新杠杆
+        </button>
+      </div>
       {item?.credential_source === "legacy_default_gateio" ? (
         <div className="mt-2 rounded-xl border border-[#854d0e] bg-[#241806] px-3 py-2 text-[11px] leading-5 text-[#facc15]">
           正在兼容使用旧版 GATEIO_API_KEY 作为趋势账号。建议后续迁移到 GATEIO_TREND_API_KEY，便于双账户隔离。
         </div>
       ) : null}
-      <div className="mt-3 grid grid-cols-1 gap-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_96px]">
+      {canEditSecret ? <div className="mt-3 grid grid-cols-1 gap-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_96px]">
         <input className={`${input} ${mono}`} type="password" placeholder="API Key" value={apiKey} onChange={(event) => setApiKey(event.target.value)} />
         <input className={`${input} ${mono}`} type="password" placeholder="API Secret" value={apiSecret} onChange={(event) => setApiSecret(event.target.value)} />
         <button className={button} disabled={busy || apiKey.length < 8 || apiSecret.length < 8} onClick={submit}>
           更新
         </button>
-      </div>
+      </div> : null}
       <div className="mt-2 text-[11px] text-[#94a3b8]">
-        明文只写入运行密钥文件；SQLite 和审计日志只保存指纹与尾号。
+        {canEditSecret ? "明文只写入运行密钥文件；SQLite 和审计日志只保存指纹与尾号。" : "当前账号不能查看或修改 API 密钥，只能修改本账户杠杆上限。"}
       </div>
     </div>
   );
+}
+
+function accountSlotUiLabel(slot: "trend" | "follower" | "range") {
+  if (slot === "trend") return "账号1：趋势策略";
+  if (slot === "follower") return "账号2：趋势跟随";
+  return "账号3：震荡策略预留";
+}
+
+function accountSlotStrategyLabel(slot: "trend" | "follower" | "range") {
+  if (slot === "trend") return "趋势策略";
+  if (slot === "follower") return "趋势跟随";
+  return "震荡策略预留";
 }
 
 function ExecutionStep({ title, body, done = false, warn = false }: { title: string; body: string; done?: boolean; warn?: boolean }) {

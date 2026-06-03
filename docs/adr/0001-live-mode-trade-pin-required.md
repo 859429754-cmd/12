@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted
+Superseded by ADR-0005 as of 2026-06-04.
+
+This ADR is retained as historical context. The current production rule is console account login with RBAC and audited operator identity. See `docs/adr/0005-console-account-rbac-replaces-trade-pin.md`.
 
 ## Context
 
@@ -17,12 +19,12 @@ This conflicts with the project's safety hierarchy:
 
 ## Decision
 
-Keep backend `TRADE_PIN` validation mandatory for any mock-to-live transition.
+Historical decision: keep backend `TRADE_PIN` validation mandatory for any mock-to-live transition.
 
-The frontend may improve UX, but it must not remove the live-mode secret challenge unless another stronger control is already in place, such as authenticated console sessions plus role-based approval and audited operator identity.
+Current decision: ADR-0005 replaces this with authenticated console sessions plus role-based approval and audited operator identity.
 
 ## Consequences
 
-- Mock-to-live remains a deliberate, auditable operator action.
-- Live switching fails closed when `TRADE_PIN` is missing.
-- Removing the modal alone is not an acceptable optimization because it would either break live switching or pressure the backend to remove the real safety control.
+- Mock-to-live must remain a deliberate, auditable operator action.
+- Missing or unauthenticated console sessions must fail closed.
+- Removing Trade PIN is acceptable only because ADR-0005 introduced a stronger authenticated RBAC control.

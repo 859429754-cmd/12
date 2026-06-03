@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
+import json
 import os
 import re
 import secrets
@@ -91,7 +93,17 @@ class TradeModeRequest(BaseModel):
 class RuntimeModeRequest(BaseModel):
     operator_id: str = Field(default="console")
     dry_run: bool
-    trade_pin: str | None = None
+
+
+class ConsoleLoginRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=256)
+
+
+class AccountLeverageRequest(BaseModel):
+    operator_id: str = Field(default="console")
+    account_slot: Literal["trend", "follower", "range"]
+    max_leverage: float = Field(gt=0, le=MAX_CONFIGURABLE_LEVERAGE)
 
 
 class AccountSecretUpdateRequest(BaseModel):
@@ -228,6 +240,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
     app.state.ctx = ConsoleContext(config_path)
     app.state.backtest_jobs = {}
     app.state.news_refresh_lock = asyncio.Lock()
+    app.state.console_sessions = {}
 
     app.add_middleware(
         CORSMiddleware,
@@ -238,27 +251,26 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
     )
 
     @app.middleware("http")
-    async def console_basic_auth(request: Request, call_next):
-        if not _console_basic_auth_enabled() or request.url.path == "/api/health":
+    async def console_account_auth_guard(request: Request, call_next):
+        if not _console_auth_enabled() or _console_auth_public_path(request):
             return await call_next(request)
-        if _valid_console_basic_auth(request.headers.get("authorization")):
-            return await call_next(request)
-        return Response(
-            "Authentication required",
-            status_code=401,
-            headers={"WWW-Authenticate": 'Basic realm="AI Quant Console"'},
-        )
-
-    @app.middleware("http")
-    async def console_operation_code_guard(request: Request, call_next):
-        if _operation_code_required_for_request(request):
-            expected_code = _console_operation_code()
-            provided_code = request.headers.get("x-operation-code", "").strip()
-            if not expected_code or not secrets.compare_digest(provided_code, expected_code):
-                return JSONResponse(
-                    {"detail": "operation_code_required", "message": "Operation code is required for mutating console requests."},
-                    status_code=403,
-                )
+        if not _console_auth_configured():
+            return JSONResponse(
+                {"detail": "console_auth_not_configured", "message": "控制台账号未配置，已拒绝访问。"},
+                status_code=503,
+            )
+        user = _console_user_from_request(request)
+        if not user:
+            return JSONResponse(
+                {"detail": "auth_required", "message": "请先登录 AI 量化控制台账号。"},
+                status_code=401,
+            )
+        if not _console_user_can_access_request(user, request):
+            return JSONResponse(
+                {"detail": "permission_denied", "message": "当前账号没有执行该操作的权限。"},
+                status_code=403,
+            )
+        request.state.console_user = user
         return await call_next(request)
 
     assets_path = Path("console/dist/assets")
@@ -268,6 +280,43 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
     @app.get("/api/health")
     def health() -> dict[str, Any]:
         return {"ok": True, "service": "ai-quant-console"}
+
+    @app.get("/api/auth/session")
+    def auth_session(request: Request) -> dict[str, Any]:
+        user = _console_user_from_request(request)
+        if not _console_auth_enabled():
+            user = _dev_console_user()
+        return _console_session_payload(user, authenticated=bool(user))
+
+    @app.post("/api/auth/login")
+    def auth_login(body: ConsoleLoginRequest, request: Request) -> Response:
+        if _console_auth_enabled() and not _console_auth_configured():
+            raise HTTPException(status_code=503, detail="console_auth_not_configured")
+        user = _authenticate_console_user(body.username, body.password)
+        if not user:
+            raise HTTPException(status_code=401, detail="用户名或密码错误。")
+        token = secrets.token_urlsafe(32)
+        expires_at = datetime.now(UTC) + timedelta(hours=_console_session_hours())
+        request.app.state.console_sessions[token] = {"user": user, "expires_at": expires_at}
+        response = JSONResponse(_console_session_payload(user, authenticated=True))
+        response.set_cookie(
+            _console_session_cookie_name(),
+            token,
+            max_age=int(_console_session_hours() * 3600),
+            httponly=True,
+            samesite="lax",
+            secure=_console_cookie_secure(),
+        )
+        return response
+
+    @app.post("/api/auth/logout")
+    def auth_logout(request: Request) -> Response:
+        token = request.cookies.get(_console_session_cookie_name(), "")
+        if token:
+            request.app.state.console_sessions.pop(token, None)
+        response = JSONResponse({"ok": True, "authenticated": False, "message": "已退出登录。"})
+        response.delete_cookie(_console_session_cookie_name())
+        return response
 
     @app.get("/api/status")
     def status() -> dict[str, Any]:
@@ -869,7 +918,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         ctx.reload()
         return {
             "items": _execution_account_slots(ctx),
-            "note": "Account slots store masked API-key fingerprints only. Live routing still requires Trade PIN, authorization, and risk checks.",
+            "note": "Account slots store masked API-key fingerprints only. Live routing requires admin login, authorization, and risk checks.",
         }
 
     @app.get("/api/strategy/channels")
@@ -885,7 +934,12 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         if ctx.store is None:
             raise HTTPException(status_code=500, detail="store_closed")
         account_slot = _canonical_account_slot(body.account_slot)
-        service = SecretService.GATEIO_TREND if account_slot == "trend" else SecretService.GATEIO_FOLLOWER
+        service_by_slot = {
+            "trend": SecretService.GATEIO_TREND,
+            "follower": SecretService.GATEIO_FOLLOWER,
+            "range": SecretService.GATEIO_RANGE,
+        }
+        service = service_by_slot[account_slot]
         env_key, env_secret = SecretUpdateManager.KEY_MAP[service]
         manager = SecretUpdateManager(
             ctx.store,
@@ -911,6 +965,46 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
             "key_tail": record.key_tail,
             "secret_tail": record.secret_tail,
             "message": f"{_account_slot_label(account_slot)} API 已更新，明文只写入运行密钥文件，审计记录已脱敏。",
+        }
+
+    @app.post("/api/execution/accounts/leverage")
+    async def update_execution_account_leverage(body: AccountLeverageRequest, request: Request) -> dict[str, Any]:
+        ctx = _ctx(app)
+        ctx.reload()
+        account_slot = _canonical_account_slot(body.account_slot)
+        user = _current_console_user(request)
+        if not _console_user_can_edit_leverage(user, account_slot):
+            raise HTTPException(status_code=403, detail="当前账号只能修改自己账户的杠杆上限。")
+        config = ctx.control.read_config()
+        if account_slot == "trend":
+            ctx.control.set_config_value(config, "risk.max_total_leverage", body.max_leverage)
+        else:
+            followers = list(config.get("followers") or [])
+            matched = False
+            for follower in followers:
+                if str(follower.get("account_slot", "")).strip() == account_slot:
+                    follower["max_leverage"] = body.max_leverage
+                    matched = True
+                    break
+            if not matched:
+                followers.append(
+                    {
+                        "enabled": False,
+                        "account_slot": account_slot,
+                        "label": _account_slot_label(account_slot),
+                        "follow_ratio": 1.0,
+                        "max_leverage": body.max_leverage,
+                        "mirror_entries": account_slot == "follower",
+                        "mirror_exits": account_slot == "follower",
+                    }
+                )
+            config["followers"] = followers
+        ctx.control.write_config(config)
+        return {
+            "ok": True,
+            "account_slot": account_slot,
+            "max_leverage": body.max_leverage,
+            "message": f"{_account_slot_label(account_slot)} 杠杆上限已更新为 {body.max_leverage:g}x。",
         }
 
     @app.get("/api/positions")
@@ -1158,9 +1252,12 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         return {"ok": True, "message": ctx.control.reject_proposal(proposal_id, body.operator_id)}
 
     @app.post("/api/proposals/parameter")
-    def create_parameter_proposal(body: ParameterProposalRequest) -> dict[str, Any]:
+    def create_parameter_proposal(body: ParameterProposalRequest, request: Request) -> dict[str, Any]:
         ctx = _ctx(app)
         ctx.reload()
+        user = _current_console_user(request)
+        if not _console_user_can_create_parameter_proposal(user, body):
+            raise HTTPException(status_code=403, detail="当前账号只能提交杠杆相关参数提案。")
         symbols = _validate_symbols(body.symbols, ctx.configured_symbols())
         config = ctx.control.read_config()
         changes: dict[str, dict[str, Any]] = {}
@@ -1235,11 +1332,6 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         ctx.reload()
         target_mode = "mock" if body.dry_run else "live"
         if target_mode == "live":
-            expected_pin = os.getenv("TRADE_PIN", "").strip()
-            if not expected_pin:
-                raise HTTPException(status_code=403, detail="后端未配置 TRADE_PIN，禁止从控制台切换真实运行。")
-            if str(body.trade_pin or "").strip() != expected_pin:
-                raise HTTPException(status_code=403, detail="Trade PIN 校验失败，禁止切换真实运行。")
             if not _account_slot_configured("trend"):
                 raise HTTPException(status_code=403, detail="趋势策略账号未配置 Gate API Key/Secret，禁止切换真实运行。")
 
@@ -1250,7 +1342,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
             ctx.control.set_config_value(config, "risk.small_position_mode", False)
         ctx.control.write_config(config)
         mode_text = "模拟运行" if target_mode == "mock" else "真实运行"
-        warning = "" if target_mode == "mock" else "；真实订单仍必须满足逐标的授权、允许开仓、AI否决和配置的杠杆硬风控"
+        warning = "" if target_mode == "mock" else "；真实订单仍必须满足账号登录权限、逐标的授权、允许开仓、AI否决和配置的杠杆硬风控"
         return {"ok": True, "message": f"已切换为{mode_text}{warning}"}
 
     @app.post("/api/control/pause")
@@ -1403,8 +1495,10 @@ def _agent_gateway_status() -> dict[str, Any]:
 def _canonical_account_slot(slot: str) -> str:
     if slot in {"default", "trend"}:
         return "trend"
-    if slot in {"follower", "range"}:
+    if slot == "follower":
         return "follower"
+    if slot == "range":
+        return "range"
     return slot
 
 
@@ -1413,6 +1507,7 @@ def _account_slot_configured(slot: str) -> bool:
     env_map = {
         "trend": ("GATEIO_TREND_API_KEY", "GATEIO_TREND_API_SECRET"),
         "follower": ("GATEIO_FOLLOWER_API_KEY", "GATEIO_FOLLOWER_API_SECRET"),
+        "range": ("GATEIO_RANGE_API_KEY", "GATEIO_RANGE_API_SECRET"),
         "default": ("GATEIO_API_KEY", "GATEIO_API_SECRET"),
     }
     pair = env_map.get(slot)
@@ -1426,9 +1521,7 @@ def _account_slot_configured(slot: str) -> bool:
         fallback_key, fallback_secret = env_map["default"]
         return bool(os.getenv(fallback_key, "").strip()) and bool(os.getenv(fallback_secret, "").strip())
     if slot == "follower":
-        legacy_key = os.getenv("GATEIO_RANGE_API_KEY", "").strip()
-        legacy_secret = os.getenv("GATEIO_RANGE_API_SECRET", "").strip()
-        return bool(legacy_key and legacy_secret)
+        return False
     return False
 
 
@@ -1452,6 +1545,7 @@ def _strategy_channels(ctx: ConsoleContext) -> list[dict[str, Any]]:
     trend_authorized = [profile for profile in trend_enabled if profile.get("opening_authorized")]
     trend_account = accounts.get("trend", {})
     follower_account = accounts.get("follower", {})
+    range_account = accounts.get("range", {})
     active_followers = [follower for follower in ctx.config.followers if follower.enabled]
     follower_ready = bool(
         trend_enabled
@@ -1508,10 +1602,37 @@ def _strategy_channels(ctx: ConsoleContext) -> list[dict[str, Any]]:
                 "账号2失败只写入审计，不回滚账号1订单。",
             ],
         },
+        {
+            "channel": "range",
+            "label": "震荡策略账户",
+            "strategy_type": "range_reserved",
+            "account_slot": "range",
+            "account_label": range_account.get("label", _account_slot_label("range")),
+            "enabled": False,
+            "executable": False,
+            "status": "reserved",
+            "mode": execution_mode_from_config(ctx.config),
+            "opening_paused": state.opening_paused,
+            "authorized_symbols": [],
+            "configured_symbols": symbols,
+            "account_configured": bool(range_account.get("configured")),
+            "gateway_binding": range_account.get("gateway_binding", "reserved_until_range_strategy_ready"),
+            "live_ready": False,
+            "ai_sizing_tiers": _ai_sizing_tiers(),
+            "notes": [
+                "震荡策略账户已恢复为独立预留通道。",
+                "当前没有生产级震荡策略实现，不能实盘执行。",
+                "后续接入震荡策略后必须单独完成回测、风控和小仓验收。",
+            ],
+        },
     ]
 
 
 def _execution_account_slots(ctx: ConsoleContext) -> list[dict[str, Any]]:
+    follower_leverage = {
+        follower.account_slot: follower.max_leverage
+        for follower in ctx.config.followers
+    }
     slots = [
         {
             "slot": "trend",
@@ -1529,6 +1650,14 @@ def _execution_account_slots(ctx: ConsoleContext) -> list[dict[str, Any]]:
             "env_key": "GATEIO_FOLLOWER_API_KEY",
             "env_secret": "GATEIO_FOLLOWER_API_SECRET",
         },
+        {
+            "slot": "range",
+            "label": _account_slot_label("range"),
+            "strategy_type": "range_reserved",
+            "service": SecretService.GATEIO_RANGE,
+            "env_key": "GATEIO_RANGE_API_KEY",
+            "env_secret": "GATEIO_RANGE_API_SECRET",
+        },
     ]
     output: list[dict[str, Any]] = []
     for slot in slots:
@@ -1537,19 +1666,13 @@ def _execution_account_slots(ctx: ConsoleContext) -> list[dict[str, Any]]:
         payload = latest[0]["payload"] if latest else {}
         has_env = bool(os.getenv(slot["env_key"], "").strip()) and bool(os.getenv(slot["env_secret"], "").strip())
         uses_legacy_default = False
-        uses_legacy_range = False
         if slot["slot"] == "trend" and not has_env:
             uses_legacy_default = _account_slot_configured("default")
             has_env = uses_legacy_default
-        if slot["slot"] == "follower" and not has_env:
-            uses_legacy_range = bool(os.getenv("GATEIO_RANGE_API_KEY", "").strip()) and bool(os.getenv("GATEIO_RANGE_API_SECRET", "").strip())
-            has_env = uses_legacy_range
         configured = bool(latest or has_env)
         key_tail_value = os.getenv(slot["env_key"], "")
         if uses_legacy_default:
             key_tail_value = os.getenv("GATEIO_API_KEY", "")
-        if uses_legacy_range:
-            key_tail_value = os.getenv("GATEIO_RANGE_API_KEY", "")
         output.append(
             {
                 "slot": slot["slot"],
@@ -1560,12 +1683,13 @@ def _execution_account_slots(ctx: ConsoleContext) -> list[dict[str, Any]]:
                 "version": payload.get("version", 0),
                 "key_tail": payload.get("key_tail", "******" + key_tail_value[-6:] if has_env else "-"),
                 "secret_tail": payload.get("secret_tail", "-"),
+                "max_leverage": ctx.config.risk.max_total_leverage
+                if slot["slot"] == "trend"
+                else follower_leverage.get(slot["slot"], 4.0),
                 "gateway_binding": "active" if configured else "missing_credentials",
-                "live_routing": "ready_after_trade_pin_and_risk_checks" if configured else "blocked_missing_credentials",
+                "live_routing": "ready_after_login_and_risk_checks" if configured else "blocked_missing_credentials",
                 "credential_source": "legacy_default_gateio"
                 if uses_legacy_default
-                else "legacy_range_gateio"
-                if uses_legacy_range
                 else slot["slot"],
             }
         )
@@ -1578,6 +1702,8 @@ def _account_slot_label(slot: str) -> str:
         return "账号1：趋势策略账户"
     if slot == "follower":
         return "账号2：趋势跟随账户"
+    if slot == "range":
+        return "震荡策略账户"
     return slot
 
 
@@ -2213,45 +2339,269 @@ def _console_cors_origins() -> list[str]:
     ]
 
 
-def _console_basic_auth_enabled() -> bool:
-    return bool(os.getenv("CONSOLE_BASIC_USER", "").strip() and os.getenv("CONSOLE_BASIC_PASSWORD", "").strip())
+def _console_session_cookie_name() -> str:
+    return os.getenv("CONSOLE_SESSION_COOKIE", "aiq_session").strip() or "aiq_session"
 
 
-def _valid_console_basic_auth(authorization: str | None) -> bool:
-    if not authorization:
+def _console_session_hours() -> float:
+    try:
+        return max(float(os.getenv("CONSOLE_SESSION_HOURS", "12")), 1.0)
+    except ValueError:
+        return 12.0
+
+
+def _console_cookie_secure() -> bool:
+    return os.getenv("CONSOLE_COOKIE_SECURE", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _console_auth_enabled() -> bool:
+    if os.getenv("CONSOLE_AUTH_DISABLED", "").strip().lower() in {"1", "true", "yes", "on"}:
         return False
+    return True
+
+
+def _console_auth_configured() -> bool:
+    return bool(_console_users())
+
+
+def _console_auth_public_path(request: Request) -> bool:
+    path = request.url.path
+    if not path.startswith("/api/"):
+        return True
+    return path in {"/api/health", "/api/auth/session", "/api/auth/login", "/api/auth/logout"}
+
+
+def _console_users() -> dict[str, dict[str, Any]]:
+    users: dict[str, dict[str, Any]] = {}
+    raw_json = os.getenv("CONSOLE_USERS_JSON", "").strip()
+    if raw_json:
+        try:
+            loaded = json.loads(raw_json)
+        except json.JSONDecodeError:
+            loaded = []
+        if isinstance(loaded, dict):
+            loaded = loaded.get("users", [])
+        if isinstance(loaded, list):
+            for item in loaded:
+                if isinstance(item, dict):
+                    _add_console_user(users, item)
+
+    env_specs = [
+        ("admin", "CONSOLE_ADMIN_USER", "CONSOLE_ADMIN_PASSWORD", "CONSOLE_ADMIN_PASSWORD_SHA256", None, "管理员"),
+        ("account1", "CONSOLE_ACCOUNT1_USER", "CONSOLE_ACCOUNT1_PASSWORD", "CONSOLE_ACCOUNT1_PASSWORD_SHA256", "trend", "账号1"),
+        ("account2", "CONSOLE_ACCOUNT2_USER", "CONSOLE_ACCOUNT2_PASSWORD", "CONSOLE_ACCOUNT2_PASSWORD_SHA256", "follower", "账号2"),
+        ("range", "CONSOLE_RANGE_USER", "CONSOLE_RANGE_PASSWORD", "CONSOLE_RANGE_PASSWORD_SHA256", "range", "震荡账户"),
+    ]
+    for role, user_env, password_env, hash_env, account_slot, label in env_specs:
+        password = os.getenv(password_env, "").strip()
+        password_hash = os.getenv(hash_env, "").strip()
+        if not password and not password_hash:
+            continue
+        username = os.getenv(user_env, "").strip() or role
+        _add_console_user(
+            users,
+            {
+                "username": username,
+                "role": role,
+                "label": label,
+                "account_slot": account_slot,
+                "password": password,
+                "password_sha256": password_hash,
+            },
+        )
+
+    legacy_user = os.getenv("CONSOLE_BASIC_USER", "").strip()
+    legacy_password = os.getenv("CONSOLE_BASIC_PASSWORD", "").strip()
+    if legacy_user and legacy_password and legacy_user not in users:
+        _add_console_user(
+            users,
+            {
+                "username": legacy_user,
+                "role": "admin",
+                "label": "管理员",
+                "account_slot": None,
+                "password": legacy_password,
+            },
+        )
+    return users
+
+
+def _add_console_user(users: dict[str, dict[str, Any]], item: dict[str, Any]) -> None:
+    username = str(item.get("username") or "").strip()
+    if not username:
+        return
+    role = _normalize_console_role(str(item.get("role") or "account1"))
+    account_slot = item.get("account_slot")
+    if account_slot is None:
+        account_slot = {"account1": "trend", "account2": "follower", "range": "range"}.get(role)
+    users[username] = {
+        "username": username,
+        "role": role,
+        "label": str(item.get("label") or _console_role_label(role)),
+        "account_slot": _canonical_account_slot(str(account_slot)) if account_slot else None,
+        "password": str(item.get("password") or ""),
+        "password_sha256": str(item.get("password_sha256") or item.get("password_hash") or ""),
+    }
+
+
+def _normalize_console_role(role: str) -> str:
+    normalized = role.strip().lower()
+    aliases = {
+        "administrator": "admin",
+        "trend": "account1",
+        "account_1": "account1",
+        "follower": "account2",
+        "account_2": "account2",
+        "range_strategy": "range",
+    }
+    normalized = aliases.get(normalized, normalized)
+    if normalized not in {"admin", "account1", "account2", "range"}:
+        return "account1"
+    return normalized
+
+
+def _console_role_label(role: str) -> str:
+    return {
+        "admin": "管理员",
+        "account1": "账号1",
+        "account2": "账号2",
+        "range": "震荡账户",
+    }.get(role, role)
+
+
+def _console_user_from_request(request: Request) -> dict[str, Any] | None:
+    state_user = getattr(request.state, "console_user", None)
+    if isinstance(state_user, dict):
+        return state_user
+    token = request.cookies.get(_console_session_cookie_name(), "")
+    if token:
+        session = getattr(request.app.state, "console_sessions", {}).get(token)
+        if isinstance(session, dict):
+            expires_at = session.get("expires_at")
+            if isinstance(expires_at, datetime) and expires_at > datetime.now(UTC):
+                user = session.get("user")
+                if isinstance(user, dict):
+                    return user
+            request.app.state.console_sessions.pop(token, None)
+    return _console_user_from_basic_auth(request.headers.get("authorization"))
+
+
+def _console_user_from_basic_auth(authorization: str | None) -> dict[str, Any] | None:
+    if not authorization:
+        return None
     prefix = "Basic "
     if not authorization.startswith(prefix):
-        return False
+        return None
     try:
         decoded = base64.b64decode(authorization[len(prefix) :], validate=True).decode("utf-8")
     except (ValueError, UnicodeDecodeError):
-        return False
+        return None
     username, separator, password = decoded.partition(":")
     if separator != ":":
-        return False
-    expected_user = os.getenv("CONSOLE_BASIC_USER", "").strip()
-    expected_password = os.getenv("CONSOLE_BASIC_PASSWORD", "").strip()
-    return secrets.compare_digest(username, expected_user) and secrets.compare_digest(password, expected_password)
+        return None
+    return _authenticate_console_user(username, password)
 
 
-def _console_operation_code() -> str:
-    return os.getenv("CONSOLE_OPERATION_CODE", "yx").strip()
+def _authenticate_console_user(username: str, password: str) -> dict[str, Any] | None:
+    user = _console_users().get(username.strip())
+    if not user:
+        return None
+    if _console_password_matches(user, password):
+        return {key: value for key, value in user.items() if key not in {"password", "password_sha256"}}
+    return None
 
 
-def _console_operation_code_enabled() -> bool:
-    flag = os.getenv("CONSOLE_REQUIRE_OPERATION_CODE", "").strip().lower()
-    return flag in {"1", "true", "yes", "on"} or bool(os.getenv("CONSOLE_OPERATION_CODE", "").strip())
+def _console_password_matches(user: dict[str, Any], password: str) -> bool:
+    plain = str(user.get("password") or "")
+    if plain and secrets.compare_digest(password, plain):
+        return True
+    password_hash = str(user.get("password_sha256") or "").lower()
+    if password_hash:
+        supplied = hashlib.sha256(password.encode("utf-8")).hexdigest()
+        return secrets.compare_digest(supplied, password_hash)
+    return False
 
 
-def _operation_code_required_for_request(request: Request) -> bool:
-    if not _console_operation_code_enabled():
-        return False
-    if request.method.upper() not in {"POST", "PUT", "PATCH", "DELETE"}:
-        return False
-    if request.url.path == "/api/health":
-        return False
-    return True
+def _dev_console_user() -> dict[str, Any]:
+    return {"username": "dev-admin", "role": "admin", "label": "本地开发管理员", "account_slot": None}
+
+
+def _current_console_user(request: Request) -> dict[str, Any]:
+    if not _console_auth_enabled():
+        return _dev_console_user()
+    if not _console_auth_configured():
+        raise HTTPException(status_code=503, detail="console_auth_not_configured")
+    user = _console_user_from_request(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="请先登录 AI 量化控制台账号。")
+    return user
+
+
+def _console_session_payload(user: dict[str, Any] | None, authenticated: bool) -> dict[str, Any]:
+    role = str((user or {}).get("role") or "")
+    account_slot = (user or {}).get("account_slot")
+    return {
+        "ok": True,
+        "auth_required": _console_auth_enabled(),
+        "auth_configured": _console_auth_configured(),
+        "authenticated": authenticated,
+        "user": None
+        if not user
+        else {
+            "username": user.get("username"),
+            "role": role,
+            "label": user.get("label") or _console_role_label(role),
+            "account_slot": account_slot,
+            "visible_account_slots": _console_visible_slots(user),
+            "capabilities": _console_capabilities(user),
+        },
+    }
+
+
+def _console_visible_slots(user: dict[str, Any]) -> list[str]:
+    if str(user.get("role")) == "admin":
+        return ["trend", "follower", "range"]
+    slot = user.get("account_slot")
+    return [str(slot)] if slot else []
+
+
+def _console_capabilities(user: dict[str, Any]) -> dict[str, bool]:
+    is_admin = str(user.get("role")) == "admin"
+    return {
+        "manage_runtime": is_admin,
+        "manage_strategy_parameters": is_admin,
+        "manage_api_keys": is_admin,
+        "execute_manual_orders": is_admin,
+        "edit_own_leverage": bool(is_admin or user.get("account_slot")),
+        "view_all_accounts": is_admin,
+    }
+
+
+def _console_user_can_access_request(user: dict[str, Any], request: Request) -> bool:
+    method = request.method.upper()
+    if method in {"GET", "HEAD", "OPTIONS"}:
+        return True
+    path = request.url.path
+    if path in {"/api/auth/logout", "/api/auth/login"}:
+        return True
+    if str(user.get("role")) == "admin":
+        return True
+    if path in {"/api/execution/accounts/leverage", "/api/proposals/parameter"}:
+        return True
+    return False
+
+
+def _console_user_can_edit_leverage(user: dict[str, Any], account_slot: str) -> bool:
+    if str(user.get("role")) == "admin":
+        return True
+    return str(user.get("account_slot") or "") == account_slot
+
+
+def _console_user_can_create_parameter_proposal(user: dict[str, Any], body: ParameterProposalRequest) -> bool:
+    if str(user.get("role")) == "admin":
+        return True
+    allowed_paths = {"risk.max_total_leverage"}
+    return not body.symbols and body.path in allowed_paths
 
 
 async def _cancel_trend_native_stops(execution, symbols: list[str], store: SQLiteStore | None = None, gateway_mode: str = "unknown") -> None:

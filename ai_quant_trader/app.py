@@ -1143,11 +1143,7 @@ class TradingApp:
         has_follower_pair = bool(os.getenv("GATEIO_FOLLOWER_API_KEY", "").strip()) and bool(
             os.getenv("GATEIO_FOLLOWER_API_SECRET", "").strip()
         )
-        if has_follower_pair:
-            return True
-        legacy_key = os.getenv("GATEIO_RANGE_API_KEY", "").strip()
-        legacy_secret = os.getenv("GATEIO_RANGE_API_SECRET", "").strip()
-        return bool(legacy_key and legacy_secret)
+        return has_follower_pair
 
     async def _mirror_exit_to_followers(
         self,

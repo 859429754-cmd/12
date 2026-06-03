@@ -15,7 +15,7 @@ The system has a working FastAPI/React/SQLite/Gateway architecture, but several 
 
 ## Non-goals
 
-- Do not remove Trade PIN.
+- Do not expose the console without account login/RBAC. ADR-0005 supersedes the older Trade PIN model.
 - Do not expose the console publicly without auth.
 - Do not let AI bypass hard local risk controls.
 - Do not tune parameters only to improve in-sample backtest results.
