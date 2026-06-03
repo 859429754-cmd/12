@@ -223,6 +223,18 @@ export function App() {
     }
   }, [workspace]);
 
+  useEffect(() => {
+    const syncWorkspaceFromHash = () => {
+      setWorkspace(readWorkspaceHash());
+    };
+    window.addEventListener("hashchange", syncWorkspaceFromHash);
+    window.addEventListener("popstate", syncWorkspaceFromHash);
+    return () => {
+      window.removeEventListener("hashchange", syncWorkspaceFromHash);
+      window.removeEventListener("popstate", syncWorkspaceFromHash);
+    };
+  }, []);
+
   const postAction = async (path: string, body: Record<string, unknown>) => {
     setBusy(true);
     setMessage("");
