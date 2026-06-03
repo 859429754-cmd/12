@@ -47,6 +47,7 @@ class DeepSeekBrain:
         macro_entities: MacroEntityStore | None = None,
     ):
         self.api_key = api_key or os.getenv("DEEPSEEK_API_KEY")
+        self.backup_api_key = os.getenv("DEEPSEEK_BACKUP_API_KEY")
         self.base_url = (base_url or os.getenv("DEEPSEEK_BASE_URL") or "https://api.deepseek.com").rstrip("/")
         self.model = model or os.getenv("DEEPSEEK_DECISION_MODEL") or "deepseek-v4-pro"
         self.knowledge_base = knowledge_base or TradingKnowledgeBase()
@@ -54,6 +55,7 @@ class DeepSeekBrain:
 
     def reload_from_env(self) -> None:
         self.api_key = os.getenv("DEEPSEEK_API_KEY")
+        self.backup_api_key = os.getenv("DEEPSEEK_BACKUP_API_KEY")
         self.base_url = (os.getenv("DEEPSEEK_BASE_URL") or "https://api.deepseek.com").rstrip("/")
         self.model = os.getenv("DEEPSEEK_DECISION_MODEL") or self.model
 
@@ -67,7 +69,7 @@ class DeepSeekBrain:
         regime_pattern: RegimePattern | None = None,
     ) -> AiDecision:
         payload = self._compact_payload(self._build_payload(signal, orderflow, dense_zone, pattern, news, regime_pattern))
-        if not self.api_key:
+        if not self._api_key_candidates():
             return self._fallback_decision(signal, orderflow, dense_zone, pattern, news, "missing_deepseek_api_key", regime_pattern)
 
         try:
@@ -96,21 +98,44 @@ class DeepSeekBrain:
 
     async def _chat_json(self, payload: dict[str, Any], timeout_seconds: int, retries: int) -> dict[str, Any]:
         last_exc: Exception | None = None
-        for attempt in range(retries):
-            try:
-                return await asyncio.to_thread(self._chat_json_sync, payload, timeout_seconds)
-            except (aiohttp.ClientError, requests.RequestException, TimeoutError, asyncio.TimeoutError) as exc:
-                last_exc = exc
-                if attempt < retries - 1:
-                    await asyncio.sleep(1.5 * (attempt + 1))
+        for credential_label, api_key in self._api_key_candidates():
+            for attempt in range(retries):
+                try:
+                    response = await asyncio.to_thread(self._chat_json_sync, payload, timeout_seconds, api_key)
+                    content = response["choices"][0]["message"]["content"]
+                    json.loads(content)
+                    return response
+                except (aiohttp.ClientError, requests.RequestException, TimeoutError, asyncio.TimeoutError, KeyError, json.JSONDecodeError) as exc:
+                    last_exc = exc
+                    logger.warning(
+                        "deepseek_call_failed",
+                        extra={
+                            "credential": credential_label,
+                            "attempt": attempt + 1,
+                            "retries": retries,
+                            "error_type": type(exc).__name__,
+                        },
+                    )
+                    if attempt < retries - 1:
+                        await asyncio.sleep(1.5 * (attempt + 1))
+            if credential_label == "primary" and self.backup_api_key:
+                logger.warning("deepseek_primary_failed_trying_backup", extra={"model": self.model})
         if last_exc:
             raise last_exc
         raise TimeoutError("deepseek_no_response")
 
-    def _chat_json_sync(self, payload: dict[str, Any], timeout_seconds: int) -> dict[str, Any]:
+    def _api_key_candidates(self) -> list[tuple[str, str]]:
+        candidates: list[tuple[str, str]] = []
+        if self.api_key:
+            candidates.append(("primary", self.api_key))
+        if self.backup_api_key and self.backup_api_key != self.api_key:
+            candidates.append(("backup", self.backup_api_key))
+        return candidates
+
+    def _chat_json_sync(self, payload: dict[str, Any], timeout_seconds: int, api_key: str | None = None) -> dict[str, Any]:
         response = requests.post(
             f"{self.base_url}/chat/completions",
-            headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+            headers={"Authorization": f"Bearer {api_key or self.api_key}", "Content-Type": "application/json"},
             json={
                 "model": self.model,
                 "messages": [
@@ -252,7 +277,7 @@ class DeepSeekBrain:
         return max(low, min(high, number))
 
     async def propose_optimization(self, snapshot: dict[str, Any], days: int) -> dict[str, Any]:
-        if not self.api_key:
+        if not self._api_key_candidates():
             return self._fallback_optimization(snapshot, days, "missing_deepseek_api_key")
         prompt = {
             "task": "根据最近交易与决策数据，给出量化策略优化建议。只输出JSON。",

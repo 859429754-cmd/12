@@ -71,20 +71,22 @@ async def test_apply_two_gate_account_slots_masks_storage(store, tmp_path) -> No
             operator_id="admin",
         )
     )
-    range_account = await manager.apply_command(
+    follower_account = await manager.apply_command(
         SecretUpdateCommand(
-            service=SecretService.GATEIO_RANGE,
-            values={"GATEIO_RANGE_API_KEY": "range_key_123456", "GATEIO_RANGE_API_SECRET": "range_secret_abcdef"},
+            service=SecretService.GATEIO_FOLLOWER,
+            values={"GATEIO_FOLLOWER_API_KEY": "follower_key_123456", "GATEIO_FOLLOWER_API_SECRET": "follower_secret_abcdef"},
             operator_id="admin",
         )
     )
 
     assert trend.key_tail == "******123456"
-    assert range_account.secret_tail == "******abcdef"
+    assert follower_account.secret_tail == "******abcdef"
     payload_text = json.dumps(store.fetch_secret_versions("gateio_trend", limit=1), ensure_ascii=False)
     assert "trend_key_123456" not in payload_text
+    follower_payload_text = json.dumps(store.fetch_secret_versions("gateio_follower", limit=1), ensure_ascii=False)
+    assert "follower_secret_abcdef" not in follower_payload_text
     env_text = env_path.read_text(encoding="utf-8")
     assert "GATEIO_TREND_API_KEY=trend_key_123456" in env_text
-    assert "GATEIO_RANGE_API_SECRET=range_secret_abcdef" in env_text
+    assert "GATEIO_FOLLOWER_API_SECRET=follower_secret_abcdef" in env_text
 
 

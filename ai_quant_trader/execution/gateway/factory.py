@@ -22,5 +22,7 @@ def create_exchange_gateway(config_or_mode: Any, account_slot: str = "default") 
     if mode == "live":
         return GateRealGateway(account_slot=account_slot)
     if mode == "mock":
-        return MockExchangeGateway()
+        if account_slot in {"default", "trend"}:
+            return MockExchangeGateway()
+        return MockExchangeGateway(f"data/mock_exchange_state_{account_slot}.json")
     raise ValueError(f"unsupported_execution_mode:{mode}")

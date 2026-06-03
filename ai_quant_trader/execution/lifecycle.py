@@ -30,9 +30,10 @@ class OrderRejected(OrderLifecycleError):
 class OrderLifecycleManager:
     """Persist order intent before exchange submission and prevent blind retries."""
 
-    def __init__(self, store: SQLiteStore, *, gateway_mode: str = "unknown") -> None:
+    def __init__(self, store: SQLiteStore, *, gateway_mode: str = "unknown", account_slot: str = "default") -> None:
         self.store = store
         self.gateway_mode = gateway_mode
+        self.account_slot = account_slot
 
     async def submit_market_order(
         self,
@@ -100,12 +101,14 @@ class OrderLifecycleManager:
         gateway_mode: str | None = None,
     ) -> bool:
         mode = gateway_mode or self._gateway_mode(gateway)
+        account_slot = self._gateway_account_slot(gateway)
         self._record(
             client_order_id=client_order_id,
             symbol=symbol,
             status=OrderLifecycleStatus.CANCEL_PENDING,
             order_type="cancel",
             gateway_mode=mode,
+            account_slot=account_slot,
             reason=f"cancel_order:{order_id}",
         )
         try:
@@ -117,6 +120,7 @@ class OrderLifecycleManager:
                 status=OrderLifecycleStatus.CANCEL_FAILED,
                 order_type="cancel",
                 gateway_mode=mode,
+                account_slot=account_slot,
                 reason=f"cancel_order_failed:{order_id}",
                 error_type=type(exc).__name__,
                 error_message=str(exc),
@@ -128,6 +132,7 @@ class OrderLifecycleManager:
             status=OrderLifecycleStatus.CANCELLED if ok else OrderLifecycleStatus.CANCEL_FAILED,
             order_type="cancel",
             gateway_mode=mode,
+            account_slot=account_slot,
             reason=f"cancel_order:{order_id}",
         )
         return ok
@@ -141,9 +146,12 @@ class OrderLifecycleManager:
         gateway_mode: str | None = None,
     ) -> list[OrderLifecycleEvent]:
         mode = gateway_mode or self._gateway_mode(gateway)
+        account_slot = self._gateway_account_slot(gateway)
         latest_by_client_id: dict[str, dict[str, Any]] = {}
         for row in self.store.fetch_payloads("order_lifecycle", limit=limit):
             payload = row.get("payload") or {}
+            if str(payload.get("account_slot") or self.account_slot) != account_slot:
+                continue
             client_order_id = str(payload.get("client_order_id") or "")
             if not client_order_id or client_order_id in latest_by_client_id:
                 continue
@@ -168,6 +176,7 @@ class OrderLifecycleManager:
                 client_order_id=str(payload.get("client_order_id")),
                 symbol=refreshed.symbol,
                 status=status,
+                account_slot=account_slot,
                 order_type=str(payload.get("order_type") or "market"),  # type: ignore[arg-type]
                 side=str(payload.get("side") or refreshed.side),
                 amount=float(payload.get("amount") or refreshed.amount or 0.0),
@@ -192,18 +201,27 @@ class OrderLifecycleManager:
         gateway_mode: str | None = None,
     ) -> OrderResult:
         mode = gateway_mode or self._gateway_mode(gateway)
+        account_slot = self._gateway_account_slot(gateway)
         existing = self.latest_event(request.client_order_id, symbol=request.symbol)
         if existing is not None:
             return await self._handle_duplicate_or_recover(gateway, request, order_type, existing, mode)
 
-        self._record_request(OrderLifecycleStatus.INTENT_RECORDED, request, order_type, mode)
-        self._record_request(OrderLifecycleStatus.SUBMITTING, request, order_type, mode)
+        self._record_request(OrderLifecycleStatus.INTENT_RECORDED, request, order_type, mode, account_slot=account_slot)
+        self._record_request(OrderLifecycleStatus.SUBMITTING, request, order_type, mode, account_slot=account_slot)
         try:
             order = await submit()
         except Exception as exc:  # noqa: BLE001
             recovered = await self._recover_order_from_gateway(gateway, request)
             if recovered is not None:
-                self._record_order(self._status_from_order(recovered), request, order_type, mode, recovered, reason="recovered_after_submit_error")
+                self._record_order(
+                    self._status_from_order(recovered),
+                    request,
+                    order_type,
+                    mode,
+                    recovered,
+                    reason="recovered_after_submit_error",
+                    account_slot=account_slot,
+                )
                 return recovered
             self._record_request(
                 OrderLifecycleStatus.UNKNOWN,
@@ -214,6 +232,7 @@ class OrderLifecycleManager:
                 error_type=type(exc).__name__,
                 error_message=str(exc),
                 recoverable=True,
+                account_slot=account_slot,
             )
             logger.error(
                 "order_submit_state_unknown",
@@ -222,7 +241,7 @@ class OrderLifecycleManager:
             raise OrderSubmissionUncertain(f"order_submit_state_unknown:{request.client_order_id}") from exc
 
         status = self._status_from_order(order)
-        self._record_order(status, request, order_type, mode, order)
+        self._record_order(status, request, order_type, mode, order, account_slot=account_slot)
         if status == OrderLifecycleStatus.REJECTED:
             raise OrderRejected(f"order_rejected:{request.client_order_id}:{order.status}")
         return order
@@ -311,6 +330,7 @@ class OrderLifecycleManager:
         error_type: str | None = None,
         error_message: str | None = None,
         recoverable: bool = False,
+        account_slot: str | None = None,
     ) -> int:
         return self._record(
             client_order_id=request.client_order_id,
@@ -321,6 +341,7 @@ class OrderLifecycleManager:
             amount=float(request.amount),
             reduce_only=bool(request.reduce_only),
             gateway_mode=gateway_mode,
+            account_slot=account_slot or self.account_slot,
             reason=reason or request.reason,
             error_type=error_type,
             error_message=error_message,
@@ -336,6 +357,7 @@ class OrderLifecycleManager:
         order: OrderResult,
         *,
         reason: str | None = None,
+        account_slot: str | None = None,
     ) -> int:
         return self._record(
             client_order_id=request.client_order_id,
@@ -346,6 +368,7 @@ class OrderLifecycleManager:
             amount=float(request.amount),
             reduce_only=bool(request.reduce_only),
             gateway_mode=gateway_mode,
+            account_slot=account_slot or self.account_slot,
             reason=reason or request.reason,
             exchange_order_id=order.exchange_order_id,
             order_status=order.status,
@@ -360,6 +383,7 @@ class OrderLifecycleManager:
         status: OrderLifecycleStatus,
         order_type: str,
         gateway_mode: str,
+        account_slot: str | None = None,
         reason: str = "",
         side: str | None = None,
         amount: float | None = None,
@@ -375,6 +399,7 @@ class OrderLifecycleManager:
             client_order_id=client_order_id,
             symbol=symbol,
             status=status,
+            account_slot=account_slot or self.account_slot,
             order_type=order_type,  # type: ignore[arg-type]
             side=side,
             amount=amount,
@@ -392,6 +417,9 @@ class OrderLifecycleManager:
 
     def _gateway_mode(self, gateway: Any) -> str:
         return str(getattr(gateway, "mode", self.gateway_mode) or self.gateway_mode)
+
+    def _gateway_account_slot(self, gateway: Any) -> str:
+        return str(getattr(gateway, "account_slot", self.account_slot) or self.account_slot)
 
     def _status_from_order(self, order: OrderResult) -> OrderLifecycleStatus:
         status = str(order.status or "").lower()

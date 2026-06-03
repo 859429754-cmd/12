@@ -8,6 +8,7 @@ GATE_ACCOUNT_ENV = {
     "default": ("GATEIO_API_KEY", "GATEIO_API_SECRET"),
     "trend": ("GATEIO_TREND_API_KEY", "GATEIO_TREND_API_SECRET"),
     "range": ("GATEIO_RANGE_API_KEY", "GATEIO_RANGE_API_SECRET"),
+    "follower": ("GATEIO_FOLLOWER_API_KEY", "GATEIO_FOLLOWER_API_SECRET"),
 }
 
 
@@ -26,6 +27,10 @@ class GateRealGateway(GateExecutionClient):
         api_key_env, api_secret_env = GATE_ACCOUNT_ENV[account_slot]
         if account_slot == "trend" and not _env_pair_configured(api_key_env, api_secret_env):
             api_key_env, api_secret_env = GATE_ACCOUNT_ENV["default"]
+        if account_slot == "follower" and not _env_pair_configured(api_key_env, api_secret_env):
+            legacy_key_env, legacy_secret_env = GATE_ACCOUNT_ENV["range"]
+            if _env_pair_configured(legacy_key_env, legacy_secret_env):
+                api_key_env, api_secret_env = legacy_key_env, legacy_secret_env
         super().__init__(
             dry_run=False,
             api_key_env=api_key_env,

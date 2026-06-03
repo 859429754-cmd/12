@@ -324,6 +324,32 @@ def test_live_gateway_uses_legacy_gate_key_for_trend_slot(monkeypatch: pytest.Mo
     assert gateway.api_secret_env == "GATEIO_API_SECRET"
 
 
+def test_live_gateway_can_bind_follower_account_slot(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GATEIO_FOLLOWER_API_KEY", "follower_key")
+    monkeypatch.setenv("GATEIO_FOLLOWER_API_SECRET", "follower_secret")
+
+    gateway = create_exchange_gateway("live", account_slot="follower")
+
+    assert isinstance(gateway, GateRealGateway)
+    assert gateway.account_slot == "follower"
+    assert gateway.api_key_env == "GATEIO_FOLLOWER_API_KEY"
+    assert gateway.api_secret_env == "GATEIO_FOLLOWER_API_SECRET"
+
+
+def test_live_gateway_uses_legacy_range_key_for_follower_slot(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("GATEIO_FOLLOWER_API_KEY", raising=False)
+    monkeypatch.delenv("GATEIO_FOLLOWER_API_SECRET", raising=False)
+    monkeypatch.setenv("GATEIO_RANGE_API_KEY", "legacy_follower_key")
+    monkeypatch.setenv("GATEIO_RANGE_API_SECRET", "legacy_follower_secret")
+
+    gateway = create_exchange_gateway("live", account_slot="follower")
+
+    assert isinstance(gateway, GateRealGateway)
+    assert gateway.account_slot == "follower"
+    assert gateway.api_key_env == "GATEIO_RANGE_API_KEY"
+    assert gateway.api_secret_env == "GATEIO_RANGE_API_SECRET"
+
+
 def test_live_gateway_rejects_unknown_account_slot() -> None:
     with pytest.raises(ValueError, match="unsupported_gate_account_slot"):
         create_exchange_gateway("live", account_slot="unknown")

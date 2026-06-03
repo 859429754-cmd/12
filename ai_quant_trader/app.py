@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 import logging
+import os
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -17,12 +18,14 @@ from ai_quant_trader.core.models import (
     AiDecision,
     AiDriftReport,
     DenseZone,
+    FollowerAccountConfig,
     HealthStatus,
     NewsDigest,
     OrderRequest,
     PatternCandidate,
     PositionSnapshot,
     RegimePattern,
+    RiskDecision,
     Side,
     SignalAction,
     StrategySignal,
@@ -55,6 +58,7 @@ from ai_quant_trader.strategy.trend_state import TrendPositionState, TrendStateS
 logger = logging.getLogger(__name__)
 
 TREND_ACCOUNT_SLOT = "trend"
+FOLLOWER_ACCOUNT_SLOT = "follower"
 
 
 class TradingApp:
@@ -88,11 +92,22 @@ class TradingApp:
             base_url=self.config.ai.base_url,
             model=self.config.ai.decision_model,
         )
+        self.brain.backup_api_key = os.getenv(self.config.ai.backup_api_key_env)
         self.deepseek_budget = DeepSeekBudgetGuard.from_config(self.store, self.config.ai)
         self.risk = RiskManager(self.config.risk, self.state)
         self.execution = create_exchange_gateway(self.config, account_slot=TREND_ACCOUNT_SLOT)
         self.exchange_safety = ExchangeSafetyMonitor(self.config.risk.stale_data_seconds)
-        self.order_lifecycle = OrderLifecycleManager(self.store, gateway_mode=execution_mode_from_config(self.config))
+        self.order_lifecycle = OrderLifecycleManager(
+            self.store,
+            gateway_mode=execution_mode_from_config(self.config),
+            account_slot=TREND_ACCOUNT_SLOT,
+        )
+        self.follower_execution = create_exchange_gateway(self.config, account_slot=FOLLOWER_ACCOUNT_SLOT)
+        self.follower_order_lifecycle = OrderLifecycleManager(
+            self.store,
+            gateway_mode=execution_mode_from_config(self.config),
+            account_slot=FOLLOWER_ACCOUNT_SLOT,
+        )
         self.ai_drift = AIDriftMonitor(self.store)
         self.data_health = DataHealthMonitor(
             stale_data_seconds=self.config.risk.stale_data_seconds,
@@ -111,6 +126,7 @@ class TradingApp:
         )
         self.wakeup_engine = WakeupEngine()
         self.trend_state = TrendStateStore()
+        self.follower_trend_state = TrendStateStore("data/state_trend_follower.json")
         self._price_wakeup_cooldown: dict[str, datetime] = {}
         self._news_risk_review_seen: set[str] = set()
         self.trend_strategies: dict[str, TrendStrategy] = {}
@@ -215,6 +231,7 @@ class TradingApp:
                     await self._cancel_native_stop_order(symbol_cfg.symbol)
                     self.trend_state.clear(symbol_cfg.symbol)
                     self.store.insert("orders", order, symbol_cfg.symbol)
+                    await self._mirror_exit_to_followers(symbol_cfg.symbol, signal, ai, risk.reason)
 
             if risk.allowed and signal.action in {SignalAction.LONG, SignalAction.SHORT}:
                 if not data_health.can_open_new_entries:
@@ -304,6 +321,7 @@ class TradingApp:
                     raise RuntimeError("live_entry_missing_trend_stop_state")
                 if entry_state is not None:
                     await self._place_native_stop_loss(symbol_cfg.symbol, signal, entry_state, risk.clipped_qty)
+                    await self._mirror_entry_to_followers(symbol_cfg.symbol, signal, ai, risk, order)
 
             rows.append((signal, ai, aggregated, zone, risk))
 
@@ -846,6 +864,7 @@ class TradingApp:
         self.risk.config = self.config.risk
         self.risk.state = self.state
         self.deepseek_budget = DeepSeekBudgetGuard.from_config(self.store, self.config.ai)
+        self.brain.backup_api_key = os.getenv(self.config.ai.backup_api_key_env)
         self._refresh_symbol_strategies()
         self.news.rss_sources = self.config.news.rss_sources
         self.news.scrape_sources = self.config.news.scrape_sources
@@ -855,6 +874,10 @@ class TradingApp:
         if old_mode != execution_mode_from_config(self.config):
             await self.execution.close()
             self.execution = create_exchange_gateway(self.config, account_slot=TREND_ACCOUNT_SLOT)
+            await self.follower_execution.close()
+            self.follower_execution = create_exchange_gateway(self.config, account_slot=FOLLOWER_ACCOUNT_SLOT)
+            self.order_lifecycle.gateway_mode = execution_mode_from_config(self.config)
+            self.follower_order_lifecycle.gateway_mode = execution_mode_from_config(self.config)
         self.orderflow_client.live_public_data = execution_mode_from_config(self.config) == "live"
 
     async def _refresh_exchange_safety(self, symbols: list[str]):
@@ -877,11 +900,32 @@ class TradingApp:
 
     async def _refresh_order_status_once(self, symbols: list[str]):
         try:
-            return await self.order_lifecycle.refresh_recent_orders(
+            updates = await self.order_lifecycle.refresh_recent_orders(
                 self.execution,
                 symbols=symbols,
                 gateway_mode=execution_mode_from_config(self.config),
             )
+            if self._active_followers():
+                try:
+                    updates.extend(
+                        await self.follower_order_lifecycle.refresh_recent_orders(
+                            self.follower_execution,
+                            symbols=symbols,
+                            gateway_mode=execution_mode_from_config(self.config),
+                        )
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception("follower_order_status_refresh_failed")
+                    self.store.insert(
+                        "follower_executions",
+                        {
+                            "status": "order_status_refresh_failed",
+                            "account_slot": FOLLOWER_ACCOUNT_SLOT,
+                            "symbols": symbols,
+                            "error_type": type(exc).__name__,
+                        },
+                    )
+            return updates
         except Exception as exc:  # noqa: BLE001
             if execution_mode_from_config(self.config) == "live":
                 state = self.exchange_safety.mark_failure("live_order_status_refresh_failed", [type(exc).__name__])
@@ -1000,13 +1044,22 @@ class TradingApp:
         return None
 
     def _record_trend_entry_state(self, symbol: str, signal, entry_price: float) -> TrendPositionState | None:
+        return self._record_trend_entry_state_for_store(self.trend_state, symbol, signal, entry_price)
+
+    def _record_trend_entry_state_for_store(
+        self,
+        trend_store: TrendStateStore,
+        symbol: str,
+        signal,
+        entry_price: float,
+    ) -> TrendPositionState | None:
         atr_value = float(signal.technical_evidence.get("entry_stop_atr") or signal.technical_evidence.get("atr") or 0.0)
         atr_stop_multiple = float(signal.technical_evidence.get("atr_stop_multiple") or self.config.strategy.trend.atr_stop_multiple)
         if atr_value <= 0:
             logger.warning("trend_stop_state_not_recorded", extra={"symbol": symbol, "reason": "missing_atr"})
             return None
         side = Side.LONG if signal.action == SignalAction.LONG else Side.SHORT
-        return self.trend_state.record_entry(symbol, side, float(entry_price), atr_value, atr_stop_multiple)
+        return trend_store.record_entry(symbol, side, float(entry_price), atr_value, atr_stop_multiple)
 
     async def _place_native_stop_loss(
         self,
@@ -1077,6 +1130,282 @@ class TradingApp:
                 "native_stop_loss_cancel_failed",
                 extra={"symbol": symbol, "order_id": state.native_stop_order_id, "error": type(exc).__name__},
             )
+
+    def _active_followers(self) -> list[FollowerAccountConfig]:
+        return [follower for follower in self.config.followers if follower.enabled]
+
+    async def _mirror_exit_to_followers(
+        self,
+        symbol: str,
+        signal: StrategySignal,
+        ai: AiDecision,
+        reason: str,
+    ) -> None:
+        for follower in self._active_followers():
+            if not follower.mirror_exits:
+                continue
+            await self._mirror_exit_to_follower(follower, symbol, signal, ai, reason)
+
+    async def _mirror_exit_to_follower(
+        self,
+        follower: FollowerAccountConfig,
+        symbol: str,
+        signal: StrategySignal,
+        ai: AiDecision,
+        reason: str,
+    ) -> None:
+        account_slot = self._canonical_follower_slot(follower.account_slot)
+        try:
+            order = await self.follower_order_lifecycle.close_position(
+                self.follower_execution,
+                symbol,
+                reason=f"follower_mirror_exit:{reason}",
+            )
+            await self._cancel_follower_native_stop_order(symbol)
+            self.follower_trend_state.clear(symbol)
+            self._record_follower_execution(
+                status="exit_mirrored" if order else "exit_no_position",
+                account_slot=account_slot,
+                symbol=symbol,
+                signal=signal,
+                ai=ai,
+                reason=reason,
+                order=order.model_dump(mode="json") if order else None,
+            )
+            if order:
+                self.store.insert("orders", {**order.model_dump(mode="json"), "account_slot": account_slot, "role": "follower"}, symbol)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("follower_exit_failed", extra={"symbol": symbol, "account_slot": account_slot})
+            self._record_follower_execution(
+                status="exit_failed",
+                account_slot=account_slot,
+                symbol=symbol,
+                signal=signal,
+                ai=ai,
+                reason=reason,
+                error_type=type(exc).__name__,
+            )
+
+    async def _mirror_entry_to_followers(
+        self,
+        symbol: str,
+        signal: StrategySignal,
+        ai: AiDecision,
+        risk: RiskDecision,
+        primary_order,
+    ) -> None:
+        for follower in self._active_followers():
+            if not follower.mirror_entries:
+                continue
+            await self._mirror_entry_to_follower(follower, symbol, signal, ai, risk, primary_order)
+
+    async def _mirror_entry_to_follower(
+        self,
+        follower: FollowerAccountConfig,
+        symbol: str,
+        signal: StrategySignal,
+        ai: AiDecision,
+        risk: RiskDecision,
+        primary_order,
+    ) -> None:
+        account_slot = self._canonical_follower_slot(follower.account_slot)
+        try:
+            positions = await self.follower_execution.fetch_positions([symbol])
+            same = self._same_direction_position_from_signal(signal, positions)
+            if same is not None:
+                self._record_follower_execution(
+                    status="entry_skipped_same_direction_position",
+                    account_slot=account_slot,
+                    symbol=symbol,
+                    signal=signal,
+                    ai=ai,
+                    risk=risk,
+                    reason="same_direction_position_exists",
+                )
+                return
+
+            opposite = self._opposite_position(signal, positions)
+            if opposite is not None:
+                close_order = await self.follower_order_lifecycle.close_position(
+                    self.follower_execution,
+                    symbol,
+                    reason="follower_reverse_signal_close_first",
+                )
+                await self._cancel_follower_native_stop_order(symbol)
+                self.follower_trend_state.clear(symbol)
+                if close_order:
+                    self.store.insert("orders", {**close_order.model_dump(mode="json"), "account_slot": account_slot, "role": "follower"}, symbol)
+
+            qty, sizing_reason = await self._follower_entry_qty(follower, symbol, signal, risk)
+            if qty <= 0:
+                self._record_follower_execution(
+                    status="entry_blocked_by_follower_sizing",
+                    account_slot=account_slot,
+                    symbol=symbol,
+                    signal=signal,
+                    ai=ai,
+                    risk=risk,
+                    reason=sizing_reason,
+                )
+                return
+
+            entry_request = OrderRequest(
+                symbol=symbol,
+                side="buy" if signal.action == SignalAction.LONG else "sell",
+                amount=qty,
+                reduce_only=False,
+                client_order_id=f"aiq_fol_{uuid.uuid4().hex[:18]}",
+                reason=f"follower_mirror_entry:{risk.reason}",
+            )
+            order = await self.follower_order_lifecycle.submit_market_order(self.follower_execution, entry_request)
+            self.store.insert("orders", {**order.model_dump(mode="json"), "account_slot": account_slot, "role": "follower"}, symbol)
+            entry_state = self._record_trend_entry_state_for_store(
+                self.follower_trend_state,
+                symbol,
+                signal,
+                float(order.price or signal.current_price),
+            )
+            if entry_state is None:
+                raise RuntimeError("follower_entry_missing_trend_stop_state")
+            await self._place_follower_native_stop_loss(symbol, signal, entry_state, qty)
+            self._record_follower_execution(
+                status="entry_mirrored",
+                account_slot=account_slot,
+                symbol=symbol,
+                signal=signal,
+                ai=ai,
+                risk=risk,
+                reason=sizing_reason,
+                order=order.model_dump(mode="json"),
+                primary_order=primary_order.model_dump(mode="json") if hasattr(primary_order, "model_dump") else None,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("follower_entry_failed", extra={"symbol": symbol, "account_slot": account_slot})
+            self._record_follower_execution(
+                status="entry_failed",
+                account_slot=account_slot,
+                symbol=symbol,
+                signal=signal,
+                ai=ai,
+                risk=risk,
+                reason="follower_entry_exception",
+                error_type=type(exc).__name__,
+            )
+
+    async def _follower_entry_qty(
+        self,
+        follower: FollowerAccountConfig,
+        symbol: str,
+        signal: StrategySignal,
+        risk: RiskDecision,
+    ) -> tuple[float, str]:
+        balance = await self.follower_execution.fetch_balance_summary()
+        if not balance.get("ok"):
+            return 0.0, "follower_balance_unavailable"
+        equity = float(balance.get("usdt_total") or balance.get("usdt_free") or 0.0)
+        if equity <= 0:
+            return 0.0, "follower_equity_zero"
+        positions = await self.follower_execution.fetch_positions([symbol])
+        used_notional = sum(position.notional for position in positions)
+        max_notional = equity * follower.max_leverage
+        remaining = max(max_notional - used_notional, 0.0)
+        target_notional = max_notional * float(risk.position_scale or 0.0) * follower.follow_ratio
+        clipped_notional = min(max(target_notional, 0.0), remaining)
+        qty = clipped_notional / signal.current_price if signal.current_price > 0 else 0.0
+        min_amount = await self.follower_execution.minimum_order_amount(symbol, signal.current_price)
+        contract_size = await self.follower_execution.contract_size(symbol)
+        min_base_qty = float(min_amount) * max(float(contract_size or 1.0), 1e-12)
+        if qty < min_base_qty:
+            return 0.0, f"follower_qty_below_minimum:{qty:.8f}<{min_base_qty:.8f}"
+        return qty, "follower_sized_from_shared_ai_decision"
+
+    async def _place_follower_native_stop_loss(
+        self,
+        symbol: str,
+        signal: StrategySignal,
+        state: TrendPositionState,
+        amount: float,
+    ) -> None:
+        stop_side = "sell" if state.side == Side.LONG.value else "buy"
+        request = OrderRequest(
+            symbol=symbol,
+            side=stop_side,
+            amount=abs(float(amount)),
+            reduce_only=True,
+            client_order_id=f"aiq_fstop_{uuid.uuid4().hex[:15]}",
+            reason="follower_native_fixed_atr_stop",
+        )
+        order = await self.follower_order_lifecycle.submit_stop_loss_order(
+            self.follower_execution,
+            request,
+            state.stop_loss_price,
+        )
+        self.store.insert("orders", {**order.model_dump(mode="json"), "account_slot": FOLLOWER_ACCOUNT_SLOT, "role": "follower"}, symbol)
+        if order.exchange_order_id:
+            self.follower_trend_state.set_native_stop_order_id(symbol, order.exchange_order_id)
+
+    async def _cancel_follower_native_stop_order(self, symbol: str) -> None:
+        state = self.follower_trend_state.get(symbol)
+        if state is None or not state.native_stop_order_id:
+            return
+        try:
+            await self.follower_order_lifecycle.cancel_order(
+                self.follower_execution,
+                symbol=symbol,
+                order_id=state.native_stop_order_id,
+                client_order_id=f"aiq_fcancel_{uuid.uuid4().hex[:14]}",
+                trigger=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "follower_native_stop_cancel_failed",
+                extra={"symbol": symbol, "order_id": state.native_stop_order_id, "error": type(exc).__name__},
+            )
+
+    def _same_direction_position_from_signal(
+        self,
+        signal: StrategySignal,
+        positions: list[PositionSnapshot],
+    ) -> PositionSnapshot | None:
+        expected_side = Side.LONG if signal.action == SignalAction.LONG else Side.SHORT
+        for position in positions:
+            if position.symbol == signal.symbol and position.side == expected_side and abs(position.qty) > 0:
+                return position
+        return None
+
+    def _canonical_follower_slot(self, account_slot: str) -> str:
+        return FOLLOWER_ACCOUNT_SLOT if account_slot in {"follower", "range"} else account_slot
+
+    def _record_follower_execution(
+        self,
+        *,
+        status: str,
+        account_slot: str,
+        symbol: str,
+        signal: StrategySignal,
+        ai: AiDecision,
+        reason: str,
+        risk: RiskDecision | None = None,
+        order: dict | None = None,
+        primary_order: dict | None = None,
+        error_type: str | None = None,
+    ) -> None:
+        self.store.insert(
+            "follower_executions",
+            {
+                "status": status,
+                "account_slot": account_slot,
+                "symbol": symbol,
+                "reason": reason,
+                "signal": signal.model_dump(mode="json"),
+                "ai_decision": ai.model_dump(mode="json"),
+                "risk_decision": risk.model_dump(mode="json") if risk else None,
+                "order": order,
+                "primary_order": primary_order,
+                "error_type": error_type,
+            },
+            symbol,
+        )
 
     def _opposite_position(self, signal, positions: list[PositionSnapshot]) -> PositionSnapshot | None:
         expected_side = Side.LONG if signal.action == SignalAction.LONG else Side.SHORT

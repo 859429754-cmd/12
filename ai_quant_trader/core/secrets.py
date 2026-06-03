@@ -26,6 +26,7 @@ class SecretUpdateManager:
         SecretService.GATEIO: ("GATEIO_API_KEY", "GATEIO_API_SECRET"),
         SecretService.GATEIO_TREND: ("GATEIO_TREND_API_KEY", "GATEIO_TREND_API_SECRET"),
         SecretService.GATEIO_RANGE: ("GATEIO_RANGE_API_KEY", "GATEIO_RANGE_API_SECRET"),
+        SecretService.GATEIO_FOLLOWER: ("GATEIO_FOLLOWER_API_KEY", "GATEIO_FOLLOWER_API_SECRET"),
     }
 
     def __init__(

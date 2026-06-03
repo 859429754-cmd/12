@@ -103,6 +103,16 @@ class RuntimeConfig(BaseModel):
 MAX_CONFIGURABLE_LEVERAGE = 20.0
 
 
+class FollowerAccountConfig(BaseModel):
+    enabled: bool = False
+    account_slot: Literal["follower", "range"] = "follower"
+    label: str = "账号2：趋势跟随账户"
+    follow_ratio: float = Field(default=1.0, ge=0, le=10)
+    max_leverage: float = Field(default=4.0, gt=0, le=MAX_CONFIGURABLE_LEVERAGE)
+    mirror_entries: bool = True
+    mirror_exits: bool = True
+
+
 class RiskConfig(BaseModel):
     max_total_leverage: float = Field(default=4.0, gt=0, le=MAX_CONFIGURABLE_LEVERAGE)
     ai_full_size_confidence: float = Field(default=0.75, ge=0, le=1)
@@ -165,6 +175,7 @@ class AiConfig(BaseModel):
     emergency_screening_model: str = "deepseek-v4-flash"
     emergency_decision_model: str = "deepseek-v4-pro"
     base_url: str = "https://api.deepseek.com"
+    backup_api_key_env: str = "DEEPSEEK_BACKUP_API_KEY"
     candidate_trade_min_confidence: float = Field(default=0.65, ge=0, le=1)
     ai_enabled_symbols: list[str] = Field(default_factory=list)
     symbol_prompt_weights: dict[str, dict[str, float]] = Field(default_factory=dict)
@@ -191,6 +202,7 @@ class AppConfig(BaseModel):
     orderflow: OrderflowConfig = Field(default_factory=OrderflowConfig)
     news: NewsConfig = Field(default_factory=NewsConfig)
     ai: AiConfig = Field(default_factory=AiConfig)
+    followers: list[FollowerAccountConfig] = Field(default_factory=list)
     security: SecurityConfig = Field(default_factory=SecurityConfig)
 
 
@@ -561,6 +573,7 @@ class OrderLifecycleEvent(BaseModel):
     client_order_id: str
     symbol: str
     status: OrderLifecycleStatus
+    account_slot: str = "default"
     order_type: Literal["market", "stop_loss", "cancel"] = "market"
     side: str | None = None
     amount: float | None = None
@@ -581,6 +594,7 @@ class SecretService(StrEnum):
     GATEIO = "gateio"
     GATEIO_TREND = "gateio_trend"
     GATEIO_RANGE = "gateio_range"
+    GATEIO_FOLLOWER = "gateio_follower"
 
 
 class SecretUpdateCommand(BaseModel):

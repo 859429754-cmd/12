@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import pytest
+import requests
 
 from ai_quant_trader.brain.deepseek import DeepSeekBrain
 from ai_quant_trader.core.models import (
@@ -18,6 +19,48 @@ from ai_quant_trader.core.models import (
     SignalAction,
     StrategySignal,
 )
+
+
+@pytest.mark.asyncio
+async def test_deepseek_chat_json_falls_back_to_backup_api_key(monkeypatch) -> None:
+    primary_key = "primary-" + "test-key"
+    backup_key = "backup-" + "test-key"
+    brain = DeepSeekBrain(api_key=primary_key, model="deepseek-v4-flash")
+    brain.backup_api_key = backup_key
+    seen_keys: list[str] = []
+
+    def fake_chat_json_sync(payload, timeout_seconds: int, api_key: str):  # noqa: ANN001
+        seen_keys.append(api_key)
+        if api_key == primary_key:
+            raise requests.RequestException("primary timeout")
+        return {"choices": [{"message": {"content": "{}"}}]}
+
+    monkeypatch.setattr(brain, "_chat_json_sync", fake_chat_json_sync)
+    data = await brain._chat_json({"messages": []}, timeout_seconds=1, retries=1)
+
+    assert data == {"choices": [{"message": {"content": "{}"}}]}
+    assert seen_keys == [primary_key, backup_key]
+
+
+@pytest.mark.asyncio
+async def test_deepseek_chat_json_falls_back_when_primary_returns_invalid_json(monkeypatch) -> None:
+    primary_key = "primary-" + "test-key"
+    backup_key = "backup-" + "test-key"
+    brain = DeepSeekBrain(api_key=primary_key, model="deepseek-v4-flash")
+    brain.backup_api_key = backup_key
+    seen_keys: list[str] = []
+
+    def fake_chat_json_sync(payload, timeout_seconds: int, api_key: str):  # noqa: ANN001
+        seen_keys.append(api_key)
+        if api_key == primary_key:
+            return {"choices": [{"message": {"content": "not-json"}}]}
+        return {"choices": [{"message": {"content": json.dumps({"ok": True})}}]}
+
+    monkeypatch.setattr(brain, "_chat_json_sync", fake_chat_json_sync)
+    data = await brain._chat_json({"messages": []}, timeout_seconds=1, retries=1)
+
+    assert json.loads(data["choices"][0]["message"]["content"]) == {"ok": True}
+    assert seen_keys == [primary_key, backup_key]
 
 
 @pytest.mark.asyncio

@@ -261,16 +261,16 @@ def test_console_can_create_global_max_leverage_proposal(tmp_path: Path, monkeyp
     accounts = client.get("/api/execution/accounts")
     assert accounts.status_code == 200
     account_body = accounts.json()
-    assert [item["slot"] for item in account_body["items"]] == ["trend", "range"]
+    assert [item["slot"] for item in account_body["items"]] == ["trend", "follower"]
     assert account_body["items"][0]["live_routing"] == "blocked_missing_credentials"
 
     channels = client.get("/api/strategy/channels")
     assert channels.status_code == 200
     channel_body = channels.json()
-    assert [item["channel"] for item in channel_body["items"]] == ["trend", "range"]
+    assert [item["channel"] for item in channel_body["items"]] == ["trend", "follower"]
     assert channel_body["items"][0]["account_slot"] == "trend"
     assert channel_body["items"][0]["executable"] is True
-    assert channel_body["items"][1]["account_slot"] == "range"
+    assert channel_body["items"][1]["account_slot"] == "follower"
     assert channel_body["items"][1]["executable"] is False
 
     dense = client.get("/api/dense-zones/latest?symbol=ETH%2FUSDT%3AUSDT")
@@ -320,6 +320,38 @@ def test_account_balance_prefers_gate_readonly_when_mock_has_configured_account(
     assert body["balance_source"] == "gate_live_readonly"
     assert body["read_only_live_balance"] is True
     assert body["usdt_total"] == 321.5
+
+
+def test_account_balance_canonicalizes_legacy_range_slot_to_follower(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("GATEIO_FOLLOWER_API_KEY", "follower_key")
+    monkeypatch.setenv("GATEIO_FOLLOWER_API_SECRET", "follower_secret")
+    config_path = tmp_path / "config.yaml"
+    write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl", ["ETH/USDT:USDT"])
+    created: list[tuple[str, str]] = []
+
+    class FakeGateway:
+        def __init__(self, mode: str, account_slot: str) -> None:
+            self.mode = mode
+            self.account_slot = account_slot
+
+        async def fetch_balance_summary(self) -> dict[str, object]:
+            return {"ok": True, "account_slot": self.account_slot, "usdt_total": 123.0}
+
+        async def close(self) -> None:
+            return None
+
+    def fake_factory(mode_or_config: object, account_slot: str = "default") -> FakeGateway:
+        mode = str(mode_or_config)
+        created.append((mode, account_slot))
+        return FakeGateway(mode, account_slot)
+
+    monkeypatch.setattr(server, "create_exchange_gateway", fake_factory)
+    client = TestClient(create_app(str(config_path)))
+
+    response = client.get("/api/account/balance?account_slot=range")
+    assert response.status_code == 200
+    assert response.json()["account_slot"] == "follower"
+    assert created == [("live", "follower")]
 
 
 def test_account_balance_does_not_fallback_to_mock_when_gate_readonly_fails(tmp_path: Path, monkeypatch) -> None:

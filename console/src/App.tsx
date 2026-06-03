@@ -65,6 +65,7 @@ export function App() {
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [platform, setPlatform] = useState<PlatformOverview | null>(null);
   const [balance, setBalance] = useState<Record<string, unknown> | null>(null);
+  const [followerBalance, setFollowerBalance] = useState<Record<string, unknown> | null>(null);
   const [markets, setMarkets] = useState<MarketSymbolsResponse>({ items: [] });
   const [symbol, setSymbol] = useState(DEFAULT_SYMBOL);
   const [timeframe, setTimeframe] = useState("1h");
@@ -150,6 +151,7 @@ export function App() {
         nextReadiness,
         nextMarkets,
         nextBalance,
+        nextFollowerBalance,
         nextPositions,
         nextRiskSummary,
         nextAccountSlots,
@@ -163,6 +165,11 @@ export function App() {
           api<SystemReadiness>("/api/system/readiness", { retries: 1 }),
           api<MarketSymbolsResponse>("/api/markets/symbols", { retries: 1 }),
           api<Record<string, unknown>>("/api/account/balance", { retries: 1 }),
+          safe(api<Record<string, unknown>>("/api/account/balance?account_slot=follower", { retries: 1 }), {
+            ok: false,
+            account_slot: "follower",
+            message: "账号2未配置或暂时无法读取。",
+          }),
           api<ApiList>("/api/positions?limit=50", { retries: 1 }),
           api<Record<string, unknown>>("/api/risk/summary", { retries: 1 }),
           safe(api<{ items: ExecutionAccountSlot[] }>("/api/execution/accounts", { retries: 1 }), { items: [] }),
@@ -175,6 +182,7 @@ export function App() {
       setReadiness(nextReadiness);
       setMarkets(nextMarkets);
       setBalance(nextBalance);
+      setFollowerBalance(nextFollowerBalance);
       setPositions(nextPositions.items || []);
       setRiskSummary(nextRiskSummary);
       setAccountSlots(nextAccountSlots.items || []);
@@ -272,6 +280,7 @@ export function App() {
         warning={warning}
         runtimeStatus={status}
         balance={balance}
+        followerBalance={followerBalance}
         markets={markets}
         news={news}
         positions={positions}
@@ -793,6 +802,7 @@ function WorkspaceBody({
   warning,
   runtimeStatus,
   balance,
+  followerBalance,
   markets,
   news,
   positions,
@@ -820,6 +830,7 @@ function WorkspaceBody({
   warning: string;
   runtimeStatus: StatusResponse | null;
   balance: Record<string, unknown> | null;
+  followerBalance: Record<string, unknown> | null;
   markets: MarketSymbolsResponse;
   news: NewsResponse;
   positions: Array<DbRow>;
@@ -882,6 +893,7 @@ function WorkspaceBody({
         platform={platform}
         status={runtimeStatus}
         balance={balance}
+        followerBalance={followerBalance}
         positions={positions}
         orders={orders}
         accountSlots={accountSlots}
@@ -2954,7 +2966,7 @@ function AiBrainWorkspace({
   return (
     <section className="min-h-0 space-y-4 overflow-auto sm:space-y-5 sm:pr-1">
       <Surface title={<><BrainCircuit size={13} /> DeepSeek 五档决策中心</>}>
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 2xl:grid-cols-6">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 2xl:grid-cols-7">
           <Metric label="接入状态" value={ai.api_key_configured ? "已配置" : "未配置"} tone={ai.api_key_configured ? "good" : "warn"} />
           <Metric label="常规模型" value={String(ai.decision_model || "--")} />
           <Metric label="突发筛查" value={String(ai.emergency_screening_model || "--")} />
@@ -3204,6 +3216,7 @@ function ExecutionWorkspace({
   platform,
   status,
   balance,
+  followerBalance,
   positions,
   orders,
   accountSlots,
@@ -3216,6 +3229,7 @@ function ExecutionWorkspace({
   platform: PlatformOverview | null;
   status: StatusResponse | null;
   balance: Record<string, unknown> | null;
+  followerBalance: Record<string, unknown> | null;
   positions: Array<DbRow>;
   orders: Array<DbRow>;
   accountSlots: ExecutionAccountSlot[];
@@ -3225,14 +3239,16 @@ function ExecutionWorkspace({
   postAction: (path: string, body: Record<string, unknown>) => Promise<void>;
 }) {
   const usdt = balance?.USDT && typeof balance.USDT === "object" ? (balance.USDT as Record<string, unknown>) : {};
+  const followerUsdt = followerBalance?.USDT && typeof followerBalance.USDT === "object" ? (followerBalance.USDT as Record<string, unknown>) : {};
   const executionMode = status?.execution_mode || platform?.platform.execution_mode || "mock";
   const enabled = status?.enabled_symbols || [];
   const riskCap = Number(riskSummary?.max_total_leverage ?? status?.risk?.max_total_leverage ?? 4);
   const totalEquity = Number(balance?.total_usdt ?? balance?.usdt_total ?? usdt.total ?? 0);
+  const followerEquity = Number(followerBalance?.total_usdt ?? followerBalance?.usdt_total ?? followerUsdt.total ?? 0);
   const maxNotional = totalEquity > 0 ? totalEquity * riskCap : 0;
   const channels = platform?.strategy_channels || [];
   const trendChannel = channels.find((item) => item.channel === "trend");
-  const rangeChannel = channels.find((item) => item.channel === "range");
+  const followerChannel = channels.find((item) => item.channel === "follower");
   return (
     <section className="min-h-0 space-y-4 overflow-auto sm:space-y-5 sm:pr-1">
       <Surface title={<><ShieldCheck size={13} /> 实盘安全链路</>}>
@@ -3241,7 +3257,8 @@ function ExecutionWorkspace({
           <Metric label="交易模式" value={status?.trade_mode || platform?.platform.trade_mode || "--"} />
           <Metric label="开仓状态" value={status?.opening_paused ? "已暂停" : "允许"} tone={status?.opening_paused ? "warn" : "good"} />
           <Metric label="授权标的" value={`${enabled.length}`} />
-          <Metric label="权益估算" value={num(totalEquity)} />
+          <Metric label="账号1权益" value={num(totalEquity)} />
+          <Metric label="账号2权益" value={followerBalance?.ok === false ? "未配置" : num(followerEquity)} tone={followerBalance?.ok === false ? "warn" : undefined} />
           <Metric label="最大名义" value={num(maxNotional)} />
         </div>
         <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
@@ -3270,19 +3287,21 @@ function ExecutionWorkspace({
               ]}
             />
             <StrategyChannelCard
-              title="震荡策略运行"
-              account={rangeChannel?.account_label || "账号2：震荡策略 API"}
-              status="模块预留"
-              body="预留给箱体/均值回归/网格策略。未完成回测、风控和账户交易网关绑定前，不能实盘执行。"
+              title="账号2跟随执行"
+              account={followerChannel?.account_label || "账号2：趋势跟随 API"}
+              status={followerChannel?.live_ready ? "跟随就绪" : followerChannel?.executable ? "等待主账户信号" : "未启用"}
+              body="账号2不单独计算策略，也不重复调用 DeepSeek。账号1通过策略、AI 和风控后，账号2复用同一订单意图并按自己的余额、杠杆上限和跟随比例裁剪仓位。"
+              enabled={Boolean(followerChannel?.executable)}
+              liveReady={Boolean(followerChannel?.live_ready)}
               details={[
-                `账户 ${rangeChannel?.account_configured ? "已配置" : "未配置"}`,
-                "策略 未接入",
-                `路由 ${rangeChannel?.gateway_binding === "active" ? "已备好" : "待配置"}`,
+                `账户 ${followerChannel?.account_configured ? "已配置" : "未配置"}`,
+                "AI 决策 复用账号1",
+                `路由 ${followerChannel?.gateway_binding === "active" ? "已备好" : "待配置"}`,
               ]}
             />
           </div>
           <div className="mt-3 rounded-xl border border-[#854d0e] bg-[#241806] p-3 text-xs leading-5 text-[#facc15]">
-            当前按你的要求采用“单账户独立风控”：趋势账户和震荡账户各自使用配置的杠杆硬上限（当前 {num(riskCap, 1)}x）。组合总风险允许叠加，但控制台会单独展示，不能把它误认为一个账户限制。
+            当前按你的要求采用“一次策略信号 + 一次 DeepSeek 决策 + 多账户独立裁剪”：账号1先执行，账号2跟随复制同一订单意图。每个 Gate 账户按自己的余额、杠杆上限和跟随比例单独计算仓位。
           </div>
         </Surface>
         <RuntimeModePanel executionMode={executionMode} operationCode={operationCode} busy={busy} postAction={postAction} />
@@ -3293,8 +3312,10 @@ function ExecutionWorkspace({
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 2xl:grid-cols-4">
         <Surface title={<><Wallet size={13} /> 账户与风控</>}>
           <div className="grid grid-cols-2 gap-3">
-            <Metric label="USDT总额" value={num(balance?.total_usdt ?? balance?.usdt_total ?? usdt.total)} />
-            <Metric label="USDT可用" value={num(balance?.free_usdt ?? balance?.usdt_free ?? usdt.free)} />
+            <Metric label="账号1 USDT总额" value={num(balance?.total_usdt ?? balance?.usdt_total ?? usdt.total)} />
+            <Metric label="账号1 USDT可用" value={num(balance?.free_usdt ?? balance?.usdt_free ?? usdt.free)} />
+            <Metric label="账号2 USDT总额" value={followerBalance?.ok === false ? "未配置" : num(followerBalance?.total_usdt ?? followerBalance?.usdt_total ?? followerUsdt.total)} tone={followerBalance?.ok === false ? "warn" : undefined} />
+            <Metric label="账号2 USDT可用" value={followerBalance?.ok === false ? "--" : num(followerBalance?.free_usdt ?? followerBalance?.usdt_free ?? followerUsdt.free)} />
             <Metric label="杠杆硬上限" value={`${num(riskCap, 1)}x`} />
             <Metric label="最低AI置信度" value={num(riskSummary?.min_confidence_to_trade ?? status?.risk?.min_confidence_to_trade, 2)} />
           </div>
@@ -3463,7 +3484,7 @@ function AccountSlotManager({
   return (
     <Surface title={<><KeyRound size={13} /> 双账户 API 槽位</>}>
       <div className="grid grid-cols-1 gap-3 2xl:grid-cols-2">
-        {(["trend", "range"] as const).map((slot) => (
+        {(["trend", "follower"] as const).map((slot) => (
           <AccountSlotCard
             key={slot}
             slot={slot}
@@ -3483,14 +3504,14 @@ function AccountSlotCard({
   busy,
   postAction,
 }: {
-  slot: "trend" | "range";
+  slot: "trend" | "follower";
   item?: ExecutionAccountSlot;
   busy: boolean;
   postAction: (path: string, body: Record<string, unknown>) => Promise<void>;
 }) {
   const [apiKey, setApiKey] = useState("");
   const [apiSecret, setApiSecret] = useState("");
-  const label = slot === "trend" ? "账号1：趋势策略" : "账号2：震荡策略";
+  const label = slot === "trend" ? "账号1：趋势策略" : "账号2：趋势跟随";
   const submit = async () => {
     await postAction("/api/execution/accounts/secret", {
       operator_id: "console",
@@ -3507,7 +3528,7 @@ function AccountSlotCard({
       <div className="flex items-center justify-between gap-3">
         <div>
           <div className="font-semibold text-[#e5eefb]">{item?.label || label}</div>
-          <div className="mt-1 text-[11px] text-[#7b8798]">Gate.io USDT 永续 / {slot === "trend" ? "趋势策略" : "震荡策略"}</div>
+          <div className="mt-1 text-[11px] text-[#7b8798]">Gate.io USDT 永续 / {slot === "trend" ? "趋势策略" : "趋势跟随"}</div>
         </div>
         <span className={`rounded-full px-3 py-1 text-[11px] ${item?.configured ? "bg-[#052e1a] text-[#22c55e]" : "bg-[#241806] text-[#facc15]"}`}>
           {item?.configured ? "已配置" : "未配置"}

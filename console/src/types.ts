@@ -44,10 +44,10 @@ export type StrategyProfile = {
 };
 
 export type StrategyChannel = {
-  channel: "trend" | "range";
+  channel: "trend" | "follower";
   label: string;
-  strategy_type: "trend" | "range";
-  account_slot: "trend" | "range";
+  strategy_type: "trend" | "trend_follower";
+  account_slot: "trend" | "follower";
   account_label: string;
   enabled: boolean;
   executable: boolean;
@@ -129,10 +129,10 @@ export type WorkerHeartbeatDetail = {
 };
 
 export type ExecutionAccountSlot = {
-  slot: "trend" | "range";
+  slot: "trend" | "follower";
   label: string;
   exchange: string;
-  strategy_type: "trend" | "range";
+  strategy_type: "trend" | "trend_follower";
   configured: boolean;
   version: number;
   key_tail: string;

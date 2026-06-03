@@ -96,7 +96,7 @@ class RuntimeModeRequest(BaseModel):
 
 class AccountSecretUpdateRequest(BaseModel):
     operator_id: str = Field(default="console")
-    account_slot: Literal["trend", "range"]
+    account_slot: Literal["trend", "follower", "range"]
     api_key: str = Field(min_length=8)
     api_secret: str = Field(min_length=8)
     exchange: Literal["gateio"] = "gateio"
@@ -824,11 +824,12 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
 
     @app.get("/api/account/balance")
     async def account_balance(
-        account_slot: Literal["default", "trend", "range"] = "trend",
+        account_slot: Literal["default", "trend", "follower", "range"] = "trend",
         prefer_live: bool = True,
     ) -> dict[str, Any]:
         ctx = _ctx(app)
         ctx.reload()
+        account_slot = _canonical_account_slot(account_slot)
         configured_slot = _account_slot_configured(account_slot)
         runtime_mode = execution_mode_from_config(ctx.config)
         live_readonly = prefer_live and runtime_mode == "mock" and configured_slot
@@ -883,7 +884,8 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         ctx.reload()
         if ctx.store is None:
             raise HTTPException(status_code=500, detail="store_closed")
-        service = SecretService.GATEIO_TREND if body.account_slot == "trend" else SecretService.GATEIO_RANGE
+        account_slot = _canonical_account_slot(body.account_slot)
+        service = SecretService.GATEIO_TREND if account_slot == "trend" else SecretService.GATEIO_FOLLOWER
         env_key, env_secret = SecretUpdateManager.KEY_MAP[service]
         manager = SecretUpdateManager(
             ctx.store,
@@ -903,12 +905,12 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {
             "ok": True,
-            "account_slot": body.account_slot,
+            "account_slot": account_slot,
             "service": service.value,
             "version": record.version,
             "key_tail": record.key_tail,
             "secret_tail": record.secret_tail,
-            "message": f"{_account_slot_label(body.account_slot)} API 已更新，明文只写入运行密钥文件，审计记录已脱敏。",
+            "message": f"{_account_slot_label(account_slot)} API 已更新，明文只写入运行密钥文件，审计记录已脱敏。",
         }
 
     @app.get("/api/positions")
@@ -1396,10 +1398,21 @@ def _agent_gateway_status() -> dict[str, Any]:
     }
 
 
+
+
+def _canonical_account_slot(slot: str) -> str:
+    if slot in {"default", "trend"}:
+        return "trend"
+    if slot in {"follower", "range"}:
+        return "follower"
+    return slot
+
+
 def _account_slot_configured(slot: str) -> bool:
+    slot = _canonical_account_slot(slot)
     env_map = {
         "trend": ("GATEIO_TREND_API_KEY", "GATEIO_TREND_API_SECRET"),
-        "range": ("GATEIO_RANGE_API_KEY", "GATEIO_RANGE_API_SECRET"),
+        "follower": ("GATEIO_FOLLOWER_API_KEY", "GATEIO_FOLLOWER_API_SECRET"),
         "default": ("GATEIO_API_KEY", "GATEIO_API_SECRET"),
     }
     pair = env_map.get(slot)
@@ -1412,7 +1425,21 @@ def _account_slot_configured(slot: str) -> bool:
     if slot == "trend":
         fallback_key, fallback_secret = env_map["default"]
         return bool(os.getenv(fallback_key, "").strip()) and bool(os.getenv(fallback_secret, "").strip())
+    if slot == "follower":
+        legacy_key = os.getenv("GATEIO_RANGE_API_KEY", "").strip()
+        legacy_secret = os.getenv("GATEIO_RANGE_API_SECRET", "").strip()
+        return bool(legacy_key and legacy_secret)
     return False
+
+
+def _ai_sizing_tiers() -> list[dict[str, Any]]:
+    return [
+        {"tier": "block", "label": "阻断", "position_pct": 0},
+        {"tier": "weak", "label": "弱仓", "position_pct": 25},
+        {"tier": "normal", "label": "标准仓", "position_pct": 50},
+        {"tier": "strong", "label": "强仓", "position_pct": 75},
+        {"tier": "full", "label": "满仓", "position_pct": 100},
+    ]
 
 
 def _strategy_channels(ctx: ConsoleContext) -> list[dict[str, Any]]:
@@ -1424,7 +1451,16 @@ def _strategy_channels(ctx: ConsoleContext) -> list[dict[str, Any]]:
     trend_enabled = [profile for profile in profiles if profile.get("strategy_type") == "trend" and profile.get("enabled")]
     trend_authorized = [profile for profile in trend_enabled if profile.get("opening_authorized")]
     trend_account = accounts.get("trend", {})
-    range_account = accounts.get("range", {})
+    follower_account = accounts.get("follower", {})
+    active_followers = [follower for follower in ctx.config.followers if follower.enabled]
+    follower_ready = bool(
+        trend_enabled
+        and trend_authorized
+        and not state.opening_paused
+        and trend_account.get("configured")
+        and follower_account.get("configured")
+        and active_followers
+    )
     return [
         {
             "channel": "trend",
@@ -1444,44 +1480,34 @@ def _strategy_channels(ctx: ConsoleContext) -> list[dict[str, Any]]:
             "live_ready": bool(trend_enabled and trend_authorized and not state.opening_paused and trend_account.get("configured")),
             "ai_sizing_tiers": _ai_sizing_tiers(),
             "notes": [
-                "Strategy signal is mandatory before AI can confirm an entry.",
-                "DeepSeek confidence is displayed as a percentage but remains subject to RiskManager clipping.",
-                "Live execution is routed to the trend Gate.io account slot.",
+                "策略信号必须先由本地趋势策略触发，AI 不能凭空开仓。",
+                "DeepSeek 只做五档仓位确认、降仓或阻断，最终仍受 RiskManager 裁剪。",
+                "真实执行路由到账号1 Gate.io 趋势账户。",
             ],
         },
         {
-            "channel": "range",
-            "label": "震荡策略运行",
-            "strategy_type": "range",
-            "account_slot": "range",
-            "account_label": range_account.get("label", _account_slot_label("range")),
-            "enabled": False,
-            "executable": False,
-            "status": "reserved",
+            "channel": "follower",
+            "label": "账号2跟随执行",
+            "strategy_type": "trend_follower",
+            "account_slot": "follower",
+            "account_label": follower_account.get("label", _account_slot_label("follower")),
+            "enabled": bool(active_followers),
+            "executable": bool(active_followers),
+            "status": "ready" if follower_ready else "blocked",
             "mode": execution_mode_from_config(ctx.config),
-            "opening_paused": True,
-            "authorized_symbols": [],
+            "opening_paused": state.opening_paused,
+            "authorized_symbols": [profile["symbol"] for profile in trend_authorized],
             "configured_symbols": symbols,
-            "account_configured": bool(range_account.get("configured")),
-            "gateway_binding": range_account.get("gateway_binding", "missing_credentials"),
-            "live_ready": False,
+            "account_configured": bool(follower_account.get("configured")),
+            "gateway_binding": follower_account.get("gateway_binding", "missing_credentials"),
+            "live_ready": follower_ready,
             "ai_sizing_tiers": _ai_sizing_tiers(),
             "notes": [
-                "Range strategy is intentionally blocked until its own backtest, risk rules, and account gateway are implemented.",
-                "It must not inherit the trend strategy's live readiness.",
-                "Future candidates: Bollinger mean reversion, grid, and boxed-range high-sell-low-buy.",
+                "账号2不独立生成策略信号，也不单独调用 DeepSeek。",
+                "账号2复用账号1通过风控的订单意图，再按自己的余额、杠杆上限和跟随比例裁剪仓位。",
+                "账号2失败只写入审计，不回滚账号1订单。",
             ],
         },
-    ]
-
-
-def _ai_sizing_tiers() -> list[dict[str, Any]]:
-    return [
-        {"min_confidence_pct": 0, "max_confidence_pct": 54, "label": "阻断", "position_pct": 0},
-        {"min_confidence_pct": 55, "max_confidence_pct": 64, "label": "试探", "position_pct": 30},
-        {"min_confidence_pct": 65, "max_confidence_pct": 74, "label": "降仓", "position_pct": 55},
-        {"min_confidence_pct": 75, "max_confidence_pct": 84, "label": "标准", "position_pct": 80},
-        {"min_confidence_pct": 85, "max_confidence_pct": 100, "label": "满仓候选", "position_pct": 100},
     ]
 
 
@@ -1496,12 +1522,12 @@ def _execution_account_slots(ctx: ConsoleContext) -> list[dict[str, Any]]:
             "env_secret": "GATEIO_TREND_API_SECRET",
         },
         {
-            "slot": "range",
-            "label": _account_slot_label("range"),
-            "strategy_type": "range",
-            "service": SecretService.GATEIO_RANGE,
-            "env_key": "GATEIO_RANGE_API_KEY",
-            "env_secret": "GATEIO_RANGE_API_SECRET",
+            "slot": "follower",
+            "label": _account_slot_label("follower"),
+            "strategy_type": "trend_follower",
+            "service": SecretService.GATEIO_FOLLOWER,
+            "env_key": "GATEIO_FOLLOWER_API_KEY",
+            "env_secret": "GATEIO_FOLLOWER_API_SECRET",
         },
     ]
     output: list[dict[str, Any]] = []
@@ -1511,13 +1537,19 @@ def _execution_account_slots(ctx: ConsoleContext) -> list[dict[str, Any]]:
         payload = latest[0]["payload"] if latest else {}
         has_env = bool(os.getenv(slot["env_key"], "").strip()) and bool(os.getenv(slot["env_secret"], "").strip())
         uses_legacy_default = False
+        uses_legacy_range = False
         if slot["slot"] == "trend" and not has_env:
             uses_legacy_default = _account_slot_configured("default")
             has_env = uses_legacy_default
+        if slot["slot"] == "follower" and not has_env:
+            uses_legacy_range = bool(os.getenv("GATEIO_RANGE_API_KEY", "").strip()) and bool(os.getenv("GATEIO_RANGE_API_SECRET", "").strip())
+            has_env = uses_legacy_range
         configured = bool(latest or has_env)
         key_tail_value = os.getenv(slot["env_key"], "")
         if uses_legacy_default:
             key_tail_value = os.getenv("GATEIO_API_KEY", "")
+        if uses_legacy_range:
+            key_tail_value = os.getenv("GATEIO_RANGE_API_KEY", "")
         output.append(
             {
                 "slot": slot["slot"],
@@ -1530,17 +1562,22 @@ def _execution_account_slots(ctx: ConsoleContext) -> list[dict[str, Any]]:
                 "secret_tail": payload.get("secret_tail", "-"),
                 "gateway_binding": "active" if configured else "missing_credentials",
                 "live_routing": "ready_after_trade_pin_and_risk_checks" if configured else "blocked_missing_credentials",
-                "credential_source": "legacy_default_gateio" if uses_legacy_default else slot["slot"],
+                "credential_source": "legacy_default_gateio"
+                if uses_legacy_default
+                else "legacy_range_gateio"
+                if uses_legacy_range
+                else slot["slot"],
             }
         )
     return output
 
 
 def _account_slot_label(slot: str) -> str:
+    slot = _canonical_account_slot(slot)
     if slot == "trend":
-        return "账号1：趋势策略"
-    if slot == "range":
-        return "账号2：震荡策略"
+        return "账号1：趋势策略账户"
+    if slot == "follower":
+        return "账号2：趋势跟随账户"
     return slot
 
 

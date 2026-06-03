@@ -35,6 +35,14 @@ ai:
   - ETH/USDT:USDT
   - BTC/USDT:USDT
   - SOL/USDT:USDT
+followers:
+- enabled: true
+  account_slot: follower
+  label: 账号2：趋势跟随账户
+  follow_ratio: 1.0
+  max_leverage: 4.0
+  mirror_entries: true
+  mirror_exits: true
 symbols:
 - symbol: ETH/USDT:USDT
   timeframe: 1h
