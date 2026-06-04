@@ -3553,33 +3553,40 @@ function RuntimeModePanel({
   busy: boolean;
   postAction: (path: string, body: Record<string, unknown>) => Promise<void>;
 }) {
+  const isLive = executionMode === "live";
+  const isMock = executionMode === "mock";
   return (
     <Surface title={<><Power size={13} /> 模拟 / 实盘模式</>}>
       <div className="grid grid-cols-2 gap-2">
         <button
-          className={`${button} justify-center ${executionMode === "mock" ? "border-[#22c55e] text-[#22c55e]" : ""}`}
-          disabled={busy}
+          className={`${button} justify-center ${isMock ? "border-[#22c55e] bg-[#052e1a] text-[#86efac]" : ""}`}
+          disabled={busy || isMock}
           onClick={() => postAction("/api/control/runtime-mode", { operator_id: "console", dry_run: true })}
         >
-          模拟运行
+          {isMock ? "当前模拟" : "切回模拟"}
         </button>
         <button
-          className={`${button} justify-center ${executionMode === "live" ? "border-[#facc15] text-[#facc15]" : ""}`}
-          disabled={busy || !isAdmin}
+          className={`${button} justify-center ${isLive ? "border-[#facc15] bg-[#241806] text-[#facc15]" : ""}`}
+          disabled={busy || !isAdmin || isLive}
           onClick={() => postAction("/api/control/runtime-mode", { operator_id: "console", dry_run: false })}
         >
-          开启实盘
+          {isLive ? "当前实盘" : "开启实盘"}
         </button>
       </div>
       <div className="mt-2 text-[11px] leading-5 text-[#94a3b8]">
         实盘/模拟切换不再使用 Trade PIN 或操作验证码。只有管理员账号可以切换；普通账号只能查看和调整自己账户的杠杆上限。
       </div>
+      {isLive ? (
+        <div className="mt-2 rounded-lg border border-[#854d0e] bg-[#241806] px-2 py-1.5 text-[11px] leading-5 text-[#facc15]">
+          当前已经切到实盘网关；能否自动开仓仍取决于授权标的、readiness、AI 五档和本地风控，不等于立即允许下单。
+        </div>
+      ) : null}
       <div className="mt-2 grid grid-cols-2 gap-2 text-[11px]">
         <div className={`rounded-lg border px-2 py-1.5 ${isAdmin ? "border-[#14532d] bg-[#052e1a] text-[#86efac]" : "border-[#854d0e] bg-[#241806] text-[#facc15]"}`}>
           当前权限：{isAdmin ? "管理员" : "只读账户"}
         </div>
-        <div className={`rounded-lg border px-2 py-1.5 ${executionMode === "live" ? "border-[#854d0e] bg-[#241806] text-[#facc15]" : "border-[#14532d] bg-[#052e1a] text-[#86efac]"}`}>
-          当前模式：{executionMode === "live" ? "实盘" : "模拟"}
+        <div className={`rounded-lg border px-2 py-1.5 ${isLive ? "border-[#854d0e] bg-[#241806] text-[#facc15]" : "border-[#14532d] bg-[#052e1a] text-[#86efac]"}`}>
+          当前模式：{isLive ? "实盘" : "模拟"}
         </div>
       </div>
     </Surface>
