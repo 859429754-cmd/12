@@ -962,6 +962,31 @@ class TradingApp:
             await self._cancel_native_stop_order(symbol)
             self.trend_state.clear(symbol)
             self.store.insert("orders", order, symbol)
+            await self._mirror_exit_to_followers(
+                symbol,
+                signal,
+                AiDecision(
+                    symbol=symbol,
+                    regime="trend",
+                    direction=Side.FLAT,
+                    confidence=1.0,
+                    multiplier=1.0,
+                    news_alignment="neutral",
+                    orderflow_alignment="neutral",
+                    dense_zone_position="software_fixed_atr_stop",
+                    pattern_type="stop_loss_exit",
+                    trend_confirmation_score=1.0,
+                    range_risk_score=0.0,
+                    news_risk_score=0.0,
+                    orderflow_confirmation_score=0.0,
+                    dense_zone_breakout_score=0.0,
+                    action_suggestion="close",
+                    veto_action="allow",
+                    brief_reason="软件 ATR 止损触发，账户2按账户1退出动作同步平仓。",
+                    reason_codes=["software_fixed_atr_stop", "follower_exit_mirror"],
+                ),
+                "software_fixed_atr_stop",
+            )
         return order
 
     async def minimum_order_checks_for_active_symbols(self) -> list[dict]:

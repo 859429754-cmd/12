@@ -17,6 +17,7 @@ from ai_quant_trader.core.models import (
     SignalAction,
     StrategySignal,
     VetoAction,
+    OrderRequest,
 )
 from ai_quant_trader.execution.gateway.mock import MockExchangeGateway
 
@@ -190,5 +191,89 @@ async def test_trading_cycle_opens_places_stop_then_exits_and_cancels_stop(tmp_p
         latest_lifecycle = app.store.fetch_payloads("order_lifecycle", symbol="ETH/USDT:USDT", limit=20)
         assert any(row["payload"].get("order_type") == "cancel" for row in latest_lifecycle)
         assert app.trend_state.get("ETH/USDT:USDT") is None
+    finally:
+        await app.close()
+
+
+@pytest.mark.asyncio
+async def test_software_atr_stop_mirrors_exit_to_follower(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = tmp_path / "config.yaml"
+    db_path = tmp_path / "trader.sqlite3"
+    audit_path = tmp_path / "audit.jsonl"
+    _write_config(config_path, db_path, audit_path)
+    with config_path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            """
+followers:
+  - enabled: true
+    account_slot: "follower"
+    label: "账号2：趋势跟随账户"
+    follow_ratio: 1.0
+    max_leverage: 4.0
+    mirror_entries: true
+    mirror_exits: true
+"""
+        )
+
+    app = TradingApp(str(config_path))
+    app.execution = MockExchangeGateway(str(tmp_path / "mock_trend.json"))
+    app.follower_execution = MockExchangeGateway(str(tmp_path / "mock_follower.json"))
+    app.order_lifecycle.gateway_mode = "mock"
+    app.follower_order_lifecycle.gateway_mode = "mock"
+
+    entry_signal = StrategySignal(
+        symbol="ETH/USDT:USDT",
+        timeframe="1h",
+        action=SignalAction.LONG,
+        current_price=2000.0,
+        suggested_qty=0.02,
+        signal_strength=0.95,
+        technical_evidence={
+            "strategy_allowed": "trend",
+            "entry_stop_atr": 20.0,
+            "atr": 20.0,
+            "atr_stop_multiple": 1.5,
+        },
+    )
+
+    async def stop_candles(*args, **kwargs):  # noqa: ANN002, ANN003
+        return pd.DataFrame(
+            {
+                "timestamp": pd.date_range("2026-01-01", periods=5, freq="1min", tz="UTC"),
+                "open": [2000.0] * 5,
+                "high": [2005.0] * 5,
+                "low": [1969.0] * 5,
+                "close": [1970.0] * 5,
+                "volume": [1000.0] * 5,
+            }
+        )
+
+    monkeypatch.setattr(app.market, "fetch_ohlcv", stop_candles)
+
+    try:
+        for gateway in [app.execution, app.follower_execution]:
+            await gateway.create_market_order(
+                OrderRequest(
+                    symbol="ETH/USDT:USDT",
+                    side="buy",
+                    amount=0.02,
+                    reduce_only=False,
+                    client_order_id=f"test_open_{id(gateway)}",
+                    reason="test_seed_long",
+                )
+            )
+        app._record_trend_entry_state("ETH/USDT:USDT", entry_signal, 2000.0)
+        app._record_trend_entry_state_for_store(app.follower_trend_state, "ETH/USDT:USDT", entry_signal, 2000.0)
+
+        order = await app._enforce_fixed_atr_stop_once("ETH/USDT:USDT", "1h")
+
+        assert order is not None
+        trend_position = (await app.execution.fetch_positions(["ETH/USDT:USDT"]))[0]
+        follower_position = (await app.follower_execution.fetch_positions(["ETH/USDT:USDT"]))[0]
+        assert trend_position.side == Side.FLAT
+        assert follower_position.side == Side.FLAT
+        follower_rows = app.store.fetch_payloads("follower_executions", symbol="ETH/USDT:USDT", limit=5)
+        assert any(row["payload"].get("status") == "exit_mirrored" for row in follower_rows)
+        assert any(row["payload"].get("reason") == "software_fixed_atr_stop" for row in follower_rows)
     finally:
         await app.close()
