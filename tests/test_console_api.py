@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import asyncio
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -413,6 +414,52 @@ def test_account_balance_does_not_fallback_to_mock_when_gate_readonly_fails(tmp_
     assert body["ok"] is False
     assert body["balance_source"] == "gate_live_readonly"
     assert body["usdt_total"] is None
+    assert "10000" not in body["message"]
+
+
+def test_account_balance_returns_cached_snapshot_when_gate_is_slow(tmp_path: Path, monkeypatch) -> None:
+    for key in ["GATEIO_API_KEY", "GATEIO_API_SECRET", "GATEIO_TREND_API_KEY", "GATEIO_TREND_API_SECRET"]:
+        monkeypatch.setenv(key, "")
+    config_path = tmp_path / "config.yaml"
+    db_path = tmp_path / "trader.sqlite3"
+    write_config(config_path, db_path, tmp_path / "audit.jsonl", ["ETH/USDT:USDT"])
+
+    class SlowGateway:
+        async def fetch_balance_summary(self) -> dict[str, object]:
+            await asyncio.sleep(0.2)
+            return {"ok": True, "usdt_total": 999.0}
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(server, "_account_slot_configured", lambda slot: slot == "trend")
+    monkeypatch.setattr(server, "create_exchange_gateway", lambda mode_or_config, account_slot="default": SlowGateway())
+    client = TestClient(create_app(str(config_path)))
+    store = server._ctx(client.app).store
+    assert store is not None
+    store.insert(
+        "account_balance_snapshots",
+        {
+            "ok": True,
+            "execution_mode": "mock",
+            "balance_source": "gate_live_readonly",
+            "read_only_live_balance": True,
+            "usdt_total": 456.0,
+            "usdt_free": 400.0,
+            "usdt_used": 56.0,
+        },
+        symbol="trend",
+    )
+
+    response = client.get("/api/account/balance?account_slot=trend&timeout_seconds=0.1")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is False
+    assert body["cached"] is True
+    assert body["stale"] is True
+    assert body["balance_source"] == "cached_live_balance"
+    assert body["usdt_total"] == 456.0
     assert "10000" not in body["message"]
 
 
@@ -867,6 +914,35 @@ def test_news_latest_can_include_full_payload_when_explicit(tmp_path: Path) -> N
     body = response.json()
     assert body["latest_digest"]["items"][0]["summary"] == "Full payload detail"
     assert body["items"][0]["payload"]["items"][0]["title"] == "Detailed row"
+
+
+def test_news_latest_limits_timeline_payload_size(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    db_path = tmp_path / "trader.sqlite3"
+    write_config(config_path, db_path, tmp_path / "audit.jsonl", ["ETH/USDT:USDT"])
+    client = TestClient(create_app(str(config_path)))
+    store = server._ctx(client.app).store
+    assert store is not None
+    store.insert(
+        "news_summaries",
+        {
+            "generated_at": datetime.now(UTC).isoformat(),
+            "summary": "timeline trim test",
+            "items": [
+                {"title": f"Headline {idx}", "summary": "Long detailed news " * 200, "source": "test"}
+                for idx in range(10)
+            ],
+            "warnings": [],
+        },
+    )
+
+    response = client.get("/api/news/latest?limit=3&auto_refresh=false")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["timeline"]) == 3
+    assert len(body["timeline"][0]["summary"]) <= 900
+    assert "raw_summary" not in body["timeline"][0]
 
 
 def test_news_row_age_detects_stale_cache() -> None:

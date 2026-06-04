@@ -57,6 +57,7 @@ class SQLiteStore:
             "maintenance_runs",
             "ai_call_budget_events",
             "follower_executions",
+            "account_balance_snapshots",
         ]
         with self._lock:
             for table in tables:

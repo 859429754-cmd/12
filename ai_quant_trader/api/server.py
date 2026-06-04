@@ -804,8 +804,22 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
                 if _news_row_is_stale(latest, max_age_minutes):
                     digest = await _collect_news_digest(ctx.config_path)
                     rows = ctx.table("news_summaries", limit=limit)
-                    return _news_latest_response(rows, digest, max_age_minutes, compact=compact, include_payload=include_payload)
-        return _news_latest_response(rows, None, max_age_minutes, compact=compact, include_payload=include_payload)
+                    return _news_latest_response(
+                        rows,
+                        digest,
+                        max_age_minutes,
+                        compact=compact,
+                        include_payload=include_payload,
+                        timeline_limit=limit,
+                    )
+        return _news_latest_response(
+            rows,
+            None,
+            max_age_minutes,
+            compact=compact,
+            include_payload=include_payload,
+            timeline_limit=limit,
+        )
 
     @app.post("/api/news/refresh")
     async def refresh_news(body: ProposalAction) -> dict[str, Any]:
@@ -892,6 +906,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
     async def account_balance(
         account_slot: Literal["default", "trend", "follower", "range"] = "trend",
         prefer_live: bool = True,
+        timeout_seconds: float = Query(default=4.0, ge=0.1, le=20.0),
     ) -> dict[str, Any]:
         ctx = _ctx(app)
         ctx.reload()
@@ -902,15 +917,35 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         gateway_mode = "live" if live_readonly else runtime_mode
         execution = create_exchange_gateway(gateway_mode, account_slot=account_slot)
         try:
-            summary = await execution.fetch_balance_summary()
-            return {
+            summary = await asyncio.wait_for(execution.fetch_balance_summary(), timeout=timeout_seconds)
+            response = {
+                "ok": True,
                 "dry_run": runtime_mode == "mock",
                 "execution_mode": runtime_mode,
                 "balance_source": "gate_live_readonly" if live_readonly else gateway_mode,
                 "read_only_live_balance": live_readonly,
+                "cached": False,
                 **summary,
             }
+            if ctx.store is not None and gateway_mode == "live":
+                ctx.store.insert("account_balance_snapshots", response, symbol=account_slot)
+            return response
         except Exception as exc:
+            cached = _latest_account_balance_snapshot(ctx, account_slot)
+            if cached is not None and gateway_mode == "live":
+                payload = dict(cached.get("payload") or {})
+                payload.update(
+                    {
+                        "ok": False,
+                        "cached": True,
+                        "stale": True,
+                        "balance_source": "cached_live_balance",
+                        "cache_created_at": cached.get("created_at"),
+                        "error_type": type(exc).__name__,
+                        "message": "Gate.io 余额读取超时或失败，控制台显示最近一次成功快照；新开仓仍受 readiness 和实盘对账限制。",
+                    }
+                )
+                return payload
             if live_readonly:
                 return {
                     "ok": False,
@@ -1540,6 +1575,12 @@ def _account_slot_configured(slot: str) -> bool:
     if slot == "follower":
         return False
     return False
+
+
+def _latest_account_balance_snapshot(ctx: ConsoleContext, account_slot: str) -> dict[str, Any] | None:
+    if ctx.store is None:
+        return None
+    return ctx.store.fetch_latest("account_balance_snapshots", symbol=_canonical_account_slot(account_slot))
 
 
 def _ai_sizing_tiers() -> list[dict[str, Any]]:
@@ -2658,11 +2699,13 @@ def _news_latest_response(
     max_age_minutes: int,
     compact: bool = False,
     include_payload: bool = False,
+    timeline_limit: int | None = None,
 ) -> dict[str, Any]:
     latest_payload = fresh_digest.model_dump(mode="json") if fresh_digest else ((rows[0].get("payload") if rows else None) or {})
     generated_at = latest_payload.get("generated_at") or (rows[0].get("created_at") if rows else None)
     age_minutes = _minutes_since(generated_at)
-    timeline = [_sanitize_news_item(item) for item in (latest_payload.get("items") or [])]
+    item_limit = max(1, timeline_limit or len(rows) or 1)
+    timeline = [_sanitize_news_item(item) for item in (latest_payload.get("items") or [])[:item_limit]]
     warnings = latest_payload.get("warnings") or []
     if timeline and any(str(item.get("title") or item.get("summary") or "").strip() for item in timeline):
         warnings = [warning for warning in warnings if not str(warning).startswith(("rss_error:", "scrape_error:"))]
@@ -2707,11 +2750,27 @@ def _compact_news_digest(payload: dict[str, Any]) -> dict[str, Any]:
 def _sanitize_news_item(item: Any) -> dict[str, Any]:
     if not isinstance(item, dict):
         return {}
-    output = dict(item)
-    for key in ("title", "summary", "raw_title", "raw_summary", "source"):
-        if key in output and output[key] is not None:
-            output[key] = _repair_mojibake_text(str(output[key]))
-    return output
+    output = {
+        "title": _short_news_text(item.get("title") or item.get("headline") or item.get("summary"), 240),
+        "headline": _short_news_text(item.get("headline") or item.get("title") or item.get("summary"), 240),
+        "summary": _short_news_text(item.get("summary") or item.get("title") or item.get("headline"), 900),
+        "source": _short_news_text(item.get("source") or "新闻源", 80),
+        "published_at": item.get("published_at"),
+        "time": item.get("time"),
+        "category": item.get("category"),
+        "credibility": item.get("credibility"),
+        "importance": item.get("importance"),
+        "bias": item.get("bias"),
+        "news_direction": item.get("news_direction"),
+    }
+    return {key: value for key, value in output.items() if value is not None and value != ""}
+
+
+def _short_news_text(value: Any, limit: int) -> str:
+    text = _repair_mojibake_text(str(value or ""))
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)].rstrip() + "…"
 
 
 def _repair_mojibake_text(value: str) -> str:
