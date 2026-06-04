@@ -1508,18 +1508,21 @@ async def main() -> None:
     args = parser.parse_args()
     app = TradingApp()
     try:
-        if args.once:
-            await app.run_once(equity=args.equity)
-        elif args.news_worker:
-            await app.run_news_worker()
-        elif args.trading_worker:
-            await app.run_trading_worker(equity=args.equity)
-        elif args.price_monitor_worker:
-            await app.run_price_monitor_worker(equity=args.equity)
-        elif args.order_status_worker:
-            await app.run_order_status_worker()
-        else:
-            await app.run_forever(equity=args.equity)
+        try:
+            if args.once:
+                await app.run_once(equity=args.equity)
+            elif args.news_worker:
+                await app.run_news_worker()
+            elif args.trading_worker:
+                await app.run_trading_worker(equity=args.equity)
+            elif args.price_monitor_worker:
+                await app.run_price_monitor_worker(equity=args.equity)
+            elif args.order_status_worker:
+                await app.run_order_status_worker()
+            else:
+                await app.run_forever(equity=args.equity)
+        except asyncio.CancelledError:
+            logger.info("shutdown_requested")
     finally:
         await app.close()
 
