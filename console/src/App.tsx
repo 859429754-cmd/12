@@ -212,10 +212,11 @@ export function App() {
   }, [load, session]);
 
   useEffect(() => {
+    if (session?.auth_required && !session.authenticated) return;
     void refreshTicker();
     const id = window.setInterval(() => void refreshTicker(), 10_000);
     return () => window.clearInterval(id);
-  }, [refreshTicker]);
+  }, [refreshTicker, session?.auth_required, session?.authenticated]);
 
   useEffect(() => {
     if (window.location.hash.replace("#", "") !== workspace) {
