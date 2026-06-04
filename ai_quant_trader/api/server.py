@@ -2732,7 +2732,7 @@ def _news_latest_response(
         "age_minutes": age_minutes,
         "stale": age_minutes is None or age_minutes > max_age_minutes,
         "warnings": warnings,
-        "summary": _repair_mojibake_text(str(latest_payload.get("summary") or "")),
+        "summary": _short_news_text(latest_payload.get("summary"), 1500),
     }
     if compact:
         response["items"] = []
@@ -2753,7 +2753,7 @@ def _compact_news_row(row: dict[str, Any]) -> dict[str, Any]:
 def _compact_news_digest(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "generated_at": payload.get("generated_at"),
-        "summary": _repair_mojibake_text(str(payload.get("summary") or "")),
+        "summary": _short_news_text(payload.get("summary"), 1500),
         "news_direction": payload.get("news_direction"),
         "crypto_sentiment": payload.get("crypto_sentiment"),
         "macro_risk": payload.get("macro_risk"),

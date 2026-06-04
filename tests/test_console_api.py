@@ -915,6 +915,8 @@ def test_news_latest_defaults_to_lightweight_rows(tmp_path: Path) -> None:
     assert body["timeline"][0]["title"] == "Fed keeps policy restrictive"
     assert "items" not in body["latest_digest"]
     assert body["latest_digest"]["item_count"] == 1
+    assert len(body["latest_digest"]["summary"]) <= 1500
+    assert len(body["summary"]) <= 1500
     assert "Large cached detail" not in json.dumps(body["items"], ensure_ascii=False)
 
 
