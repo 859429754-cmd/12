@@ -790,6 +790,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         max_age_minutes: int = Query(default=65, ge=15, le=24 * 60),
         auto_refresh: bool = Query(default=True),
         compact: bool = Query(default=False),
+        include_payload: bool = Query(default=False),
     ) -> dict[str, Any]:
         ctx = _ctx(app)
         ctx.reload()
@@ -803,8 +804,8 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
                 if _news_row_is_stale(latest, max_age_minutes):
                     digest = await _collect_news_digest(ctx.config_path)
                     rows = ctx.table("news_summaries", limit=limit)
-                    return _news_latest_response(rows, digest, max_age_minutes, compact=compact)
-        return _news_latest_response(rows, None, max_age_minutes, compact=compact)
+                    return _news_latest_response(rows, digest, max_age_minutes, compact=compact, include_payload=include_payload)
+        return _news_latest_response(rows, None, max_age_minutes, compact=compact, include_payload=include_payload)
 
     @app.post("/api/news/refresh")
     async def refresh_news(body: ProposalAction) -> dict[str, Any]:
@@ -2651,7 +2652,13 @@ async def _collect_news_digest(config_path: str) -> NewsDigest:
         await trading_app.close()
 
 
-def _news_latest_response(rows: list[dict[str, Any]], fresh_digest: NewsDigest | None, max_age_minutes: int, compact: bool = False) -> dict[str, Any]:
+def _news_latest_response(
+    rows: list[dict[str, Any]],
+    fresh_digest: NewsDigest | None,
+    max_age_minutes: int,
+    compact: bool = False,
+    include_payload: bool = False,
+) -> dict[str, Any]:
     latest_payload = fresh_digest.model_dump(mode="json") if fresh_digest else ((rows[0].get("payload") if rows else None) or {})
     generated_at = latest_payload.get("generated_at") or (rows[0].get("created_at") if rows else None)
     age_minutes = _minutes_since(generated_at)
@@ -2660,9 +2667,9 @@ def _news_latest_response(rows: list[dict[str, Any]], fresh_digest: NewsDigest |
     if timeline and any(str(item.get("title") or item.get("summary") or "").strip() for item in timeline):
         warnings = [warning for warning in warnings if not str(warning).startswith(("rss_error:", "scrape_error:"))]
     response = {
-        "items": rows,
+        "items": rows if include_payload else [_compact_news_row(row) for row in rows],
         "timeline": timeline,
-        "latest_digest": latest_payload,
+        "latest_digest": latest_payload if include_payload else _compact_news_digest(latest_payload),
         "generated_at": generated_at,
         "age_minutes": age_minutes,
         "stale": age_minutes is None or age_minutes > max_age_minutes,
@@ -2673,6 +2680,28 @@ def _news_latest_response(rows: list[dict[str, Any]], fresh_digest: NewsDigest |
         response["items"] = []
         response["latest_digest"] = {}
     return response
+
+
+def _compact_news_row(row: dict[str, Any]) -> dict[str, Any]:
+    payload = row.get("payload") or {}
+    return {
+        "id": row.get("id"),
+        "created_at": row.get("created_at"),
+        "symbol": row.get("symbol"),
+        "payload": _compact_news_digest(payload),
+    }
+
+
+def _compact_news_digest(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "generated_at": payload.get("generated_at"),
+        "summary": _repair_mojibake_text(str(payload.get("summary") or "")),
+        "news_direction": payload.get("news_direction"),
+        "crypto_sentiment": payload.get("crypto_sentiment"),
+        "macro_risk": payload.get("macro_risk"),
+        "warnings": payload.get("warnings") or [],
+        "item_count": len(payload.get("items") or []),
+    }
 
 
 def _sanitize_news_item(item: Any) -> dict[str, Any]:

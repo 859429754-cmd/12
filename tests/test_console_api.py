@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -807,6 +808,65 @@ def test_news_latest_compact_omits_heavy_rows(tmp_path: Path, monkeypatch) -> No
     assert body["items"] == []
     assert body["latest_digest"] == {}
     assert body["timeline"][0]["title"] == "Fed says policy path remains data dependent"
+
+
+def test_news_latest_defaults_to_lightweight_rows(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    db_path = tmp_path / "trader.sqlite3"
+    write_config(config_path, db_path, tmp_path / "audit.jsonl", ["ETH/USDT:USDT"])
+    client = TestClient(create_app(str(config_path)))
+    store = server._ctx(client.app).store
+    assert store is not None
+    heavy_summary = "macro context " * 500
+    store.insert(
+        "news_summaries",
+        {
+            "generated_at": datetime.now(UTC).isoformat(),
+            "summary": heavy_summary,
+            "items": [
+                {
+                    "title": "Fed keeps policy restrictive",
+                    "summary": "Large cached detail " * 1000,
+                    "source": "Fed",
+                }
+            ],
+            "warnings": [],
+        },
+    )
+
+    response = client.get("/api/news/latest?limit=1&auto_refresh=false")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["timeline"][0]["title"] == "Fed keeps policy restrictive"
+    assert "items" not in body["latest_digest"]
+    assert body["latest_digest"]["item_count"] == 1
+    assert "Large cached detail" not in json.dumps(body["items"], ensure_ascii=False)
+
+
+def test_news_latest_can_include_full_payload_when_explicit(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    db_path = tmp_path / "trader.sqlite3"
+    write_config(config_path, db_path, tmp_path / "audit.jsonl", ["ETH/USDT:USDT"])
+    client = TestClient(create_app(str(config_path)))
+    store = server._ctx(client.app).store
+    assert store is not None
+    store.insert(
+        "news_summaries",
+        {
+            "generated_at": datetime.now(UTC).isoformat(),
+            "summary": "full payload test",
+            "items": [{"title": "Detailed row", "summary": "Full payload detail", "source": "test"}],
+            "warnings": [],
+        },
+    )
+
+    response = client.get("/api/news/latest?limit=1&auto_refresh=false&include_payload=true")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["latest_digest"]["items"][0]["summary"] == "Full payload detail"
+    assert body["items"][0]["payload"]["items"][0]["title"] == "Detailed row"
 
 
 def test_news_row_age_detects_stale_cache() -> None:
