@@ -212,6 +212,7 @@ export function App() {
   }, [load, session]);
 
   useEffect(() => {
+    if (!session) return;
     if (session?.auth_required && !session.authenticated) return;
     void refreshTicker();
     const id = window.setInterval(() => void refreshTicker(), 10_000);
