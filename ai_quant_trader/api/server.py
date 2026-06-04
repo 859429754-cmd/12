@@ -960,6 +960,21 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
                     "usdt_free": None,
                     "usdt_used": None,
                 }
+            if gateway_mode == "live":
+                return {
+                    "ok": False,
+                    "dry_run": runtime_mode == "mock",
+                    "execution_mode": runtime_mode,
+                    "balance_source": gateway_mode,
+                    "read_only_live_balance": live_readonly,
+                    "cached": False,
+                    "mode": "live_balance_unavailable",
+                    "message": "Gate.io 余额读取超时或失败；控制台不回退模拟资金，新开仓仍受 readiness 和实盘对账限制。",
+                    "error_type": type(exc).__name__,
+                    "usdt_total": None,
+                    "usdt_free": None,
+                    "usdt_used": None,
+                }
             raise
         finally:
             await execution.close()

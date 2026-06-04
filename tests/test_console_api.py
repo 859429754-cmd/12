@@ -463,6 +463,33 @@ def test_account_balance_returns_cached_snapshot_when_gate_is_slow(tmp_path: Pat
     assert "10000" not in body["message"]
 
 
+def test_live_account_balance_failure_returns_unavailable_not_mock(tmp_path: Path, monkeypatch) -> None:
+    config_path = tmp_path / "config.yaml"
+    write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl", ["ETH/USDT:USDT"])
+    config_text = config_path.read_text(encoding="utf-8")
+    config_path.write_text(config_text.replace("  dry_run: true", "  dry_run: false\n  execution_mode: live"), encoding="utf-8")
+
+    class FailingGateway:
+        async def fetch_balance_summary(self) -> dict[str, object]:
+            raise TimeoutError("gate timeout")
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(server, "create_exchange_gateway", lambda mode_or_config, account_slot="default": FailingGateway())
+    client = TestClient(create_app(str(config_path)))
+
+    response = client.get("/api/account/balance?account_slot=trend")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is False
+    assert body["execution_mode"] == "live"
+    assert body["balance_source"] == "live"
+    assert body["usdt_total"] is None
+    assert "10000" not in body["message"]
+
+
 def test_readiness_blocks_failed_backup_integrity(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("GATEIO_API_KEY", "")
     monkeypatch.setenv("GATEIO_API_SECRET", "")
