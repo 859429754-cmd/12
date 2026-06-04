@@ -18,6 +18,8 @@ from ai_quant_trader.core.models import (
     StrategySignal,
     VetoAction,
     OrderRequest,
+    OrderLifecycleEvent,
+    OrderLifecycleStatus,
 )
 from ai_quant_trader.execution.gateway.mock import MockExchangeGateway
 
@@ -275,5 +277,81 @@ followers:
         follower_rows = app.store.fetch_payloads("follower_executions", symbol="ETH/USDT:USDT", limit=5)
         assert any(row["payload"].get("status") == "exit_mirrored" for row in follower_rows)
         assert any(row["payload"].get("reason") == "software_fixed_atr_stop" for row in follower_rows)
+    finally:
+        await app.close()
+
+
+@pytest.mark.asyncio
+async def test_primary_native_stop_fill_mirrors_exit_to_follower(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    db_path = tmp_path / "trader.sqlite3"
+    audit_path = tmp_path / "audit.jsonl"
+    _write_config(config_path, db_path, audit_path)
+    with config_path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            """
+followers:
+  - enabled: true
+    account_slot: "follower"
+    label: "账号2：趋势跟随账户"
+    follow_ratio: 1.0
+    max_leverage: 4.0
+    mirror_entries: true
+    mirror_exits: true
+"""
+        )
+
+    app = TradingApp(str(config_path))
+    app.follower_execution = MockExchangeGateway(str(tmp_path / "mock_follower_native_stop.json"))
+    app.follower_order_lifecycle.gateway_mode = "mock"
+    entry_signal = StrategySignal(
+        symbol="ETH/USDT:USDT",
+        timeframe="1h",
+        action=SignalAction.LONG,
+        current_price=2000.0,
+        suggested_qty=0.02,
+        signal_strength=0.95,
+        technical_evidence={"strategy_allowed": "trend", "entry_stop_atr": 20.0, "atr": 20.0, "atr_stop_multiple": 1.5},
+    )
+
+    try:
+        await app.follower_execution.create_market_order(
+            OrderRequest(
+                symbol="ETH/USDT:USDT",
+                side="buy",
+                amount=0.02,
+                reduce_only=False,
+                client_order_id="test_follower_open_native_stop",
+                reason="test_seed_follower_long",
+            )
+        )
+        app._record_trend_entry_state("ETH/USDT:USDT", entry_signal, 2000.0)
+        app._record_trend_entry_state_for_store(app.follower_trend_state, "ETH/USDT:USDT", entry_signal, 2000.0)
+
+        event = OrderLifecycleEvent(
+            client_order_id="primary_stop_1",
+            symbol="ETH/USDT:USDT",
+            status=OrderLifecycleStatus.FILLED,
+            account_slot="trend",
+            order_type="stop_loss",
+            side="sell",
+            amount=0.02,
+            reduce_only=True,
+            gateway_mode="mock",
+            reason="exchange_order_status_refreshed",
+            exchange_order_id="gate_stop_filled_1",
+            order_status="filled",
+            order={"price": 1970.0},
+        )
+
+        await app._mirror_primary_native_stop_fills_to_followers([event])
+
+        follower_position = (await app.follower_execution.fetch_positions(["ETH/USDT:USDT"]))[0]
+        assert follower_position.side == Side.FLAT
+        assert app.trend_state.get("ETH/USDT:USDT") is None
+        assert app.follower_trend_state.get("ETH/USDT:USDT") is None
+        follower_rows = app.store.fetch_payloads("follower_executions", symbol="ETH/USDT:USDT", limit=10)
+        assert any(row["payload"].get("status") == "exit_mirrored" for row in follower_rows)
+        assert any(row["payload"].get("primary_stop_client_order_id") == "primary_stop_1" for row in follower_rows)
     finally:
         await app.close()

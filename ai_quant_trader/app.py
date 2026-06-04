@@ -506,9 +506,8 @@ class TradingApp:
         lifecycle state and account reconciliation; otherwise live readiness can
         become stale between hourly trading cycles.
         """
+        await self._refresh_order_status_once(symbols)
         state = await self._refresh_exchange_safety(symbols)
-        if execution_mode_from_config(self.config) != "live":
-            await self._refresh_order_status_once(symbols)
         return state
 
     def _wakeup_allowed(self, symbol: str) -> bool:
@@ -900,11 +899,13 @@ class TradingApp:
 
     async def _refresh_order_status_once(self, symbols: list[str]):
         try:
-            updates = await self.order_lifecycle.refresh_recent_orders(
+            primary_updates = await self.order_lifecycle.refresh_recent_orders(
                 self.execution,
                 symbols=symbols,
                 gateway_mode=execution_mode_from_config(self.config),
             )
+            await self._mirror_primary_native_stop_fills_to_followers(primary_updates)
+            updates = list(primary_updates)
             if self._active_followers():
                 try:
                     updates.extend(
@@ -932,6 +933,78 @@ class TradingApp:
                 self.store.insert("exchange_health", state.model_dump(mode="json"))
             logger.exception("order_status_refresh_failed")
             raise RuntimeError("order_status_refresh_failed") from exc
+
+    async def _mirror_primary_native_stop_fills_to_followers(self, updates) -> None:
+        for event in updates:
+            if getattr(event, "account_slot", TREND_ACCOUNT_SLOT) != TREND_ACCOUNT_SLOT:
+                continue
+            if getattr(event, "order_type", "") != "stop_loss":
+                continue
+            if str(getattr(event, "status", "")) not in {"filled", "OrderLifecycleStatus.FILLED"}:
+                continue
+            symbol = str(getattr(event, "symbol", "") or "")
+            if not symbol:
+                continue
+            client_order_id = str(getattr(event, "client_order_id", "") or "")
+            if client_order_id and self.store.fetch_latest_payload_by_value(
+                "follower_executions",
+                "primary_stop_client_order_id",
+                client_order_id,
+                symbol=symbol,
+                limit=500,
+            ):
+                continue
+            side = str(getattr(event, "side", "") or "").lower()
+            action = SignalAction.EXIT_LONG if side == "sell" else SignalAction.EXIT_SHORT
+            order_payload = getattr(event, "order", None) or {}
+            price = float(order_payload.get("price") or order_payload.get("stop_price") or 0.0)
+            signal = StrategySignal(
+                symbol=symbol,
+                timeframe="1h",
+                action=action,
+                current_price=price,
+                suggested_qty=0.0,
+                signal_strength=1.0,
+                technical_evidence={
+                    "strategy_allowed": "trend",
+                    "reason": "primary_native_stop_filled",
+                    "primary_stop_client_order_id": client_order_id,
+                    "primary_stop_exchange_order_id": getattr(event, "exchange_order_id", None),
+                },
+            )
+            ai = AiDecision(
+                symbol=symbol,
+                regime="trend",
+                direction=Side.FLAT,
+                confidence=1.0,
+                multiplier=1.0,
+                news_alignment="neutral",
+                orderflow_alignment="neutral",
+                dense_zone_position="primary_native_stop_filled",
+                pattern_type="stop_loss_exit",
+                trend_confirmation_score=1.0,
+                range_risk_score=0.0,
+                news_risk_score=0.0,
+                orderflow_confirmation_score=0.0,
+                dense_zone_breakout_score=0.0,
+                action_suggestion="close",
+                veto_action="allow",
+                brief_reason="账户1 Gate 原生止损成交，账户2按账户1退出动作同步平仓。",
+                reason_codes=["primary_native_stop_filled", "follower_exit_mirror"],
+            )
+            await self._mirror_exit_to_followers(symbol, signal, ai, "primary_native_stop_filled")
+            self.trend_state.clear(symbol)
+            if client_order_id:
+                self.store.insert(
+                    "follower_executions",
+                    {
+                        "status": "primary_native_stop_fill_processed",
+                        "account_slot": FOLLOWER_ACCOUNT_SLOT,
+                        "symbol": symbol,
+                        "primary_stop_client_order_id": client_order_id,
+                    },
+                    symbol,
+                )
 
     async def _fetch_positions(self, symbols: list[str]) -> list[PositionSnapshot]:
         try:
