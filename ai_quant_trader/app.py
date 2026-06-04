@@ -1135,11 +1135,11 @@ class TradingApp:
         return [follower for follower in self.config.followers if follower.enabled and self._follower_route_configured(follower)]
 
     def _follower_route_configured(self, follower: FollowerAccountConfig) -> bool:
-        if execution_mode_from_config(self.config) != "live":
-            return True
         account_slot = self._canonical_follower_slot(follower.account_slot)
         if account_slot != FOLLOWER_ACCOUNT_SLOT:
             return False
+        if execution_mode_from_config(self.config) != "live":
+            return True
         has_follower_pair = bool(os.getenv("GATEIO_FOLLOWER_API_KEY", "").strip()) and bool(
             os.getenv("GATEIO_FOLLOWER_API_SECRET", "").strip()
         )
@@ -1385,7 +1385,7 @@ class TradingApp:
         return None
 
     def _canonical_follower_slot(self, account_slot: str) -> str:
-        return FOLLOWER_ACCOUNT_SLOT if account_slot in {"follower", "range"} else account_slot
+        return FOLLOWER_ACCOUNT_SLOT if account_slot == "follower" else account_slot
 
     def _record_follower_execution(
         self,

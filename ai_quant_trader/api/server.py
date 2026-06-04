@@ -409,8 +409,15 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         ai_budget_status, ai_budget_detail = _ai_budget_readiness_status(latest_ai_budget, execution_mode)
         worker_status, worker_detail = _worker_heartbeat_status(ctx, latest_worker_heartbeats)
         maintenance_status, maintenance_detail = _maintenance_status(latest_maintenance)
+        console_auth_status, console_auth_detail = _console_auth_readiness_status(execution_mode)
         checks = [
             _readiness_check("database", "Database", "ok", "SQLite store is reachable."),
+            _readiness_check(
+                "console_auth",
+                "Console authentication",
+                console_auth_status,
+                console_auth_detail,
+            ),
             _readiness_check(
                 "strategy_profiles",
                 "Strategy profiles",
@@ -2348,6 +2355,27 @@ def _ai_budget_readiness_status(
     return "warn", f"Unknown DeepSeek budget event status: {status}."
 
 
+def _console_auth_readiness_status(execution_mode: str) -> tuple[Literal["ok", "warn", "block"], str]:
+    enabled = _console_auth_enabled()
+    users = _console_users()
+    if execution_mode == "live":
+        if not enabled:
+            return "block", "Live mode requires console account authentication; CONSOLE_AUTH_DISABLED must not be enabled."
+        if not users:
+            return "block", "Live mode requires at least one configured console account."
+        if not _env_flag_enabled("CONSOLE_PASSWORD_STRENGTH_CONFIRMED"):
+            return (
+                "block",
+                "Console accounts are configured, but password strength has not been confirmed for unattended capital.",
+            )
+        return "ok", f"Console account authentication is configured for {len(users)} role(s), and password strength is confirmed."
+    if not enabled:
+        return "warn", "Console authentication is disabled for local development."
+    if not users:
+        return "warn", "Console authentication is enabled but no users are configured."
+    return "ok", f"Console account authentication is configured for {len(users)} role(s)."
+
+
 def _latest_ai_decision_has_deepseek_error(row: dict[str, Any] | None) -> bool:
     if row is None:
         return False
@@ -2424,13 +2452,17 @@ def _console_session_hours() -> float:
 
 
 def _console_cookie_secure() -> bool:
-    return os.getenv("CONSOLE_COOKIE_SECURE", "").strip().lower() in {"1", "true", "yes", "on"}
+    return _env_flag_enabled("CONSOLE_COOKIE_SECURE")
 
 
 def _console_auth_enabled() -> bool:
-    if os.getenv("CONSOLE_AUTH_DISABLED", "").strip().lower() in {"1", "true", "yes", "on"}:
+    if _env_flag_enabled("CONSOLE_AUTH_DISABLED"):
         return False
     return True
+
+
+def _env_flag_enabled(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _console_auth_configured() -> bool:

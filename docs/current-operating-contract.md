@@ -72,6 +72,8 @@ AI 只能确认、降仓、阻断。AI 输出无效、超时、预算耗尽或 J
 
 生产默认 fail-closed：除非显式设置 `CONSOLE_AUTH_DISABLED=1`，否则控制台必须要求登录；若未配置任何账号，特权 API 必须返回 `console_auth_not_configured`，不能退回本地管理员。`CONSOLE_AUTH_DISABLED=1` 只能用于本地开发或内网临时调试，不能用于公网或实盘云端。
 
+大资金无人值守模式还必须显式设置 `CONSOLE_PASSWORD_STRENGTH_CONFIRMED=1`。该变量只允许在所有控制台账号密码已经轮换为强密码、唯一密码后设置；否则 live readiness 的 `console_auth` 检查必须保持 `block`。临时弱密码可以用于联调登录，但不能作为无人值守绿灯。
+
 ## 5. 密钥与日志
 
 - `.env.runtime` 不得提交。

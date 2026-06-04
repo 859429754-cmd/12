@@ -376,6 +376,7 @@ Do not assume these remain true. Re-run relevant checks after changes.
 - Sync latest local code to cloud
 - Add console authentication before any public exposure
 - Configure console account passwords and keep `CONSOLE_AUTH_DISABLED` unset in production
+- Confirm strong, unique console passwords with `CONSOLE_PASSWORD_STRENGTH_CONFIRMED=1` only after rotation; live readiness blocks unattended capital without this confirmation
 - Run under systemd 24/7
 - Add cloud health check script
 - Add Playwright E2E:

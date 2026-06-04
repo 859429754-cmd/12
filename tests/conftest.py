@@ -21,3 +21,4 @@ def isolate_console_basic_auth(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CONSOLE_RANGE_PASSWORD", "")
     monkeypatch.setenv("CONSOLE_RANGE_PASSWORD_SHA256", "")
     monkeypatch.setenv("CONSOLE_AUTH_DISABLED", "1")
+    monkeypatch.setenv("CONSOLE_PASSWORD_STRENGTH_CONFIRMED", "")

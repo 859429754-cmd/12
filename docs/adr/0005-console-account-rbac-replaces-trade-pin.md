@@ -43,4 +43,5 @@ This ADR supersedes ADR-0001 for console runtime control. Future work should tre
 - Account-scoped views can share one strategy signal and one AI decision while keeping account balances, leverage caps, positions and order status separate.
 - Public exposure still requires strong passwords, HTTPS, and ideally network-level access control. RBAC is necessary, not sufficient, for large unattended capital.
 - `CONSOLE_AUTH_DISABLED=1` is a local-development escape hatch only and must not be used on a public or live-trading cloud deployment.
+- Live readiness requires `CONSOLE_PASSWORD_STRENGTH_CONFIRMED=1` before unattended capital can be considered ready. This flag must only be set after all console account passwords are strong, unique, and rotated out of any temporary onboarding values.
 - `.env.runtime` secrets remain server-side only and must never be printed, logged, committed or shown in the browser.

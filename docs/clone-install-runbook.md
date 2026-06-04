@@ -42,6 +42,7 @@ CONSOLE_ACCOUNT1_PASSWORD=
 CONSOLE_ACCOUNT2_PASSWORD=
 CONSOLE_RANGE_PASSWORD=
 CONSOLE_AUTH_DISABLED=
+CONSOLE_PASSWORD_STRENGTH_CONFIRMED=
 ```
 
 说明：
@@ -52,6 +53,7 @@ CONSOLE_AUTH_DISABLED=
 - 控制台安全使用账号登录/RBAC，不再使用 Trade PIN 或操作验证码。
 - 若公网开放控制台，必须使用强密码，不能使用弱口令。
 - 生产默认 fail-closed：不要设置 `CONSOLE_AUTH_DISABLED=1`。如果未配置账号密码，控制台特权 API 会拒绝访问。
+- 大资金无人值守前必须设置强密码并确认 `CONSOLE_PASSWORD_STRENGTH_CONFIRMED=1`；未确认时 readiness 会阻断。
 
 还需要按新环境修改：
 

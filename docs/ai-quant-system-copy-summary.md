@@ -67,6 +67,7 @@ CONSOLE_ACCOUNT1_PASSWORD=
 CONSOLE_ACCOUNT2_PASSWORD=
 CONSOLE_RANGE_PASSWORD=
 CONSOLE_AUTH_DISABLED=
+CONSOLE_PASSWORD_STRENGTH_CONFIRMED=
 ```
 
 可选：
@@ -80,6 +81,7 @@ CONSOLE_COOKIE_SECURE=
 
 当前控制台安全使用账号登录/RBAC，不再使用 Trade PIN 或操作验证码。
 生产云端不要设置 `CONSOLE_AUTH_DISABLED=1`。系统默认 fail-closed：未配置账号时，特权 API 返回 `console_auth_not_configured`，不会自动开放本地管理员权限。
+大资金无人值守前必须使用强密码并设置 `CONSOLE_PASSWORD_STRENGTH_CONFIRMED=1`；临时弱密码只能用于联调，不应让 live readiness 通过。
 
 ## 5. 当前策略合同
 

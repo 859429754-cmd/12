@@ -593,6 +593,53 @@ def test_live_readiness_blocks_recent_deepseek_budget_failure(tmp_path: Path, mo
     assert body["overall"] == "block"
 
 
+def test_live_readiness_blocks_unconfirmed_console_password_strength(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("CONSOLE_AUTH_DISABLED", "0")
+    monkeypatch.setenv("CONSOLE_ADMIN_PASSWORD", "admin-secret")
+    monkeypatch.delenv("CONSOLE_PASSWORD_STRENGTH_CONFIRMED", raising=False)
+    db_path = tmp_path / "trader.sqlite3"
+    audit_path = tmp_path / "audit.jsonl"
+    config_path = tmp_path / "config.yaml"
+    write_config(config_path, db_path, audit_path)
+    config_text = config_path.read_text(encoding="utf-8").replace(
+        "runtime:\n  dry_run: true",
+        "runtime:\n  dry_run: false\n  execution_mode: live",
+    )
+    config_path.write_text(config_text, encoding="utf-8")
+
+    client = TestClient(create_app(str(config_path)))
+    login = client.post("/api/auth/login", json={"username": "admin", "password": "admin-secret"})
+    assert login.status_code == 200
+    body = client.get("/api/system/readiness").json()
+    console_check = next(item for item in body["checks"] if item["id"] == "console_auth")
+
+    assert console_check["status"] == "block"
+    assert "password strength" in console_check["detail"]
+
+
+def test_live_readiness_accepts_confirmed_console_auth_policy(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("CONSOLE_AUTH_DISABLED", "0")
+    monkeypatch.setenv("CONSOLE_ADMIN_PASSWORD", "admin-secret")
+    monkeypatch.setenv("CONSOLE_PASSWORD_STRENGTH_CONFIRMED", "1")
+    db_path = tmp_path / "trader.sqlite3"
+    audit_path = tmp_path / "audit.jsonl"
+    config_path = tmp_path / "config.yaml"
+    write_config(config_path, db_path, audit_path)
+    config_text = config_path.read_text(encoding="utf-8").replace(
+        "runtime:\n  dry_run: true",
+        "runtime:\n  dry_run: false\n  execution_mode: live",
+    )
+    config_path.write_text(config_text, encoding="utf-8")
+
+    client = TestClient(create_app(str(config_path)))
+    login = client.post("/api/auth/login", json={"username": "admin", "password": "admin-secret"})
+    assert login.status_code == 200
+    body = client.get("/api/system/readiness").json()
+    console_check = next(item for item in body["checks"] if item["id"] == "console_auth")
+
+    assert console_check["status"] == "ok"
+
+
 def test_console_basic_auth_blocks_when_configured(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("CONSOLE_AUTH_DISABLED", "0")
     monkeypatch.setenv("CONSOLE_BASIC_USER", "admin")

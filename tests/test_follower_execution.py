@@ -83,3 +83,19 @@ def test_mock_mode_can_activate_follower_without_credentials(monkeypatch: pytest
     )
 
     assert len(app._active_followers()) == 1
+
+
+def test_range_slot_does_not_activate_through_follower_route_in_mock(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("GATEIO_FOLLOWER_API_KEY", raising=False)
+    monkeypatch.delenv("GATEIO_FOLLOWER_API_SECRET", raising=False)
+    monkeypatch.delenv("GATEIO_RANGE_API_KEY", raising=False)
+    monkeypatch.delenv("GATEIO_RANGE_API_SECRET", raising=False)
+
+    app = TradingApp.__new__(TradingApp)
+    app.config = SimpleNamespace(
+        runtime=SimpleNamespace(execution_mode="mock"),
+        followers=[FollowerAccountConfig(enabled=True, account_slot="range", mirror_entries=True, mirror_exits=True)],
+    )
+
+    assert app._active_followers() == []
+    assert app._canonical_follower_slot("range") == "range"
