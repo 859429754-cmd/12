@@ -2756,13 +2756,22 @@ def _news_latest_response(
     warnings = latest_payload.get("warnings") or []
     if timeline and any(str(item.get("title") or item.get("summary") or "").strip() for item in timeline):
         warnings = [warning for warning in warnings if not str(warning).startswith(("rss_error:", "scrape_error:"))]
+    stale = age_minutes is None or age_minutes > max_age_minutes
+    items_count = len(latest_payload.get("items") or []) or len(timeline) or len(rows)
+    source_status = "refresh_failed" if fresh_digest is None and not rows else ("stale" if stale else "fresh")
     response = {
+        "ok": bool(latest_payload or rows or fresh_digest),
+        "source": "fresh_refresh" if fresh_digest else "news_cache",
+        "source_status": source_status,
+        "refreshed": fresh_digest is not None,
+        "items_count": items_count,
+        "digest_summary": _short_news_text(latest_payload.get("summary"), 360),
         "items": rows if include_payload else [_compact_news_row(row) for row in rows],
         "timeline": timeline,
         "latest_digest": latest_payload if include_payload else _compact_news_digest(latest_payload),
         "generated_at": generated_at,
         "age_minutes": age_minutes,
-        "stale": age_minutes is None or age_minutes > max_age_minutes,
+        "stale": stale,
         "warnings": warnings,
         "summary": _short_news_text(latest_payload.get("summary"), 1500),
     }

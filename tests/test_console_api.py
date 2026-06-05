@@ -926,6 +926,11 @@ def test_news_latest_compact_omits_heavy_rows(tmp_path: Path, monkeypatch) -> No
 
     assert response.status_code == 200
     body = response.json()
+    assert body["ok"] is True
+    assert body["source"] == "fresh_refresh"
+    assert body["source_status"] == "fresh"
+    assert body["refreshed"] is True
+    assert body["items_count"] == 1
     assert body["items"] == []
     assert body["latest_digest"] == {}
     assert body["timeline"][0]["title"] == "Fed says policy path remains data dependent"
@@ -959,6 +964,12 @@ def test_news_latest_defaults_to_lightweight_rows(tmp_path: Path) -> None:
 
     assert response.status_code == 200
     body = response.json()
+    assert body["ok"] is True
+    assert body["source"] == "news_cache"
+    assert body["source_status"] == "fresh"
+    assert body["refreshed"] is False
+    assert body["items_count"] == 1
+    assert body["digest_summary"].startswith("macro context")
     assert body["timeline"][0]["title"] == "Fed keeps policy restrictive"
     assert "items" not in body["latest_digest"]
     assert body["latest_digest"]["item_count"] == 1

@@ -188,9 +188,18 @@ export type MarketTickerResponse = {
 };
 export type ApiList<T = Record<string, unknown>> = { items: Array<DbRow<T>> };
 export type NewsResponse = ApiList & {
+  ok?: boolean;
+  source?: string;
+  source_status?: "fresh" | "stale" | "refresh_failed" | string;
+  refreshed?: boolean;
+  items_count?: number;
+  digest_summary?: string;
   timeline?: Array<Record<string, unknown>>;
   warnings?: string[];
   age_minutes?: number;
+  stale?: boolean;
+  generated_at?: string | null;
+  summary?: string;
 };
 
 export type DenseZonePayload = {

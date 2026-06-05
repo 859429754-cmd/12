@@ -110,8 +110,9 @@ export function App() {
     }
   }, [source, symbol]);
 
-  const load = useCallback(async () => {
-    if (session?.auth_required && !session.authenticated) return;
+  const load = useCallback(async (sessionOverride?: ConsoleSession) => {
+    const activeSession = sessionOverride || session;
+    if (activeSession?.auth_required && !activeSession.authenticated) return;
     setWarning("");
     try {
       const safe = async <T,>(promise: Promise<T>, fallback: T): Promise<T> => {
@@ -121,9 +122,11 @@ export function App() {
           return fallback;
         }
       };
-      void safe(api<NewsResponse>("/api/news/latest?limit=1&compact=true", { retries: 0, timeoutMs: 8000 }), {
+      void safe(api<NewsResponse>("/api/news/latest?limit=8&compact=true&max_age_minutes=15", { retries: 0, timeoutMs: 8000 }), {
+        ok: false,
         items: [],
         timeline: [],
+        source_status: "refresh_failed",
         warnings: ["新闻接口暂时未返回，已保留上一轮界面状态。"],
       }).then(setNews);
       void refreshTicker();
@@ -265,7 +268,7 @@ export function App() {
       });
       setSession(nextSession);
       setMessage("登录成功。");
-      await load();
+      await load(nextSession);
     } catch (error) {
       setMessage(errText(error));
     } finally {
@@ -1633,7 +1636,7 @@ function DashboardWorkspace({
   const openingAuthorized = runtimeStatus?.enabled_symbols?.includes(symbol) || Boolean(profile?.opening_authorized);
   const liveReady = profile?.live_ready || readiness?.overall === "ok";
   const aiReady = readiness?.deepseek_ready || Boolean(runtimeStatus?.ai?.enabled);
-  const newsAge = news.age_minutes != null ? `${num(news.age_minutes, 1)} 分钟` : "等待刷新";
+  const newsAge = newsFreshnessLabel(news);
   const realtimePrice = numberValue(ticker?.last, ticker?.mark);
   const latestPrice = realtimePrice != null ? num(realtimePrice) : latestCandle ? num(latestCandle.close) : "--";
   const latestPriceLabel = realtimePrice != null ? "实时价" : "K线收盘";
@@ -1663,7 +1666,7 @@ function DashboardWorkspace({
             <DashboardStatusPill label="开仓授权" value={openingAuthorized ? "已授权" : "未授权"} tone={openingAuthorized ? "good" : "bad"} />
             <DashboardStatusPill label="交易所" value={exchangePayload.can_open_new_entries ? "可开仓" : "禁止开仓"} tone={exchangePayload.can_open_new_entries ? "good" : "bad"} />
             <DashboardStatusPill label="DeepSeek" value={aiReady ? "已配置" : "降级"} tone={aiReady ? "good" : "warn"} />
-            <DashboardStatusPill label="新闻缓存" value={newsAge} tone={newsWarnings.length ? "warn" : "good"} />
+            <DashboardStatusPill label="新闻缓存" value={newsAge} tone={newsStatusTone(news, newsWarnings.length)} />
           </div>
         </div>
 
@@ -1683,7 +1686,7 @@ function DashboardWorkspace({
             <div className="rounded-xl bg-[#0f172a] p-4 text-white">
               <div className="flex items-center justify-between gap-2">
                 <div className="text-[11px] text-[#cbd5e1]">USDT 权益</div>
-                <span className={`rounded-full px-2 py-1 text-[10px] ${account.ok === false ? "bg-[#3b1117] text-[#fb7185]" : account.source === "gate_live_readonly" || account.source === "live" ? "bg-[#052e1a] text-[#22c55e]" : "bg-[#241806] text-[#facc15]"}`}>
+                <span className={`rounded-full px-2 py-1 text-[10px] ${account.hardFailed ? "bg-[#3b1117] text-[#fb7185]" : account.cachedBalance ? "bg-[#241806] text-[#facc15]" : account.source === "gate_live_readonly" || account.source === "live" ? "bg-[#052e1a] text-[#22c55e]" : "bg-[#241806] text-[#facc15]"}`}>
                   {account.sourceLabel}
                 </span>
               </div>
@@ -1760,6 +1763,7 @@ function DashboardWorkspace({
             {newsWarnings.length ? (
               <div className="mb-3 rounded-xl border border-[#854d0e] bg-[#241806] p-3 text-xs text-[#facc15]">{newsWarnings.join("; ")}</div>
             ) : null}
+            <NewsStatusLine news={news} />
             <div className="grid max-h-[500px] gap-2 overflow-auto pr-1">
               {newsItems.length ? newsItems.slice(0, 7).map((item, idx) => <DashboardNewsItem key={idx} item={item} />) : (
                 <div className="rounded-xl border border-[#263246] bg-[#101a2d] p-3 text-xs text-[#94a3b8]">暂无新闻快讯。</div>
@@ -1849,6 +1853,44 @@ function HealthMini({ label, value, ok }: { label: string; value: string; ok: bo
 function LiveOpsBadge({ readiness, mode }: { readiness: string; mode: string }) {
   const tone = readiness === "ok" ? "bg-[#052e1a] text-[#22c55e]" : readiness === "block" ? "bg-[#2a0f14] text-[#fb7185]" : "bg-[#241806] text-[#facc15]";
   return <span className={`rounded-full px-3 py-1 text-[11px] ${tone}`}>{executionModeLabel(mode)} / {readinessLabel(readiness)}</span>;
+}
+
+function NewsStatusLine({ news }: { news: NewsResponse }) {
+  const toneClass = newsStatusTone(news, (news.warnings || []).filter((item) => !isInternalNewsText(item)).length);
+  const tone =
+    toneClass === "good" ? "border-[#14532d] bg-[#052e1a] text-[#22c55e]" :
+    toneClass === "bad" ? "border-[#7f1d1d] bg-[#2a0f14] text-[#fb7185]" :
+    "border-[#854d0e] bg-[#241806] text-[#facc15]";
+  return (
+    <div className={`mb-3 rounded-xl border px-3 py-2 text-[11px] ${tone}`}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span>新闻状态：{newsSourceLabel(news.source)} / {newsFreshnessLabel(news)}</span>
+        <span className={mono}>条数 {num(news.items_count ?? visibleNewsItems(news).length, 0)}</span>
+      </div>
+    </div>
+  );
+}
+
+function newsFreshnessLabel(news: NewsResponse) {
+  if (news.source_status === "refresh_failed") return "刷新失败";
+  if (news.age_minutes == null) return "等待刷新";
+  const age = `${num(news.age_minutes, 1)} 分钟前`;
+  return news.stale ? `${age} / 过期` : age;
+}
+
+function newsStatusTone(news: NewsResponse, warningCount = 0): "good" | "bad" | "warn" {
+  if (news.ok === false || news.source_status === "refresh_failed") return "bad";
+  if (news.stale || warningCount > 0) return "warn";
+  return "good";
+}
+
+function newsSourceLabel(source: unknown) {
+  const text = String(source || "");
+  const labels: Record<string, string> = {
+    fresh_refresh: "刚刷新",
+    news_cache: "本地缓存",
+  };
+  return labels[text] || text || "新闻缓存";
 }
 
 function DashboardNewsItem({ item }: { item: Record<string, unknown> }) {
@@ -1999,20 +2041,25 @@ function accountSnapshot(balance: Record<string, unknown> | null) {
   const free = numberValue(payload.usdt_free, payload.free_usdt, rawUsdt.free, objectPayload(payload.free).USDT);
   const used = numberValue(payload.usdt_used, payload.used_usdt, rawUsdt.used, objectPayload(payload.used).USDT);
   const source = String(payload.balance_source || payload.mode || "unknown");
+  const hasBalance = total !== null || free !== null || used !== null;
+  const hardFailed = payload.ok === false && !hasBalance;
+  const cachedBalance = payload.ok === false && hasBalance;
   const sourceLabel =
-    payload.ok === false
+    hardFailed
       ? "读取失败"
+      : cachedBalance || source === "cached_live_balance"
+      ? "缓存余额"
       : source === "gate_live_readonly"
       ? "Gate只读"
       : source === "live"
         ? "Gate实盘"
         : source === "mock"
           ? "模拟余额"
-          : source === "live_readonly_failed"
-            ? "读取失败"
+        : source === "live_readonly_failed"
+            ? "缓存余额"
             : "--";
   const message = typeof payload.message === "string" ? payload.message : "";
-  return { total, free, used, source, sourceLabel, ok: payload.ok, message };
+  return { total, free, used, source, sourceLabel, ok: payload.ok, message, hardFailed, cachedBalance };
 }
 
 function objectPayload(value: unknown): Record<string, unknown> {
@@ -2058,10 +2105,34 @@ function decisionAction(parts: DecisionParts): unknown {
 }
 
 function decisionReason(parts: DecisionParts): string {
-  return String(
+  const reasonCodes = decisionReasonCodes(parts);
+  if (reasonCodes.some((code) => code.includes("deepseek_skipped:no_signal_no_position"))) {
+    return "当前没有本地策略入场信号且无持仓，系统按预算策略跳过 DeepSeek 实时调用，保持观望。这不是 DeepSeek 不可用或余额不足。";
+  }
+  if (reasonCodes.some((code) => code.includes("deepseek_budget_blocked"))) {
+    return "DeepSeek 调用预算保护已触发，本轮使用本地保守风控结果。请查看 AI 预算审计，不等同于 API Key 失效。";
+  }
+  const raw = String(
     decisionValue(parts, ["brief_reason", "reason", "summary", "major_news_title", "title"]) ||
       "等待下一次 AI 判断。"
   );
+  if (raw.includes("DeepSeek不可用或数据不足") && !hasActionableStrategySignal(parts)) {
+    return "当前没有本地策略入场信号，系统使用本地保守观察结果，不发起新仓。";
+  }
+  return raw;
+}
+
+function decisionReasonCodes(parts: DecisionParts): string[] {
+  const sources = [parts.ai, parts.risk, parts.root, parts.signal, parts.technical, parts.event];
+  const output: string[] = [];
+  for (const source of sources) {
+    for (const key of ["reason_codes", "risk_reason_codes", "codes"]) {
+      const value = source[key];
+      if (Array.isArray(value)) output.push(...value.map((item) => String(item)));
+      else if (typeof value === "string") output.push(value);
+    }
+  }
+  return output;
 }
 
 function decisionPatternValue(parts: DecisionParts): unknown {
@@ -2098,6 +2169,23 @@ type DecisionSizing = {
 };
 
 function decisionSizing(parts: DecisionParts): DecisionSizing {
+  const action = String(decisionAction(parts) || "").toLowerCase();
+  const direction = String(decisionValue(parts, ["direction"]) || "").toLowerCase();
+  const reasonCodes = decisionReasonCodes(parts);
+  if (
+    reasonCodes.some((code) => code.includes("deepseek_skipped:no_signal_no_position")) ||
+    !hasActionableStrategySignal(parts) ||
+    ["flat", "neutral", "none", "观望"].includes(direction) ||
+    ["hold", "wait", "block"].includes(action)
+  ) {
+    return {
+      label: "阻断",
+      scale: "0%",
+      activeTier: "block",
+      note: "当前没有本地策略入场信号，AI 只做观察、减仓或否决，不展示可开仓仓位。",
+    };
+  }
+
   const riskTier = parts.risk.position_tier;
   const riskScale = parts.risk.position_scale;
   if (!unknownish(riskTier) || riskScale !== undefined && riskScale !== null) {
@@ -2107,17 +2195,6 @@ function decisionSizing(parts: DecisionParts): DecisionSizing {
       scale: positionScaleLabel(riskScale),
       activeTier,
       note: "后端 RiskManager 已返回正式仓位档。",
-    };
-  }
-
-  const action = String(decisionAction(parts) || "").toLowerCase();
-  const direction = String(decisionValue(parts, ["direction"]) || "").toLowerCase();
-  if (!hasActionableStrategySignal(parts) || ["flat", "neutral", "none", "观望"].includes(direction) || ["hold", "wait", "block"].includes(action)) {
-    return {
-      label: "阻断",
-      scale: "0%",
-      activeTier: "block",
-      note: "当前没有本地策略入场信号，AI 只做观察、减仓或否决，不展示可开仓仓位。",
     };
   }
 
@@ -4012,6 +4089,7 @@ function RightRail({
         {newsWarnings.length ? (
           <div className="mb-2 rounded-xl border border-[#854d0e] bg-[#241806] p-2 text-[11px] text-[#facc15]">{newsWarnings.join("; ")}</div>
         ) : null}
+        <NewsStatusLine news={news} />
         <div className="space-y-2">
           {railNewsItems.length ? railNewsItems.map((item, idx) => (
             <div key={idx} className="rounded-xl border border-[#263246] bg-[#101a2d] p-3 text-xs">
