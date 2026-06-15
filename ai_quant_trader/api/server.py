@@ -911,13 +911,14 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
 
     @app.get("/api/account/balance")
     async def account_balance(
-        account_slot: Literal["default", "trend", "follower", "range"] = "trend",
+        request: Request,
+        account_slot: Literal["default", "trend", "follower", "range"] | None = Query(default=None),
         prefer_live: bool = True,
         timeout_seconds: float = Query(default=4.0, ge=0.1, le=20.0),
     ) -> dict[str, Any]:
         ctx = _ctx(app)
         ctx.reload()
-        account_slot = _canonical_account_slot(account_slot)
+        account_slot = _request_account_slot(request, account_slot)
         configured_slot = _account_slot_configured(account_slot)
         runtime_mode = execution_mode_from_config(ctx.config)
         live_readonly = prefer_live and runtime_mode == "mock" and configured_slot
@@ -1082,16 +1083,70 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         }
 
     @app.get("/api/positions")
-    def positions(limit: int = Query(default=20, ge=1, le=100)) -> dict[str, Any]:
+    async def positions(
+        request: Request,
+        limit: int = Query(default=20, ge=1, le=100),
+        account_slot: Literal["default", "trend", "follower", "range"] | None = Query(default=None),
+        prefer_live: bool = True,
+        timeout_seconds: float = Query(default=4.0, ge=0.1, le=20.0),
+    ) -> dict[str, Any]:
         ctx = _ctx(app)
         ctx.reload()
-        rows = ctx.table("positions_snapshot", limit=limit)
-        latest: dict[str, dict[str, Any]] = {}
-        for row in rows:
-            symbol = row.get("symbol") or row["payload"].get("symbol")
-            if symbol and symbol not in latest:
-                latest[symbol] = row
-        return {"items": list(latest.values())}
+        account_slot = _request_account_slot(request, account_slot)
+        configured_slot = _account_slot_configured(account_slot)
+        runtime_mode = execution_mode_from_config(ctx.config)
+        live_readonly = prefer_live and runtime_mode == "mock" and configured_slot
+        gateway_mode = "live" if live_readonly else runtime_mode
+        if prefer_live and gateway_mode == "live":
+            execution = create_exchange_gateway(gateway_mode, account_slot=account_slot)
+            try:
+                snapshots = await asyncio.wait_for(
+                    execution.fetch_positions(ctx.configured_symbols()),
+                    timeout=timeout_seconds,
+                )
+                now = datetime.now(UTC).isoformat()
+                items: list[dict[str, Any]] = []
+                for snapshot in snapshots:
+                    payload = snapshot.model_dump(mode="json")
+                    payload.update(
+                        {
+                            "account_slot": account_slot,
+                            "position_source": "gate_live_readonly" if live_readonly else gateway_mode,
+                            "ok": True,
+                        }
+                    )
+                    if ctx.store is not None:
+                        ctx.store.insert("positions_snapshot", payload, symbol=snapshot.symbol)
+                    items.append({"id": None, "created_at": now, "symbol": snapshot.symbol, "payload": payload})
+                return {
+                    "ok": True,
+                    "items": items,
+                    "account_slot": account_slot,
+                    "source": "gate_live_readonly" if live_readonly else gateway_mode,
+                    "read_only_live_positions": live_readonly,
+                    "cached": False,
+                }
+            except Exception as exc:
+                cached = _latest_position_snapshot_rows(ctx, account_slot, limit)
+                return {
+                    "ok": False,
+                    "items": cached,
+                    "account_slot": account_slot,
+                    "source": "positions_snapshot",
+                    "cached": True,
+                    "stale": True,
+                    "error_type": type(exc).__name__,
+                    "message": "Gate.io 持仓读取超时或失败，控制台显示最近一次持仓快照。",
+                }
+            finally:
+                await execution.close()
+        return {
+            "ok": True,
+            "items": _latest_position_snapshot_rows(ctx, account_slot, limit),
+            "account_slot": account_slot,
+            "source": "positions_snapshot",
+            "cached": True,
+        }
 
     @app.get("/api/risk/summary")
     def risk_summary() -> dict[str, Any]:
@@ -1576,6 +1631,16 @@ def _canonical_account_slot(slot: str) -> str:
     return slot
 
 
+def _request_account_slot(request: Request, account_slot: str | None) -> str:
+    if account_slot:
+        return _canonical_account_slot(account_slot)
+    user = _console_user_from_request(request)
+    user_slot = (user or {}).get("account_slot")
+    if user_slot:
+        return _canonical_account_slot(str(user_slot))
+    return "trend"
+
+
 def _account_slot_configured(slot: str) -> bool:
     slot = _canonical_account_slot(slot)
     env_map = {
@@ -1603,6 +1668,23 @@ def _latest_account_balance_snapshot(ctx: ConsoleContext, account_slot: str) -> 
     if ctx.store is None:
         return None
     return ctx.store.fetch_latest("account_balance_snapshots", symbol=_canonical_account_slot(account_slot))
+
+
+def _latest_position_snapshot_rows(ctx: ConsoleContext, account_slot: str, limit: int) -> list[dict[str, Any]]:
+    rows = ctx.table("positions_snapshot", limit=limit)
+    latest: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        payload = row.get("payload") or {}
+        payload_slot = payload.get("account_slot")
+        if payload_slot is not None:
+            if _canonical_account_slot(str(payload_slot)) != account_slot:
+                continue
+        elif account_slot != "trend":
+            continue
+        symbol = row.get("symbol") or payload.get("symbol")
+        if symbol and symbol not in latest:
+            latest[str(symbol)] = row
+    return list(latest.values())
 
 
 def _ai_sizing_tiers() -> list[dict[str, Any]]:

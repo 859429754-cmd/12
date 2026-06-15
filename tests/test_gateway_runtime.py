@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from ai_quant_trader.api.server import create_app
 from ai_quant_trader.app import TradingApp
 from ai_quant_trader.core.models import OrderRequest, OrderResult, PositionSnapshot, Side, SignalAction, StrategySignal
+from ai_quant_trader.execution import gateio as gateio_module
 from ai_quant_trader.execution.gateio import GateExecutionClient
 from ai_quant_trader.execution.gateway.factory import create_exchange_gateway
 from ai_quant_trader.execution.gateway.gate_real import GateRealGateway
@@ -162,6 +163,27 @@ async def test_gate_hedged_position_blocks_unsupported_live_mode() -> None:
 
     with pytest.raises(RuntimeError, match="hedged_position_not_supported"):
         await client.fetch_positions(["ETH/USDT:USDT"])
+
+
+@pytest.mark.asyncio
+async def test_gate_order_not_found_status_returns_none() -> None:
+    class FakeGateExchange:
+        async def load_markets(self):
+            return None
+
+        async def fetch_order(self, exchange_order_id, symbol):
+            raise gateio_module.ccxt.OrderNotFound("missing")
+
+        async def close(self):
+            return None
+
+    client = GateExecutionClient(dry_run=False)
+    await client.exchange.close()
+    client.exchange = FakeGateExchange()
+
+    found = await client.fetch_order_by_exchange_id("ETH/USDT:USDT", "missing_order")
+
+    assert found is None
 
 
 @pytest.mark.asyncio

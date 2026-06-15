@@ -152,6 +152,7 @@ export function App() {
           setWarning(nextCandles.warning || "");
         }
       });
+      const primaryAccountSlot = activeSession?.user?.account_slot || "trend";
       const [
         nextStatus,
         nextPlatform,
@@ -171,13 +172,13 @@ export function App() {
           api<PlatformOverview>("/api/platform/overview", { retries: 1 }),
           api<SystemReadiness>("/api/system/readiness", { retries: 1 }),
           api<MarketSymbolsResponse>("/api/markets/symbols", { retries: 1 }),
-          api<Record<string, unknown>>("/api/account/balance", { retries: 1 }),
+          api<Record<string, unknown>>(`/api/account/balance?account_slot=${encodeURIComponent(primaryAccountSlot)}`, { retries: 1 }),
           safe(api<Record<string, unknown>>("/api/account/balance?account_slot=follower", { retries: 1 }), {
             ok: false,
             account_slot: "follower",
             message: "账号2未配置或暂时无法读取。",
           }),
-          api<ApiList>("/api/positions?limit=50", { retries: 1 }),
+          api<ApiList>(`/api/positions?limit=50&account_slot=${encodeURIComponent(primaryAccountSlot)}`, { retries: 1 }),
           api<Record<string, unknown>>("/api/risk/summary", { retries: 1 }),
           safe(api<{ items: ExecutionAccountSlot[] }>("/api/execution/accounts", { retries: 1 }), { items: [] }),
           api<ApiList>(`/api/orders?limit=80&symbol=${encodeURIComponent(symbol)}`, { retries: 1 }),
@@ -2260,7 +2261,8 @@ function pnlTone(value: unknown): "default" | "good" | "bad" | "warn" {
 function positionSideLabel(value: unknown) {
   const text = String(value || "--").toLowerCase();
   if (["long", "buy"].includes(text)) return "多仓";
-  if (["short", "sell"].includes(text)) return "空仓";
+  if (["short", "sell"].includes(text)) return "空头";
+  if (text === "flat") return "空仓";
   return text;
 }
 

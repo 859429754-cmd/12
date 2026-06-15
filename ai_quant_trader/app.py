@@ -494,8 +494,6 @@ class TradingApp:
                     details={"error_type": type(exc).__name__},
                 )
                 logger.exception("order_status_worker_failed")
-                if execution_mode_from_config(self.config) == "live":
-                    raise
             await asyncio.sleep(interval)
 
     async def _refresh_reconciliation_and_order_status_once(self, symbols: list[str]):

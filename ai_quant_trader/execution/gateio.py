@@ -151,6 +151,12 @@ class GateExecutionClient:
         await self.exchange.load_markets()
         try:
             order = await self.exchange.fetch_order(exchange_order_id, symbol)
+        except ccxt.OrderNotFound:
+            logger.warning(
+                "gate_order_status_not_found",
+                extra={"symbol": symbol, "order_id": exchange_order_id},
+            )
+            return None
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "gate_order_status_fetch_failed",

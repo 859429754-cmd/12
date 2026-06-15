@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from ai_quant_trader.api import server
 from ai_quant_trader.api.server import ConsoleContext, create_app
-from ai_quant_trader.core.models import NewsDigest, NewsItem
+from ai_quant_trader.core.models import NewsDigest, NewsItem, PositionSnapshot, Side
 from ai_quant_trader.storage.sqlite import SQLiteStore
 
 
@@ -461,6 +461,79 @@ def test_account_balance_returns_cached_snapshot_when_gate_is_slow(tmp_path: Pat
     assert body["balance_source"] == "cached_live_balance"
     assert body["usdt_total"] == 456.0
     assert "10000" not in body["message"]
+
+
+def test_positions_prefer_gate_readonly_when_mock_has_configured_account(tmp_path: Path, monkeypatch) -> None:
+    config_path = tmp_path / "config.yaml"
+    write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl", ["ETH/USDT:USDT"])
+    created: list[tuple[str, str]] = []
+
+    class FakeGateway:
+        def __init__(self, mode: str, account_slot: str) -> None:
+            self.mode = mode
+            self.account_slot = account_slot
+
+        async def fetch_positions(self, symbols: list[str]) -> list[PositionSnapshot]:
+            assert symbols == ["ETH/USDT:USDT"]
+            return [
+                PositionSnapshot(
+                    symbol="ETH/USDT:USDT",
+                    side=Side.LONG,
+                    qty=0.23,
+                    entry_price=1719.36,
+                    mark_price=1727.0,
+                    unrealized_pnl=1.75,
+                )
+            ]
+
+        async def close(self) -> None:
+            return None
+
+    def fake_factory(mode_or_config: object, account_slot: str = "default") -> FakeGateway:
+        mode = str(mode_or_config)
+        created.append((mode, account_slot))
+        return FakeGateway(mode, account_slot)
+
+    monkeypatch.setattr(server, "_account_slot_configured", lambda slot: slot == "trend")
+    monkeypatch.setattr(server, "create_exchange_gateway", fake_factory)
+    client = TestClient(create_app(str(config_path)))
+
+    response = client.get("/api/positions?account_slot=trend")
+    assert response.status_code == 200
+    body = response.json()
+    assert created == [("live", "trend")]
+    assert body["source"] == "gate_live_readonly"
+    assert body["account_slot"] == "trend"
+    assert body["items"][0]["payload"]["side"] == "long"
+    assert body["items"][0]["payload"]["qty"] == 0.23
+    assert body["items"][0]["payload"]["account_slot"] == "trend"
+
+
+def test_positions_keep_follower_snapshot_separate_from_trend(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    db_path = tmp_path / "trader.sqlite3"
+    write_config(config_path, db_path, tmp_path / "audit.jsonl", ["ETH/USDT:USDT"])
+    client = TestClient(create_app(str(config_path)))
+    store = server._ctx(client.app).store
+    assert store is not None
+    store.insert(
+        "positions_snapshot",
+        {"symbol": "ETH/USDT:USDT", "side": "long", "qty": 0.5, "account_slot": "trend"},
+        symbol="ETH/USDT:USDT",
+    )
+    store.insert(
+        "positions_snapshot",
+        {"symbol": "ETH/USDT:USDT", "side": "short", "qty": 0.2, "account_slot": "follower"},
+        symbol="ETH/USDT:USDT",
+    )
+
+    response = client.get("/api/positions?account_slot=follower&prefer_live=false")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["account_slot"] == "follower"
+    assert len(body["items"]) == 1
+    assert body["items"][0]["payload"]["side"] == "short"
+    assert body["items"][0]["payload"]["account_slot"] == "follower"
 
 
 def test_live_account_balance_failure_returns_unavailable_not_mock(tmp_path: Path, monkeypatch) -> None:
