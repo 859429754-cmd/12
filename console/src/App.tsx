@@ -1622,6 +1622,7 @@ function DashboardWorkspace({
   const position = positionSnapshot(positions, symbol);
   const latestDecision = (runtimeStatus?.latest_decisions?.[symbol]?.payload || decisions[0]?.payload || { state: "等待下一次AI判断" }) as Record<string, unknown>;
   const latestDecisionParts = decisionParts(latestDecision);
+  const currentSizing = decisionSizingForPosition(latestDecisionParts, position);
   const latestCandle = candles.at(-1);
   const account = accountSnapshot(balance);
   const newsItems = visibleNewsItems(news).slice(0, 8);
@@ -1675,7 +1676,7 @@ function DashboardWorkspace({
           <HeroMetric label="持仓状态" value={position ? positionSideLabel(position.side) : "空仓"} tone={position ? "warn" : "good"} />
           <HeroMetric label="浮动盈亏" value={position ? `${num(position.pnl)} USDT` : "--"} tone={pnlTone(position?.pnl)} />
           <HeroMetric label="AI动作" value={dashboardActionLabel(latestDecision)} />
-          <HeroMetric label="仓位档" value={dashboardTierLabel(latestDecision)} />
+          <HeroMetric label="仓位档" value={`${currentSizing.label} / ${currentSizing.scale}`} tone={position ? "good" : "default"} />
           <HeroMetric label="对账状态" value={reconciliationStatusLabel(reconciliationPayload.status)} tone={reconciliationPayload.status === "ok" ? "good" : "warn"} />
           <HeroMetric label="K线数据" value={warning || `${num(candles.length, 0)} 根`} tone={warning ? "warn" : "good"} />
         </div>
@@ -1728,7 +1729,7 @@ function DashboardWorkspace({
 
         <div className="grid min-w-0 gap-4">
           <DashboardPanel title={<><BrainCircuit size={14} /> AI 决策与仓位</>} action={<span className="rounded-full border border-[#1d4ed8] bg-[#102a5c] px-3 py-1 text-[11px] text-[#bfdbfe]">只缩放 / 否决</span>}>
-            <DecisionSummary data={latestDecision} />
+            <DecisionSummary data={latestDecision} position={position} />
             <DecisionNarrative data={latestDecision} />
           </DashboardPanel>
 
@@ -2217,6 +2218,36 @@ function decisionSizing(parts: DecisionParts): DecisionSizing {
     scale: scale.scale,
     activeTier,
     note: "本地策略有入场信号，AI 置信度用于五档缩放。",
+  };
+}
+
+function hasOpenPosition(position: PositionSnapshot | null): boolean {
+  if (!position) return false;
+  const side = String(position.side || "").trim().toLowerCase();
+  const qty = Number(position.qty);
+  return side !== "flat" && side !== "--" && Number.isFinite(qty) && Math.abs(qty) > 0;
+}
+
+function decisionSizingForPosition(parts: DecisionParts, position: PositionSnapshot | null): DecisionSizing {
+  if (!hasOpenPosition(position)) return decisionSizing(parts);
+
+  const riskTier = parts.risk.position_tier;
+  const riskScale = parts.risk.position_scale;
+  if (!unknownish(riskTier) || riskScale !== undefined && riskScale !== null) {
+    const activeTier = String(riskTier || "position");
+    return {
+      label: tierLabel(activeTier),
+      scale: positionScaleLabel(riskScale),
+      activeTier,
+      note: "当前已有 Gate 实盘持仓，展示为持仓状态；最新 AI 记录只代表观察、减仓或不加仓判断。",
+    };
+  }
+
+  return {
+    label: "持仓中",
+    scale: "已执行",
+    activeTier: "position",
+    note: "当前已有 Gate 实盘持仓。最新 AI 记录是持仓观察或不加仓判断，不代表当前仓位被阻断。",
   };
 }
 
@@ -4082,7 +4113,7 @@ function RightRail({
         <DecisionRailSummary data={latestDecision} />
       </Surface>
       <Surface title={<><ShieldCheck size={13} /> 仓位档位</>}>
-        <AiSizingRail data={latestDecision} />
+        <AiSizingRail data={latestDecision} position={position} />
       </Surface>
       <Surface
         title={<><Newspaper size={13} /> 新闻快讯</>}
@@ -4110,13 +4141,21 @@ function RightRail({
   );
 }
 
-function DecisionSummary({ data, showSizing = true }: { data: Record<string, unknown>; showSizing?: boolean }) {
+function DecisionSummary({
+  data,
+  showSizing = true,
+  position = null,
+}: {
+  data: Record<string, unknown>;
+  showSizing?: boolean;
+  position?: PositionSnapshot | null;
+}) {
   const parts = decisionParts(data);
   const regime = String(decisionValue(parts, ["regime", "regime_candidate", "event_type"]) || "--");
   const direction = String(decisionValue(parts, ["direction"]) || "--");
   const action = String(decisionAction(parts) || "--");
   const confidence = decisionValue(parts, ["confidence"]);
-  const sizing = decisionSizing(parts);
+  const sizing = decisionSizingForPosition(parts, position);
   const scoreRows: Array<[string, unknown]> = [
     ["趋势确认", decisionValue(parts, ["trend_confirmation_score", "regime_trend_score"])],
     ["震荡风险", decisionValue(parts, ["range_risk_score", "regime_range_score"])],
@@ -4164,9 +4203,10 @@ function DecisionRailSummary({ data }: { data: Record<string, unknown> }) {
   );
 }
 
-function AiSizingRail({ data }: { data: Record<string, unknown> }) {
+function AiSizingRail({ data, position = null }: { data: Record<string, unknown>; position?: PositionSnapshot | null }) {
   const parts = decisionParts(data);
-  const sizing = decisionSizing(parts);
+  const sizing = decisionSizingForPosition(parts, position);
+  const positionMode = sizing.activeTier === "position";
   const tiers = [
     { key: "block", label: "阻断", scale: "0%" },
     { key: "weak", label: "弱仓", scale: "25%" },
@@ -4176,14 +4216,14 @@ function AiSizingRail({ data }: { data: Record<string, unknown> }) {
   ];
   return (
     <div className="space-y-2 text-xs">
-      <div className="rounded-xl border border-[#60a5fa] bg-[#102a5c] p-3">
-        <div className="text-[11px] text-[#bfdbfe]">当前 AI 建议仓位</div>
+      <div className={`rounded-xl border p-3 ${positionMode ? "border-[#14532d] bg-[#052e1a]" : "border-[#60a5fa] bg-[#102a5c]"}`}>
+        <div className={`text-[11px] ${positionMode ? "text-[#86efac]" : "text-[#bfdbfe]"}`}>{positionMode ? "当前实盘持仓" : "当前 AI 建议仓位"}</div>
         <div className={`${mono} mt-1 text-lg font-semibold text-white`}>{sizing.label} / {sizing.scale}</div>
-        <div className="mt-2 text-[11px] leading-5 text-[#bfdbfe]">{sizing.note}</div>
+        <div className={`mt-2 text-[11px] leading-5 ${positionMode ? "text-[#86efac]" : "text-[#bfdbfe]"}`}>{sizing.note}</div>
       </div>
       <div className="grid gap-1">
         {tiers.map((tier) => {
-          const active = tier.key === sizing.activeTier;
+          const active = !positionMode && tier.key === sizing.activeTier;
           return (
             <div key={tier.key} className={`grid grid-cols-[58px_minmax(0,1fr)_42px] items-center gap-2 rounded-lg border px-2 py-1.5 ${active ? "border-[#60a5fa] bg-[#102a5c]" : "border-[#263246] bg-[#101a2d]"}`}>
               <span className={active ? "font-semibold text-[#93c5fd]" : "text-[#94a3b8]"}>{tier.label}</span>
@@ -4229,6 +4269,7 @@ function PositionRailCard({ position, symbol, latestOrder }: { position: Positio
 }
 
 function AiSizingTierStrip({ activeTier, activeScale, note }: { activeTier: string; activeScale: string; note: string }) {
+  const positionMode = activeTier === "position";
   const tiers = [
     { key: "block", label: "阻断", scale: "0%", body: "AI 或硬风控否决，不开仓。" },
     { key: "weak", label: "弱仓", scale: "25%", body: "只允许小仓验证。" },
@@ -4243,11 +4284,18 @@ function AiSizingTierStrip({ activeTier, activeScale, note }: { activeTier: stri
           <div className="font-semibold text-[#e5eefb]">ETH 实盘五档映射</div>
           <div className="mt-1 text-[11px] text-[#94a3b8]">{note}</div>
         </div>
-        <span className={`${mono} rounded-full border border-[#60a5fa] bg-[#1d4ed8] px-3 py-1 text-white`}>当前 {tierLabel(activeTier)} / {activeScale}</span>
+        <span className={`${mono} rounded-full border px-3 py-1 text-white ${positionMode ? "border-[#14532d] bg-[#047857]" : "border-[#60a5fa] bg-[#1d4ed8]"}`}>
+          当前 {tierLabel(activeTier)} / {activeScale}
+        </span>
       </div>
+      {positionMode ? (
+        <div className="mb-3 rounded-xl border border-[#14532d] bg-[#052e1a] p-3 text-[11px] leading-5 text-[#86efac]">
+          当前展示的是交易所实盘持仓状态。下方五档只用于下一次策略入场信号的仓位裁剪，本轮最新 AI 记录为观察或不加仓时，不应把既有仓位显示成阻断。
+        </div>
+      ) : null}
       <div className="grid gap-2 md:grid-cols-5">
         {tiers.map((tier) => {
-          const active = tier.key === activeTier;
+          const active = !positionMode && tier.key === activeTier;
           return (
             <div key={tier.key} className={`rounded-xl border p-3 transition-all duration-200 ${active ? "border-[#60a5fa] bg-[#102a5c] shadow-[0_12px_28px_rgba(37,99,235,0.22)]" : "border-[#263246] bg-[#101a2d]"}`}>
               <div className="flex items-center justify-between gap-2">
@@ -4440,6 +4488,7 @@ function tierLabel(value: unknown) {
     normal: "标准仓",
     weak: "弱仓",
     block: "阻断",
+    position: "持仓中",
   };
   return labels[text] || text;
 }
