@@ -355,6 +355,7 @@ export function App() {
             <RightRail
               symbol={symbol}
               status={status}
+              balance={balance}
               decisions={decisions}
               positions={positions}
               orders={orders}
@@ -1622,9 +1623,10 @@ function DashboardWorkspace({
   const position = positionSnapshot(positions, symbol);
   const latestDecision = (runtimeStatus?.latest_decisions?.[symbol]?.payload || decisions[0]?.payload || { state: "等待下一次AI判断" }) as Record<string, unknown>;
   const latestDecisionParts = decisionParts(latestDecision);
-  const currentSizing = decisionSizingForPosition(latestDecisionParts, position);
   const latestCandle = candles.at(-1);
   const account = accountSnapshot(balance);
+  const sizingContext = { equity: account.total, maxLeverage: runtimeStatus?.risk?.max_total_leverage || 4 };
+  const currentSizing = decisionSizingForPosition(latestDecisionParts, position, sizingContext);
   const newsItems = visibleNewsItems(news).slice(0, 8);
   const newsWarnings = (news.warnings || []).filter((item) => !isInternalNewsText(item));
   const readinessOverall = readiness?.overall || "warn";
@@ -1729,8 +1731,8 @@ function DashboardWorkspace({
 
         <div className="grid min-w-0 gap-4">
           <DashboardPanel title={<><BrainCircuit size={14} /> AI 决策与仓位</>} action={<span className="rounded-full border border-[#1d4ed8] bg-[#102a5c] px-3 py-1 text-[11px] text-[#bfdbfe]">只缩放 / 否决</span>}>
-            <DecisionSummary data={latestDecision} position={position} />
-            <DecisionNarrative data={latestDecision} />
+            <DecisionSummary data={latestDecision} position={position} sizingContext={sizingContext} />
+            <DecisionNarrative data={latestDecision} position={position} sizingContext={sizingContext} />
           </DashboardPanel>
 
           <DashboardPanel title={<><ShieldCheck size={14} /> 实盘安全闸</>} action={<span className={`rounded-full px-3 py-1 text-[11px] ${readinessToneClass(readinessOverall)}`}>{readinessLabel(readinessOverall)}</span>}>
@@ -2124,6 +2126,27 @@ function decisionReason(parts: DecisionParts): string {
   return raw;
 }
 
+function decisionReasonForPosition(parts: DecisionParts, position: PositionSnapshot | null, context: DecisionSizingContext = {}): string {
+  const reason = decisionReason(parts);
+  if (!hasOpenPosition(position)) return reason;
+
+  const action = String(decisionAction(parts) || "").toLowerCase();
+  const sizing = decisionSizingForPosition(parts, position, context);
+  const side = positionSideLabel(position?.side);
+  const noEntryText =
+    reason.includes("当前没有本地策略入场信号") ||
+    reason.includes("当前技术未触发开仓信号") ||
+    reason.includes("无策略开仓信号") ||
+    reason.includes("不发起新仓") ||
+    reason.includes("不展示可开仓仓位");
+
+  const prefix = `当前已有 Gate 实盘${side}持仓，五档显示为 ${sizing.label} / ${sizing.scale} 的持仓映射；`;
+  if (noEntryText || ["hold", "wait"].includes(action) || !hasActionableStrategySignal(parts)) {
+    return `${prefix}最新 AI 记录表示观察、不追仓或不加仓，并不否认既有持仓。`;
+  }
+  return `${prefix}${reason}`;
+}
+
 function decisionReasonCodes(parts: DecisionParts): string[] {
   const sources = [parts.ai, parts.risk, parts.root, parts.signal, parts.technical, parts.event];
   const output: string[] = [];
@@ -2168,6 +2191,13 @@ type DecisionSizing = {
   scale: string;
   activeTier: string;
   note: string;
+  mode?: "entry" | "position" | "position_estimated";
+  estimated?: boolean;
+};
+
+type DecisionSizingContext = {
+  equity?: unknown;
+  maxLeverage?: unknown;
 };
 
 function decisionSizing(parts: DecisionParts): DecisionSizing {
@@ -2185,6 +2215,7 @@ function decisionSizing(parts: DecisionParts): DecisionSizing {
       scale: "0%",
       activeTier: "block",
       note: "当前没有本地策略入场信号，AI 只做观察、减仓或否决，不展示可开仓仓位。",
+      mode: "entry",
     };
   }
 
@@ -2197,6 +2228,7 @@ function decisionSizing(parts: DecisionParts): DecisionSizing {
       scale: positionScaleLabel(riskScale),
       activeTier,
       note: "后端 RiskManager 已返回正式仓位档。",
+      mode: "entry",
     };
   }
 
@@ -2208,6 +2240,7 @@ function decisionSizing(parts: DecisionParts): DecisionSizing {
       scale: activeTier === "normal" ? "50%" : "25%",
       activeTier,
       note: "本地策略有信号，但 AI 建议降档。",
+      mode: "entry",
     };
   }
 
@@ -2218,6 +2251,7 @@ function decisionSizing(parts: DecisionParts): DecisionSizing {
     scale: scale.scale,
     activeTier,
     note: "本地策略有入场信号，AI 置信度用于五档缩放。",
+    mode: "entry",
   };
 }
 
@@ -2228,27 +2262,129 @@ function hasOpenPosition(position: PositionSnapshot | null): boolean {
   return side !== "flat" && side !== "--" && Number.isFinite(qty) && Math.abs(qty) > 0;
 }
 
-function decisionSizingForPosition(parts: DecisionParts, position: PositionSnapshot | null): DecisionSizing {
+function decisionSizingForPosition(parts: DecisionParts, position: PositionSnapshot | null, context: DecisionSizingContext = {}): DecisionSizing {
   if (!hasOpenPosition(position)) return decisionSizing(parts);
 
   const riskTier = parts.risk.position_tier;
   const riskScale = parts.risk.position_scale;
-  if (!unknownish(riskTier) || riskScale !== undefined && riskScale !== null) {
-    const activeTier = String(riskTier || "position");
+  if ((!unknownish(riskTier) && isDisplayableSizingTier(riskTier)) || Number(riskScale) > 0) {
+    const activeTier = isDisplayableSizingTier(riskTier) ? String(riskTier) : tierKeyFromScale(riskScale);
     return {
       label: tierLabel(activeTier),
-      scale: positionScaleLabel(riskScale),
+      scale: Number(riskScale) > 0 ? positionScaleLabel(riskScale) : tierScaleLabel(activeTier),
       activeTier,
-      note: "当前已有 Gate 实盘持仓，展示为持仓状态；最新 AI 记录只代表观察、减仓或不加仓判断。",
+      note: "当前已有 Gate 实盘持仓，五档显示为最近 RiskManager 返回的持仓档位；最新 AI 记录只代表观察、减仓或不加仓判断。",
+      mode: "position",
+    };
+  }
+
+  const exposureSizing = decisionSizingFromExposure(position, context);
+  if (exposureSizing) return exposureSizing;
+
+  const inferredConfidence = inferredPositionConfidence(parts);
+  if (inferredConfidence !== null) {
+    let activeTier = tierKeyFromConfidence(inferredConfidence);
+    if (activeTier === "block") activeTier = "weak";
+    return {
+      label: tierLabel(activeTier),
+      scale: tierScaleLabel(activeTier),
+      activeTier,
+      note: "当前已有 Gate 实盘持仓；因开仓档位未在最新记录中落库，按最新 AI 置信度/五分制保守映射为持仓观察档，不代表新的开仓信号。",
+      mode: "position_estimated",
+      estimated: true,
     };
   }
 
   return {
-    label: "持仓中",
-    scale: "已执行",
-    activeTier: "position",
-    note: "当前已有 Gate 实盘持仓。最新 AI 记录是持仓观察或不加仓判断，不代表当前仓位被阻断。",
+    label: "弱仓",
+    scale: "25%",
+    activeTier: "weak",
+    note: "当前已有 Gate 实盘持仓，但最新记录缺少可追溯档位与置信度；控制台用弱仓作为保守显示，不代表新的开仓信号。",
+    mode: "position_estimated",
+    estimated: true,
   };
+}
+
+function isDisplayableSizingTier(value: unknown): boolean {
+  return ["weak", "normal", "strong", "full"].includes(String(value || "").trim().toLowerCase());
+}
+
+function decisionSizingFromExposure(position: PositionSnapshot | null, context: DecisionSizingContext): DecisionSizing | null {
+  if (!hasOpenPosition(position)) return null;
+  const equity = Number(context.equity);
+  const maxLeverage = Number(context.maxLeverage);
+  const notional = Math.abs(Number(position?.notional));
+  if (
+    !Number.isFinite(equity) ||
+    equity <= 0 ||
+    !Number.isFinite(maxLeverage) ||
+    maxLeverage <= 0 ||
+    !Number.isFinite(notional) ||
+    notional <= 0
+  ) {
+    return null;
+  }
+
+  const activeTier = tierKeyFromPositionRatio(notional / (equity * maxLeverage));
+  return {
+    label: tierLabel(activeTier),
+    scale: tierScaleLabel(activeTier),
+    activeTier,
+    note: "当前已有 Gate 实盘持仓；五档按当前名义仓位 / 账户权益 / 杠杆上限映射，不代表新的开仓信号。",
+    mode: "position_estimated",
+    estimated: true,
+  };
+}
+
+function tierScaleLabel(value: unknown): string {
+  const text = String(value || "").trim().toLowerCase();
+  const scales: Record<string, string> = {
+    full: "100%",
+    strong: "75%",
+    normal: "50%",
+    weak: "25%",
+    block: "0%",
+  };
+  return scales[text] || "--";
+}
+
+function tierKeyFromScale(value: unknown): string {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "weak";
+  if (number >= 0.99) return "full";
+  if (number >= 0.74) return "strong";
+  if (number >= 0.49) return "normal";
+  return "weak";
+}
+
+function tierKeyFromPositionRatio(value: unknown): string {
+  const ratio = Number(value);
+  if (!Number.isFinite(ratio) || ratio <= 0) return "weak";
+  if (ratio >= 0.875) return "full";
+  if (ratio >= 0.625) return "strong";
+  if (ratio >= 0.375) return "normal";
+  return "weak";
+}
+
+function inferredPositionConfidence(parts: DecisionParts): number | null {
+  const direct = Number(decisionValue(parts, ["confidence"]));
+  if (Number.isFinite(direct)) return Math.max(0, Math.min(1, direct));
+
+  const trend = Number(decisionValue(parts, ["trend_confirmation_score", "regime_trend_score"]));
+  const rangeRisk = Number(decisionValue(parts, ["range_risk_score", "regime_range_score"]));
+  const newsRisk = Number(decisionValue(parts, ["news_risk_score"]));
+  const orderflow = Number(decisionValue(parts, ["orderflow_confirmation_score"]));
+  const dense = Number(decisionValue(parts, ["dense_zone_breakout_score"]));
+  const values = [trend, rangeRisk, newsRisk, orderflow, dense];
+  if (!values.some(Number.isFinite)) return null;
+
+  const safeTrend = Number.isFinite(trend) ? trend : 0.5;
+  const safeRange = Number.isFinite(rangeRisk) ? 1 - rangeRisk : 0.5;
+  const safeNews = Number.isFinite(newsRisk) ? 1 - newsRisk : 0.5;
+  const safeOrderflow = Number.isFinite(orderflow) ? orderflow : 0.5;
+  const safeDense = Number.isFinite(dense) ? dense : 0.5;
+  const composite = safeTrend * 0.35 + safeRange * 0.2 + safeNews * 0.15 + safeOrderflow * 0.15 + safeDense * 0.15;
+  return Math.max(0, Math.min(1, composite));
 }
 
 function hasActionableStrategySignal(parts: DecisionParts): boolean {
@@ -4085,6 +4221,7 @@ function HealthCard({
 function RightRail({
   symbol,
   status,
+  balance,
   decisions,
   positions,
   orders,
@@ -4095,6 +4232,7 @@ function RightRail({
 }: {
   symbol: string;
   status: StatusResponse | null;
+  balance: Record<string, unknown> | null;
   decisions: Array<DbRow>;
   positions: Array<DbRow>;
   orders: Array<DbRow>;
@@ -4107,13 +4245,15 @@ function RightRail({
   const newsWarnings = (news.warnings || []).filter((item) => !isInternalNewsText(item));
   const railNewsItems = visibleNewsItems(news).slice(0, 3);
   const position = positionSnapshot(positions, symbol);
+  const account = accountSnapshot(balance);
+  const sizingContext = { equity: account.total, maxLeverage: status?.risk?.max_total_leverage || 4 };
   return (
     <aside className="flex min-h-0 flex-col gap-3 overflow-auto">
       <Surface title={<><BrainCircuit size={13} /> AI 决策</>}>
-        <DecisionRailSummary data={latestDecision} />
+        <DecisionRailSummary data={latestDecision} position={position} sizingContext={sizingContext} />
       </Surface>
       <Surface title={<><ShieldCheck size={13} /> 仓位档位</>}>
-        <AiSizingRail data={latestDecision} position={position} />
+        <AiSizingRail data={latestDecision} position={position} sizingContext={sizingContext} />
       </Surface>
       <Surface
         title={<><Newspaper size={13} /> 新闻快讯</>}
@@ -4145,17 +4285,19 @@ function DecisionSummary({
   data,
   showSizing = true,
   position = null,
+  sizingContext = {},
 }: {
   data: Record<string, unknown>;
   showSizing?: boolean;
   position?: PositionSnapshot | null;
+  sizingContext?: DecisionSizingContext;
 }) {
   const parts = decisionParts(data);
   const regime = String(decisionValue(parts, ["regime", "regime_candidate", "event_type"]) || "--");
   const direction = String(decisionValue(parts, ["direction"]) || "--");
   const action = String(decisionAction(parts) || "--");
   const confidence = decisionValue(parts, ["confidence"]);
-  const sizing = decisionSizingForPosition(parts, position);
+  const sizing = decisionSizingForPosition(parts, position, sizingContext);
   const scoreRows: Array<[string, unknown]> = [
     ["趋势确认", decisionValue(parts, ["trend_confirmation_score", "regime_trend_score"])],
     ["震荡风险", decisionValue(parts, ["range_risk_score", "regime_range_score"])],
@@ -4173,18 +4315,34 @@ function DecisionSummary({
       {scoreRows.map(([label, value]) => (
         <Metric key={label} label={label} value={confidencePct(value)} tone={Number(value) >= 0.7 ? "good" : Number(value) >= 0.45 ? "warn" : "bad"} />
       ))}
-      {showSizing ? <AiSizingTierStrip activeTier={sizing.activeTier} activeScale={sizing.scale} note={sizing.note} /> : null}
+      {showSizing ? (
+        <AiSizingTierStrip
+          activeTier={sizing.activeTier}
+          activeScale={sizing.scale}
+          note={sizing.note}
+          positionMode={sizing.mode === "position" || sizing.mode === "position_estimated"}
+          estimated={Boolean(sizing.estimated)}
+        />
+      ) : null}
     </div>
   );
 }
 
-function DecisionRailSummary({ data }: { data: Record<string, unknown> }) {
+function DecisionRailSummary({
+  data,
+  position = null,
+  sizingContext = {},
+}: {
+  data: Record<string, unknown>;
+  position?: PositionSnapshot | null;
+  sizingContext?: DecisionSizingContext;
+}) {
   const parts = decisionParts(data);
   const regime = String(decisionValue(parts, ["regime", "regime_candidate", "event_type"]) || "--");
   const direction = String(decisionValue(parts, ["direction"]) || "--");
   const action = String(decisionAction(parts) || "--");
   const confidence = decisionValue(parts, ["confidence"]);
-  const reason = decisionReason(parts);
+  const reason = decisionReasonForPosition(parts, position, sizingContext);
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-2 gap-2">
@@ -4203,10 +4361,18 @@ function DecisionRailSummary({ data }: { data: Record<string, unknown> }) {
   );
 }
 
-function AiSizingRail({ data, position = null }: { data: Record<string, unknown>; position?: PositionSnapshot | null }) {
+function AiSizingRail({
+  data,
+  position = null,
+  sizingContext = {},
+}: {
+  data: Record<string, unknown>;
+  position?: PositionSnapshot | null;
+  sizingContext?: DecisionSizingContext;
+}) {
   const parts = decisionParts(data);
-  const sizing = decisionSizingForPosition(parts, position);
-  const positionMode = sizing.activeTier === "position";
+  const sizing = decisionSizingForPosition(parts, position, sizingContext);
+  const positionMode = sizing.mode === "position" || sizing.mode === "position_estimated";
   const tiers = [
     { key: "block", label: "阻断", scale: "0%" },
     { key: "weak", label: "弱仓", scale: "25%" },
@@ -4217,13 +4383,13 @@ function AiSizingRail({ data, position = null }: { data: Record<string, unknown>
   return (
     <div className="space-y-2 text-xs">
       <div className={`rounded-xl border p-3 ${positionMode ? "border-[#14532d] bg-[#052e1a]" : "border-[#60a5fa] bg-[#102a5c]"}`}>
-        <div className={`text-[11px] ${positionMode ? "text-[#86efac]" : "text-[#bfdbfe]"}`}>{positionMode ? "当前实盘持仓" : "当前 AI 建议仓位"}</div>
+        <div className={`text-[11px] ${positionMode ? "text-[#86efac]" : "text-[#bfdbfe]"}`}>{positionMode ? "当前持仓映射档" : "当前 AI 建议仓位"}</div>
         <div className={`${mono} mt-1 text-lg font-semibold text-white`}>{sizing.label} / {sizing.scale}</div>
         <div className={`mt-2 text-[11px] leading-5 ${positionMode ? "text-[#86efac]" : "text-[#bfdbfe]"}`}>{sizing.note}</div>
       </div>
       <div className="grid gap-1">
         {tiers.map((tier) => {
-          const active = !positionMode && tier.key === sizing.activeTier;
+          const active = tier.key === sizing.activeTier;
           return (
             <div key={tier.key} className={`grid grid-cols-[58px_minmax(0,1fr)_42px] items-center gap-2 rounded-lg border px-2 py-1.5 ${active ? "border-[#60a5fa] bg-[#102a5c]" : "border-[#263246] bg-[#101a2d]"}`}>
               <span className={active ? "font-semibold text-[#93c5fd]" : "text-[#94a3b8]"}>{tier.label}</span>
@@ -4268,8 +4434,19 @@ function PositionRailCard({ position, symbol, latestOrder }: { position: Positio
   );
 }
 
-function AiSizingTierStrip({ activeTier, activeScale, note }: { activeTier: string; activeScale: string; note: string }) {
-  const positionMode = activeTier === "position";
+function AiSizingTierStrip({
+  activeTier,
+  activeScale,
+  note,
+  positionMode = false,
+  estimated = false,
+}: {
+  activeTier: string;
+  activeScale: string;
+  note: string;
+  positionMode?: boolean;
+  estimated?: boolean;
+}) {
   const tiers = [
     { key: "block", label: "阻断", scale: "0%", body: "AI 或硬风控否决，不开仓。" },
     { key: "weak", label: "弱仓", scale: "25%", body: "只允许小仓验证。" },
@@ -4285,17 +4462,17 @@ function AiSizingTierStrip({ activeTier, activeScale, note }: { activeTier: stri
           <div className="mt-1 text-[11px] text-[#94a3b8]">{note}</div>
         </div>
         <span className={`${mono} rounded-full border px-3 py-1 text-white ${positionMode ? "border-[#14532d] bg-[#047857]" : "border-[#60a5fa] bg-[#1d4ed8]"}`}>
-          当前 {tierLabel(activeTier)} / {activeScale}
+          当前 {tierLabel(activeTier)} / {activeScale}{estimated ? " · 估算" : ""}
         </span>
       </div>
       {positionMode ? (
         <div className="mb-3 rounded-xl border border-[#14532d] bg-[#052e1a] p-3 text-[11px] leading-5 text-[#86efac]">
-          当前展示的是交易所实盘持仓状态。下方五档只用于下一次策略入场信号的仓位裁剪，本轮最新 AI 记录为观察或不加仓时，不应把既有仓位显示成阻断。
+          当前持仓映射档已高亮。它用于解释已有 Gate 实盘仓位来源或当前持仓观察档，不代表系统正在发出新的开仓信号。
         </div>
       ) : null}
       <div className="grid gap-2 md:grid-cols-5">
         {tiers.map((tier) => {
-          const active = !positionMode && tier.key === activeTier;
+          const active = tier.key === activeTier;
           return (
             <div key={tier.key} className={`rounded-xl border p-3 transition-all duration-200 ${active ? "border-[#60a5fa] bg-[#102a5c] shadow-[0_12px_28px_rgba(37,99,235,0.22)]" : "border-[#263246] bg-[#101a2d]"}`}>
               <div className="flex items-center justify-between gap-2">
@@ -4314,7 +4491,15 @@ function AiSizingTierStrip({ activeTier, activeScale, note }: { activeTier: stri
   );
 }
 
-function DecisionNarrative({ data }: { data: Record<string, unknown> }) {
+function DecisionNarrative({
+  data,
+  position = null,
+  sizingContext = {},
+}: {
+  data: Record<string, unknown>;
+  position?: PositionSnapshot | null;
+  sizingContext?: DecisionSizingContext;
+}) {
   const parts = decisionParts(data);
   const rows: Array<[string, string]> = [
     ["消息面", alignmentLabel(decisionValue(parts, ["news_alignment"]))],
@@ -4323,7 +4508,7 @@ function DecisionNarrative({ data }: { data: Record<string, unknown> }) {
     ["形态", patternLabel(decisionPatternValue(parts))],
     ["建议", actionLabel(decisionAction(parts))],
   ];
-  const reason = decisionReason(parts);
+  const reason = decisionReasonForPosition(parts, position, sizingContext);
   return (
     <div className="rounded-xl border border-[#263246] bg-[#101a2d] p-3 text-xs text-[#cbd5e1]">
       <div className="grid gap-2">
