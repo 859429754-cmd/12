@@ -300,6 +300,7 @@ class TradingApp:
                     reduce_only=False,
                     client_order_id=f"aiq_{uuid.uuid4().hex[:20]}",
                     reason=risk.reason,
+                    metadata=self._order_risk_metadata(signal, ai, risk, role="primary"),
                 )
                 try:
                     order = await self.order_lifecycle.submit_market_order(self.execution, entry_request)
@@ -1306,6 +1307,32 @@ class TradingApp:
                 continue
             await self._mirror_entry_to_follower(follower, symbol, signal, ai, risk, primary_order)
 
+    def _order_risk_metadata(
+        self,
+        signal: StrategySignal,
+        ai: AiDecision,
+        risk: RiskDecision,
+        *,
+        role: str,
+        sizing_reason: str | None = None,
+    ) -> dict[str, object]:
+        return {
+            "role": role,
+            "strategy_action": signal.action.value,
+            "strategy_symbol": signal.symbol,
+            "strategy_timeframe": signal.timeframe,
+            "risk_position_tier": risk.position_tier,
+            "risk_position_scale": float(risk.position_scale),
+            "risk_decision_score": float(risk.decision_score),
+            "risk_clipped_qty": float(risk.clipped_qty),
+            "risk_target_qty": float(risk.target_qty),
+            "risk_reason": risk.reason,
+            "ai_confidence": float(ai.confidence),
+            "ai_action_suggestion": ai.action_suggestion,
+            "ai_direction": ai.direction,
+            "sizing_reason": sizing_reason,
+        }
+
     async def _mirror_entry_to_follower(
         self,
         follower: FollowerAccountConfig,
@@ -1363,6 +1390,7 @@ class TradingApp:
                 reduce_only=False,
                 client_order_id=f"aiq_fol_{uuid.uuid4().hex[:18]}",
                 reason=f"follower_mirror_entry:{risk.reason}",
+                metadata=self._order_risk_metadata(signal, ai, risk, role="follower", sizing_reason=sizing_reason),
             )
             order = await self.follower_order_lifecycle.submit_market_order(self.follower_execution, entry_request)
             self.store.insert("orders", {**order.model_dump(mode="json"), "account_slot": account_slot, "role": "follower"}, symbol)

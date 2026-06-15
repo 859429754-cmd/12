@@ -555,6 +555,7 @@ class OrderRequest(BaseModel):
     reduce_only: bool = False
     client_order_id: str
     reason: str = ""
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class OrderResult(BaseModel):
@@ -586,6 +587,7 @@ class OrderLifecycleEvent(BaseModel):
     error_type: str | None = None
     error_message: str | None = None
     recoverable: bool = False
+    metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=utc_now)
 
 

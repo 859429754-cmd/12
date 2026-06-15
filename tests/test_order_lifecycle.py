@@ -94,6 +94,31 @@ async def test_order_lifecycle_records_intent_before_submission(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
+async def test_order_lifecycle_persists_risk_metadata(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    manager = OrderLifecycleManager(store)
+    request = make_request("metadata_client_id").model_copy(
+        update={
+            "metadata": {
+                "risk_position_tier": "weak",
+                "risk_position_scale": 0.25,
+                "ai_confidence": 0.62,
+                "role": "primary",
+            }
+        }
+    )
+
+    await manager.submit_market_order(RecordingGateway(status="closed"), request)
+    latest = store.fetch_payloads("order_lifecycle", limit=1)[0]["payload"]
+
+    assert latest["status"] == "filled"
+    assert latest["metadata"]["risk_position_tier"] == "weak"
+    assert latest["metadata"]["risk_position_scale"] == pytest.approx(0.25)
+    assert latest["metadata"]["role"] == "primary"
+    store.close()
+
+
+@pytest.mark.asyncio
 async def test_order_lifecycle_suppresses_duplicate_client_order_id(tmp_path: Path) -> None:
     store = make_store(tmp_path)
     manager = OrderLifecycleManager(store)

@@ -186,6 +186,7 @@ class OrderLifecycleManager:
                 exchange_order_id=refreshed.exchange_order_id,
                 order_status=refreshed.status,
                 order=refreshed.model_dump(mode="json"),
+                metadata=dict(payload.get("metadata") or {}),
             )
             self.store.insert("order_lifecycle", event, event.symbol)
             updates.append(event)
@@ -346,6 +347,7 @@ class OrderLifecycleManager:
             error_type=error_type,
             error_message=error_message,
             recoverable=recoverable,
+            metadata=request.metadata,
         )
 
     def _record_order(
@@ -373,6 +375,7 @@ class OrderLifecycleManager:
             exchange_order_id=order.exchange_order_id,
             order_status=order.status,
             order=order.model_dump(mode="json"),
+            metadata=request.metadata,
         )
 
     def _record(
@@ -394,6 +397,7 @@ class OrderLifecycleManager:
         error_type: str | None = None,
         error_message: str | None = None,
         recoverable: bool = False,
+        metadata: dict[str, Any] | None = None,
     ) -> int:
         event = OrderLifecycleEvent(
             client_order_id=client_order_id,
@@ -412,6 +416,7 @@ class OrderLifecycleManager:
             error_type=error_type,
             error_message=error_message,
             recoverable=recoverable,
+            metadata=metadata or {},
         )
         return self.store.insert("order_lifecycle", event, symbol)
 

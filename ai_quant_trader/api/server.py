@@ -1181,6 +1181,23 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         ctx.reload()
         return {"items": ctx.table("orders", limit=limit, symbol=symbol)}
 
+    @app.get("/api/order-lifecycle")
+    def order_lifecycle(
+        limit: int = Query(default=50, ge=1, le=200),
+        symbol: str | None = None,
+        account_slot: str | None = None,
+    ) -> dict[str, Any]:
+        ctx = _ctx(app)
+        ctx.reload()
+        rows = ctx.table("order_lifecycle", limit=limit, symbol=symbol)
+        if account_slot:
+            rows = [
+                row
+                for row in rows
+                if str((row.get("payload") or {}).get("account_slot") or "default") == account_slot
+            ]
+        return {"items": rows}
+
     @app.get("/api/decisions")
     def decisions(limit: int = Query(default=50, ge=1, le=200), symbol: str | None = None) -> dict[str, Any]:
         ctx = _ctx(app)

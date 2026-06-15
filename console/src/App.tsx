@@ -74,6 +74,7 @@ export function App() {
   const [candles, setCandles] = useState<Candle[]>([]);
   const [ticker, setTicker] = useState<MarketTickerResponse | null>(null);
   const [orders, setOrders] = useState<Array<DbRow>>([]);
+  const [orderLifecycle, setOrderLifecycle] = useState<Array<DbRow>>([]);
   const [positions, setPositions] = useState<Array<DbRow>>([]);
   const [decisions, setDecisions] = useState<Array<DbRow>>([]);
   const [riskSummary, setRiskSummary] = useState<Record<string, unknown> | null>(null);
@@ -164,6 +165,7 @@ export function App() {
         nextRiskSummary,
         nextAccountSlots,
         nextOrders,
+        nextOrderLifecycle,
         nextDecisions,
         nextDenseZone,
       ] =
@@ -182,6 +184,7 @@ export function App() {
           api<Record<string, unknown>>("/api/risk/summary", { retries: 1 }),
           safe(api<{ items: ExecutionAccountSlot[] }>("/api/execution/accounts", { retries: 1 }), { items: [] }),
           api<ApiList>(`/api/orders?limit=80&symbol=${encodeURIComponent(symbol)}`, { retries: 1 }),
+          api<ApiList>(`/api/order-lifecycle?limit=120&symbol=${encodeURIComponent(symbol)}&account_slot=${encodeURIComponent(primaryAccountSlot)}`, { retries: 1 }),
           api<ApiList>(`/api/decisions?limit=80&symbol=${encodeURIComponent(symbol)}`, { retries: 1 }),
           safe(api<{ item: DbRow<DenseZonePayload> | null }>(`/api/dense-zones/latest?symbol=${encodeURIComponent(symbol)}`, { retries: 1 }), { item: null }),
         ]);
@@ -195,6 +198,7 @@ export function App() {
       setRiskSummary(nextRiskSummary);
       setAccountSlots(nextAccountSlots.items || []);
       setOrders(nextOrders.items || []);
+      setOrderLifecycle(nextOrderLifecycle.items || []);
       setDecisions(nextDecisions.items || []);
       setDenseZone(nextDenseZone.item || null);
     } catch (error) {
@@ -339,6 +343,7 @@ export function App() {
         news={news}
         positions={positions}
         orders={orders}
+        orderLifecycle={orderLifecycle}
         accountSlots={accountSlots}
         denseZone={denseZone}
         riskSummary={riskSummary}
@@ -359,6 +364,7 @@ export function App() {
               decisions={decisions}
               positions={positions}
               orders={orders}
+              orderLifecycle={orderLifecycle}
               news={news}
               denseZone={denseZone}
               busy={busy}
@@ -905,6 +911,7 @@ function WorkspaceBody({
   news,
   positions,
   orders,
+  orderLifecycle,
   accountSlots,
   denseZone,
   riskSummary,
@@ -934,6 +941,7 @@ function WorkspaceBody({
   news: NewsResponse;
   positions: Array<DbRow>;
   orders: Array<DbRow>;
+  orderLifecycle: Array<DbRow>;
   accountSlots: ExecutionAccountSlot[];
   denseZone: DbRow<DenseZonePayload> | null;
   riskSummary: Record<string, unknown> | null;
@@ -969,6 +977,7 @@ function WorkspaceBody({
         balance={balance}
         positions={positions}
         orders={orders}
+        orderLifecycle={orderLifecycle}
         decisions={decisions}
         denseZone={denseZone}
         news={news}
@@ -1593,6 +1602,7 @@ function DashboardWorkspace({
   balance,
   positions,
   orders,
+  orderLifecycle,
   decisions,
   denseZone,
   news,
@@ -1609,6 +1619,7 @@ function DashboardWorkspace({
   balance: Record<string, unknown> | null;
   positions: Array<DbRow>;
   orders: Array<DbRow>;
+  orderLifecycle: Array<DbRow>;
   decisions: Array<DbRow>;
   denseZone: DbRow<DenseZonePayload> | null;
   news: NewsResponse;
@@ -1625,7 +1636,8 @@ function DashboardWorkspace({
   const latestDecisionParts = decisionParts(latestDecision);
   const latestCandle = candles.at(-1);
   const account = accountSnapshot(balance);
-  const sizingContext = { equity: account.total, maxLeverage: runtimeStatus?.risk?.max_total_leverage || 4 };
+  const orderRiskSizing = orderLifecycleSizingForPosition(orderLifecycle, position);
+  const sizingContext = { equity: account.total, maxLeverage: runtimeStatus?.risk?.max_total_leverage || 4, orderRiskSizing };
   const currentSizing = decisionSizingForPosition(latestDecisionParts, position, sizingContext);
   const newsItems = visibleNewsItems(news).slice(0, 8);
   const newsWarnings = (news.warnings || []).filter((item) => !isInternalNewsText(item));
@@ -2198,6 +2210,7 @@ type DecisionSizing = {
 type DecisionSizingContext = {
   equity?: unknown;
   maxLeverage?: unknown;
+  orderRiskSizing?: DecisionSizing | null;
 };
 
 function decisionSizing(parts: DecisionParts): DecisionSizing {
@@ -2265,6 +2278,8 @@ function hasOpenPosition(position: PositionSnapshot | null): boolean {
 function decisionSizingForPosition(parts: DecisionParts, position: PositionSnapshot | null, context: DecisionSizingContext = {}): DecisionSizing {
   if (!hasOpenPosition(position)) return decisionSizing(parts);
 
+  if (context.orderRiskSizing) return context.orderRiskSizing;
+
   const riskTier = parts.risk.position_tier;
   const riskScale = parts.risk.position_scale;
   if ((!unknownish(riskTier) && isDisplayableSizingTier(riskTier)) || Number(riskScale) > 0) {
@@ -2303,6 +2318,38 @@ function decisionSizingForPosition(parts: DecisionParts, position: PositionSnaps
     mode: "position_estimated",
     estimated: true,
   };
+}
+
+function orderLifecycleSizingForPosition(rows: Array<DbRow>, position: PositionSnapshot | null): DecisionSizing | null {
+  if (!hasOpenPosition(position)) return null;
+  const expectedSide = entryOrderSideForPosition(position);
+  for (const row of rows) {
+    const payload = objectPayload(row.payload);
+    if (payload.reduce_only === true) continue;
+    const orderType = String(payload.order_type || "market").toLowerCase();
+    if (orderType !== "market") continue;
+    const side = String(payload.side || "").toLowerCase();
+    if (side && side !== expectedSide) continue;
+    const metadata = objectPayload(payload.metadata);
+    const tier = metadata.risk_position_tier;
+    const scale = metadata.risk_position_scale;
+    if (!isDisplayableSizingTier(tier) && !(Number(scale) > 0)) continue;
+    const activeTier = isDisplayableSizingTier(tier) ? String(tier) : tierKeyFromScale(scale);
+    return {
+      label: tierLabel(activeTier),
+      scale: Number(scale) > 0 ? positionScaleLabel(scale) : tierScaleLabel(activeTier),
+      activeTier,
+      note: "当前已有 Gate 实盘持仓，五档来自该持仓最近一次入场订单的 RiskManager 档位；最新 AI 记录只代表观察、减仓或不加仓判断。",
+      mode: "position",
+    };
+  }
+  return null;
+}
+
+function entryOrderSideForPosition(position: PositionSnapshot | null): "buy" | "sell" {
+  const side = String(position?.side || "").toLowerCase();
+  if (side.includes("short") || side.includes("sell") || side.includes("空")) return "sell";
+  return "buy";
 }
 
 function isDisplayableSizingTier(value: unknown): boolean {
@@ -4225,6 +4272,7 @@ function RightRail({
   decisions,
   positions,
   orders,
+  orderLifecycle,
   news,
   denseZone,
   busy,
@@ -4236,6 +4284,7 @@ function RightRail({
   decisions: Array<DbRow>;
   positions: Array<DbRow>;
   orders: Array<DbRow>;
+  orderLifecycle: Array<DbRow>;
   news: NewsResponse;
   denseZone: DbRow<DenseZonePayload> | null;
   busy: boolean;
@@ -4246,7 +4295,8 @@ function RightRail({
   const railNewsItems = visibleNewsItems(news).slice(0, 3);
   const position = positionSnapshot(positions, symbol);
   const account = accountSnapshot(balance);
-  const sizingContext = { equity: account.total, maxLeverage: status?.risk?.max_total_leverage || 4 };
+  const orderRiskSizing = orderLifecycleSizingForPosition(orderLifecycle, position);
+  const sizingContext = { equity: account.total, maxLeverage: status?.risk?.max_total_leverage || 4, orderRiskSizing };
   return (
     <aside className="flex min-h-0 flex-col gap-3 overflow-auto">
       <Surface title={<><BrainCircuit size={13} /> AI 决策</>}>

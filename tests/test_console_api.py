@@ -90,6 +90,58 @@ def test_console_context_reload_reuses_store_when_config_is_unchanged(tmp_path: 
         ctx.close()
 
 
+def test_order_lifecycle_endpoint_filters_account_slot(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    db_path = tmp_path / "trader.sqlite3"
+    audit_path = tmp_path / "audit.jsonl"
+    write_config(config_path, db_path, audit_path, symbols=["ETH/USDT:USDT"])
+    store = SQLiteStore(str(db_path), str(audit_path))
+    try:
+        store.insert(
+            "order_lifecycle",
+            {
+                "client_order_id": "trend_entry",
+                "symbol": "ETH/USDT:USDT",
+                "status": "filled",
+                "account_slot": "trend",
+                "order_type": "market",
+                "side": "buy",
+                "amount": 0.23,
+                "reduce_only": False,
+                "gateway_mode": "live",
+                "metadata": {"risk_position_tier": "weak", "risk_position_scale": 0.25},
+            },
+            "ETH/USDT:USDT",
+        )
+        store.insert(
+            "order_lifecycle",
+            {
+                "client_order_id": "follower_entry",
+                "symbol": "ETH/USDT:USDT",
+                "status": "filled",
+                "account_slot": "follower",
+                "order_type": "market",
+                "side": "buy",
+                "amount": 0.3,
+                "reduce_only": False,
+                "gateway_mode": "live",
+                "metadata": {"risk_position_tier": "normal", "risk_position_scale": 0.5},
+            },
+            "ETH/USDT:USDT",
+        )
+    finally:
+        store.close()
+
+    client = TestClient(create_app(str(config_path)))
+    response = client.get("/api/order-lifecycle?symbol=ETH/USDT:USDT&account_slot=trend")
+
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert len(items) == 1
+    assert items[0]["payload"]["client_order_id"] == "trend_entry"
+    assert items[0]["payload"]["metadata"]["risk_position_tier"] == "weak"
+
+
 def test_status_latest_decision_excludes_major_news_review_audit(tmp_path: Path, monkeypatch) -> None:
     for key in ["GATEIO_API_KEY", "GATEIO_API_SECRET", "GATEIO_TREND_API_KEY", "GATEIO_TREND_API_SECRET"]:
         monkeypatch.setenv(key, "")
