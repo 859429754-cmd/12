@@ -678,3 +678,27 @@ async def test_order_status_worker_refreshes_live_reconciliation(tmp_path: Path)
     assert exchange_health["reason"] == "exchange_reconciliation_ok"
     assert state.can_open_new_entries is True
     await app.close()
+
+
+@pytest.mark.asyncio
+async def test_trading_app_close_closes_follower_execution(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl", ["ETH/USDT:USDT"])
+    app = TradingApp(str(config_path))
+    closed: list[str] = []
+
+    class Closeable:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        async def close(self) -> None:
+            closed.append(self.name)
+
+    app.market = Closeable("market")
+    app.orderflow_client = Closeable("orderflow")
+    app.execution = Closeable("primary")
+    app.follower_execution = Closeable("follower")
+
+    await app.close()
+
+    assert closed == ["market", "orderflow", "primary", "follower"]

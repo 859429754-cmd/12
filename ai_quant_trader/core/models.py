@@ -76,6 +76,7 @@ class OrderLifecycleStatus(StrEnum):
     CANCELLED = "cancelled"
     CANCEL_FAILED = "cancel_failed"
     REJECTED = "rejected"
+    NOT_FOUND = "not_found"
     UNKNOWN = "unknown"
     DUPLICATE_SUPPRESSED = "duplicate_suppressed"
     BLOCKED = "blocked"
@@ -125,6 +126,7 @@ class RiskConfig(BaseModel):
     ai_full_size_confidence: float = Field(default=0.75, ge=0, le=1)
     min_confidence_to_trade: float = Field(default=0.55, ge=0, le=1)
     ai_candidate_min_confidence: float = Field(default=0.65, ge=0, le=1)
+    ai_dynamic_position_sizing: bool = True
     stale_data_seconds: int = Field(default=300, gt=0)
     small_position_mode: bool = False
     small_position_notional_usdt: float = Field(default=20.0, gt=0)
@@ -609,6 +611,9 @@ class RiskDecision(BaseModel):
     target_qty: float = 0.0
     clipped_qty: float = 0.0
     target_notional: float = 0.0
+    strategy_baseline_notional: float = 0.0
+    ai_desired_notional: float = 0.0
+    sizing_basis: Literal["strategy_signal", "account_risk_cap"] = "strategy_signal"
     max_total_notional: float = 0.0
     remaining_notional: float = 0.0
     decision_score: float = Field(default=0.0, ge=0, le=1)

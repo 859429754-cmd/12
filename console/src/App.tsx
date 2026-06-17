@@ -39,6 +39,7 @@ import type {
   SystemReadiness,
   StatusResponse,
   StrategyProfile,
+  WalkForwardProposalPayload,
   WorkerHeartbeatDetail,
   WorkspaceId,
 } from "./types";
@@ -2880,6 +2881,7 @@ function BacktestPanel({
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [optimization, setOptimization] = useState<OptimizationResult | null>(null);
   const [runs, setRuns] = useState<Array<DbRow>>([]);
+  const [walkForwardProposals, setWalkForwardProposals] = useState<Array<DbRow<WalkForwardProposalPayload>>>([]);
   const [error, setError] = useState("");
   const [running, setRunning] = useState(false);
   const trades = result?.trade_ledger || result?.trades || [];
@@ -2896,6 +2898,18 @@ function BacktestPanel({
     }
   }, [symbol]);
 
+  const loadWalkForwardProposals = useCallback(async () => {
+    try {
+      const response = await api<ApiList<WalkForwardProposalPayload>>(
+        `/api/walk-forward/proposals?limit=12&symbol=${encodeURIComponent(symbol)}`,
+        { timeoutMs: 8000, retries: 1 },
+      );
+      setWalkForwardProposals(response.items || []);
+    } catch (error) {
+      setError(`Walk-forward 提案加载失败：${errText(error)}`);
+    }
+  }, [symbol]);
+
   useEffect(() => {
     const defaults = profile?.backtest_defaults || {};
     setDataSource(String(defaults.data_source || "binance"));
@@ -2909,7 +2923,8 @@ function BacktestPanel({
 
   useEffect(() => {
     void loadRuns();
-  }, [loadRuns]);
+    void loadWalkForwardProposals();
+  }, [loadRuns, loadWalkForwardProposals]);
 
   const poll = async (jobId: string) => {
     for (let idx = 0; idx < 480; idx += 1) {
@@ -2993,6 +3008,7 @@ function BacktestPanel({
       const done = await poll(started.job_id);
       setOptimization(done.result as OptimizationResult);
       await loadRuns();
+      await loadWalkForwardProposals();
     } catch (error) {
       setError(errText(error));
     } finally {
@@ -3113,6 +3129,7 @@ function BacktestPanel({
       {error ? <div className="mt-2 rounded-xl border border-[#7f1d1d] bg-[#2a0f14] p-2 text-[11px] text-[#fb7185]">{error}</div> : null}
       {result ? <BacktestMetrics result={result} /> : null}
       {optimization ? <OptimizationView result={optimization} /> : null}
+      <WalkForwardProposalPanel proposals={walkForwardProposals} />
       {trades.length ? <TradeLedgerTable trades={trades} /> : null}
       <BacktestRunHistory
         runs={runs}
@@ -3368,6 +3385,87 @@ function OptimizationView({ result }: { result: OptimizationResult }) {
       </div>
     </div>
   );
+}
+
+function WalkForwardProposalPanel({ proposals }: { proposals: Array<DbRow<WalkForwardProposalPayload>> }) {
+  const latest = proposals[0]?.payload;
+  const acceptance = latest?.acceptance || {};
+  const metrics = acceptance.metrics || {};
+  const best = latest?.best;
+  const status = String(latest?.status || "--");
+  const statusTone = status === "needs_review" ? "border-[#854d0e] bg-[#241806] text-[#facc15]" : "border-[#7f1d1d] bg-[#2a0f14] text-[#fb7185]";
+  const changes = Object.entries(latest?.proposed_changes || {});
+  return (
+    <div className="mt-3 rounded-2xl border border-[#263246] bg-[#0b1220] p-3 text-[11px]">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div>
+          <div className="text-xs font-semibold text-[#e5eefb]">Walk-forward 自动学习提案</div>
+          <div className="mt-1 text-[#7b8798]">只生成审计提案，不自动修改实盘参数。通过样本外验证前不得上线。</div>
+        </div>
+        <span className={`rounded-full border px-3 py-1 ${statusTone}`}>
+          {status === "needs_review" ? "待复核" : status === "rejected" ? "已拒绝" : "无提案"}
+        </span>
+      </div>
+      {!latest ? (
+        <div className="rounded-xl border border-[#263246] bg-[#101a2d] p-3 text-[#94a3b8]">
+          尚未生成 walk-forward 提案。运行“参数寻优”后系统会自动生成一条可审计提案。
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-2 lg:grid-cols-6">
+            <Metric label="基准收益" value={pct(metrics.baseline_total_return_pct)} />
+            <Metric label="验证收益" value={pct(metrics.validation_total_return_pct)} tone={Number(metrics.validation_total_return_pct) > Number(metrics.baseline_total_return_pct) ? "good" : "bad"} />
+            <Metric label="基准PF" value={num(metrics.baseline_profit_factor, 3)} />
+            <Metric label="验证PF" value={num(metrics.validation_profit_factor, 3)} tone={Number(metrics.validation_profit_factor) >= 1 ? "good" : "bad"} />
+            <Metric label="验证回撤" value={pct(metrics.validation_drawdown_abs_pct)} tone="warn" />
+            <Metric label="验证交易" value={num(metrics.validation_trade_count, 0)} />
+          </div>
+          <div className="grid gap-2 xl:grid-cols-[1fr_1fr]">
+            <div className="rounded-xl border border-[#263246] bg-[#101a2d] p-3">
+              <div className="mb-2 text-xs font-semibold text-[#e5eefb]">候选参数变化</div>
+              {changes.length ? (
+                <div className="grid gap-2">
+                  {changes.map(([key, value]) => (
+                    <BoundaryLine
+                      key={key}
+                      label={key}
+                      value={`${formatParamValue(value.old)} -> ${formatParamValue(value.new)}`}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="text-[#7b8798]">当前候选与基准参数无差异。</div>
+              )}
+            </div>
+            <div className="rounded-xl border border-[#263246] bg-[#101a2d] p-3">
+              <div className="mb-2 text-xs font-semibold text-[#e5eefb]">验收原因 / 风险</div>
+              <div className="space-y-2">
+                {(acceptance.reasons || []).map((item) => (
+                  <div key={`reason-${item}`} className="rounded-lg border border-[#14532d] bg-[#052e16] px-2 py-1 text-[#22c55e]">{item}</div>
+                ))}
+                {(acceptance.risks || []).map((item) => (
+                  <div key={`risk-${item}`} className="rounded-lg border border-[#7f1d1d] bg-[#2a0f14] px-2 py-1 text-[#fb7185]">{item}</div>
+                ))}
+                {!acceptance.reasons?.length && !acceptance.risks?.length ? (
+                  <div className="text-[#7b8798]">暂无验收细节。</div>
+                ) : null}
+              </div>
+            </div>
+          </div>
+          <div className="rounded-xl border border-[#263246] bg-[#07101f] p-3 text-[#94a3b8]">
+            当前候选：{best?.params ? Object.entries(best.params).map(([key, value]) => `${key}=${formatParamValue(value)}`).join(" / ") : "--"}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function formatParamValue(value: unknown) {
+  if (typeof value === "number") return num(value, Math.abs(value) >= 10 ? 0 : 3);
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (value === null || value === undefined) return "--";
+  return String(value);
 }
 
 function arrayValue<T>(value: unknown, fallback: T[]): T[] {

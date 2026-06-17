@@ -47,7 +47,11 @@ strong = 75%
 full   = 100%
 ```
 
-AI 只能确认、降仓、阻断。AI 输出无效、超时、预算耗尽或 JSON 校验失败时，实盘新开仓必须保守降级或阻断。
+AI 不能发明方向；在本地策略已经触发后，AI 可以确认、升档、维持、降仓或阻断。AI 输出无效、超时、预算耗尽或 JSON 校验失败时，实盘新开仓必须保守降级或阻断。
+
+以后以本版本为准，忽略之前“AI 只能降仓或否决，不能升档”的方案。AI 不能发明交易方向，但在本地策略已经触发 `LONG/SHORT` 后，可以在 RiskManager 硬风控、账户杠杆上限、readiness、订单流、密集区、形态、新闻和 BTC/ETH 风向标约束内，把仓位档位动态上调、维持、下调或阻断。
+
+仓位百分比默认按账户当前风险上限解释，而不是只按策略原始建议数量解释。策略层仍会生成 `strategy_baseline_notional`，RiskManager 会生成 `ai_desired_notional` 和 `sizing_basis`，用于审计 AI 是放大、维持还是降仓。若策略建议数量为 0，AI 不允许凭空生成开仓数量。
 
 ## 3. 多账户执行模型
 
@@ -156,3 +160,22 @@ BTC 仍是 ETH 重要风向标，但不能只看绝对涨跌。系统必须同�
 - ETH 多头信号 + BTC 轻微回踩或震荡 + ETH 相对 BTC 明显走强，可识别为 `rotation_lag` 或 `leader_pullback`，不应被当成 BTC 强冲突。
 - ETH 多头信号 + BTC 4h/24h 明确破位或分配风险，仍必须限仓；不能用“ETH 补涨”解释系统性风险。
 - BTC/ETH 轮动只参与仓位缩放和风险解释，不允许 AI 发明方向，不允许绕过 RiskManager。
+
+## 2026-06-18 Walk-forward 自动学习提案合同
+
+以后以本节为准，忽略之前“参数寻优结果可以直接作为实盘优化依据”的粗口径。
+
+当前规则：
+
+- 参数寻优完成后只生成 `walk_forward_parameter_proposal` 审计提案，不自动修改实盘参数。
+- 提案状态只能是 `needs_review` 或 `rejected`，不会进入现有 `pending` 审批链，避免误点审批后直接热更新实盘参数。
+- 进入 `needs_review` 至少要求：验证集收益超过当前基准、验证集交易数达到 `min_trades`、验证集盈利因子过线、验证集回撤没有比基准恶化超过 20%。
+- 任一条件失败必须写入 `acceptance.risks`，并在控制台 walk-forward 模块直接展示。
+- 即使提案通过，也只能进入人工复核、小仓验证和后续单独参数提案流程，不得绕过 TradingView 对齐回测合同和 RiskManager。
+
+相关实现：
+
+- `ai_quant_trader/api/server.py::_record_walk_forward_proposal`
+- `ai_quant_trader/api/server.py::_walk_forward_acceptance`
+- `console/src/App.tsx::WalkForwardProposalPanel`
+- `tests/test_console_api.py::test_walk_forward_proposal_is_needs_review_without_auto_apply`

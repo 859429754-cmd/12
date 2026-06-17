@@ -1255,6 +1255,26 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
             rows = [row for row in rows if row["payload"].get("status") == status]
         return {"items": rows}
 
+    @app.get("/api/walk-forward/proposals")
+    def walk_forward_proposals(
+        status: Literal["all", "needs_review", "rejected"] = "all",
+        symbol: str | None = None,
+        limit: int = Query(default=20, ge=1, le=100),
+    ) -> dict[str, Any]:
+        ctx = _ctx(app)
+        ctx.reload()
+        if symbol:
+            _validate_symbols([symbol], ctx.configured_symbols(), require_any=True)
+        rows = ctx.table("optimization_proposals", limit=limit, symbol=symbol)
+        rows = [
+            row
+            for row in rows
+            if (row.get("payload") or {}).get("type") == "walk_forward_parameter_proposal"
+        ]
+        if status != "all":
+            rows = [row for row in rows if (row.get("payload") or {}).get("status") == status]
+        return {"items": rows}
+
     @app.get("/api/strategy-lab/versions")
     def strategy_versions() -> dict[str, Any]:
         return {"items": list_strategy_versions(), "active": get_active_strategy()}
@@ -2007,6 +2027,133 @@ def _record_backtest_run(
     ctx.store.insert("backtest_runs", payload, symbol=str(request.get("symbol") or ""))
 
 
+def _metric_number(metrics: dict[str, Any] | None, key: str, default: float = 0.0) -> float:
+    if not metrics:
+        return default
+    try:
+        value = float(metrics.get(key, default))
+    except (TypeError, ValueError):
+        return default
+    if value != value:
+        return default
+    return value
+
+
+def _drawdown_abs(metrics: dict[str, Any] | None) -> float:
+    return abs(_metric_number(metrics, "max_drawdown_pct", 0.0))
+
+
+def _params_diff(base: dict[str, Any], proposed: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    output: dict[str, dict[str, Any]] = {}
+    for key, new_value in proposed.items():
+        old_value = base.get(key)
+        if old_value != new_value:
+            output[key] = {"old": old_value, "new": new_value}
+    return output
+
+
+def _walk_forward_acceptance(
+    result: dict[str, Any],
+    body: BacktestOptimizeRequest,
+) -> dict[str, Any]:
+    baseline = result.get("baseline") or {}
+    best = result.get("best") or {}
+    validation = best.get("validation") or {}
+    warnings = list(best.get("warnings") or [])
+    reasons: list[str] = []
+    risks: list[str] = []
+
+    base_return = _metric_number(baseline, "total_return_pct")
+    validation_return = _metric_number(validation, "total_return_pct")
+    base_pf = _metric_number(baseline, "profit_factor")
+    validation_pf = _metric_number(validation, "profit_factor")
+    base_dd = _drawdown_abs(baseline)
+    validation_dd = _drawdown_abs(validation)
+    validation_trades = int(_metric_number(validation, "trade_count"))
+
+    if not best:
+        risks.append("没有可用候选参数。")
+    if validation_trades < body.min_trades:
+        risks.append(f"验证集交易数 {validation_trades} 低于最低要求 {body.min_trades}。")
+    else:
+        reasons.append("验证集交易数满足最低要求。")
+    if validation_return <= base_return:
+        risks.append("验证集收益未超过当前基准。")
+    else:
+        reasons.append("验证集收益超过当前基准。")
+    if validation_pf < max(1.0, base_pf * 0.9):
+        risks.append("验证集盈利因子不足，可能只是噪音优化。")
+    else:
+        reasons.append("验证集盈利因子通过阈值。")
+    if base_dd > 0 and validation_dd > base_dd * 1.2:
+        risks.append("验证集回撤比基准恶化超过 20%。")
+    else:
+        reasons.append("验证集回撤没有明显恶化。")
+    if warnings:
+        risks.extend([f"候选警告：{item}" for item in warnings])
+
+    accepted = bool(best) and not risks
+    return {
+        "accepted": accepted,
+        "status": "needs_review" if accepted else "rejected",
+        "reasons": reasons,
+        "risks": risks,
+        "thresholds": {
+            "min_trades": body.min_trades,
+            "validation_return_must_exceed_baseline": True,
+            "profit_factor_floor": max(1.0, base_pf * 0.9),
+            "max_drawdown_worsening_pct": 20,
+        },
+        "metrics": {
+            "baseline_total_return_pct": base_return,
+            "validation_total_return_pct": validation_return,
+            "baseline_profit_factor": base_pf,
+            "validation_profit_factor": validation_pf,
+            "baseline_drawdown_abs_pct": base_dd,
+            "validation_drawdown_abs_pct": validation_dd,
+            "validation_trade_count": validation_trades,
+        },
+    }
+
+
+def _record_walk_forward_proposal(
+    ctx: ConsoleContext,
+    body: BacktestOptimizeRequest,
+    result: dict[str, Any],
+    job_id: str,
+) -> int:
+    baseline_params = result.get("baseline_params") or {}
+    best = result.get("best") or {}
+    best_params = best.get("params") or {}
+    acceptance = _walk_forward_acceptance(result, body)
+    param_diff = _params_diff(baseline_params, best_params)
+    payload = {
+        "type": "walk_forward_parameter_proposal",
+        "status": acceptance["status"],
+        "operator_id": body.operator_id,
+        "symbol": body.symbol,
+        "timeframe": body.timeframe,
+        "job_id": job_id,
+        "summary": "Walk-forward 参数提案：仅供审计和人工复核，默认不会自动改实盘参数。",
+        "request": body.model_dump(mode="json"),
+        "baseline": result.get("baseline") or {},
+        "baseline_params": baseline_params,
+        "best": best,
+        "candidates": result.get("candidates") or [],
+        "data_split": result.get("data_split") or {},
+        "acceptance": acceptance,
+        "proposed_changes": param_diff,
+        "changes": {},
+        "source": "walk_forward",
+        "auto_apply": False,
+        "risk_note": "自动学习只生成候选提案；不得绕过 TradingView 对齐合同、RiskManager、人工审查和小仓验证。",
+    }
+    proposal_id = ctx.store.insert("optimization_proposals", payload, symbol=body.symbol)
+    result["walk_forward_proposal_id"] = proposal_id
+    result["walk_forward_acceptance"] = acceptance
+    return proposal_id
+
+
 def _readiness_check(
     check_id: str,
     label: str,
@@ -2155,9 +2302,17 @@ async def _run_trend_parameter_optimization_job(app: FastAPI, job_id: str, body:
         )
         result["market_data_source"] = candles.attrs.get("data_source", "unknown")
         result["market_data_warning"] = candles.attrs.get("data_warning", "")
+        proposal_id = _record_walk_forward_proposal(ctx, body, result, job_id=job_id)
         _record_backtest_run(ctx, "parameter_optimization", body, result, job_id=job_id)
         ctx.store.insert("hourly_reports", {"type": "parameter_optimization", "job_id": job_id, "result": result}, symbol=body.symbol)
-        job.update({"status": "completed", "progress": 100, "message": f"{body.symbol} 参数寻优完成。", "result": result})
+        job.update(
+            {
+                "status": "completed",
+                "progress": 100,
+                "message": f"{body.symbol} 参数寻优完成，已生成 walk-forward 提案 #{proposal_id}。",
+                "result": result,
+            }
+        )
     except Exception as exc:  # noqa: BLE001
         job.update({"status": "failed", "progress": 100, "message": "参数寻优任务失败。", "error": str(exc)})
 

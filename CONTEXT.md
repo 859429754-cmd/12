@@ -614,3 +614,13 @@ This layer does not change the ETH 1h KC + VOL + KDJ production strategy and doe
 - `leader_downtrend` / `distribution_risk` 表示 BTC 明确破位或分配风险，仍必须限制 ETH 多头仓位。ETH 补涨假设不能覆盖系统性风险。
 - 形态确认只用于缩放仓位和解释，不得绕过本地策略信号。
 - 高影响同向新闻优先缩仓，不应因为“重大新闻”四个字自动 block；只有方向冲突、订单流冲突、密集区突破质量极差、流动性/监管/交易所风险等执行风险同时恶化时，才允许 block。
+
+## 2026-06-18 Walk-forward Proposal Boundary
+
+以后以本节为准：参数寻优和 walk-forward 自动学习只能生成可审计提案，不能自动改实盘参数。
+
+- `walk_forward_parameter_proposal` records baseline, validation metrics, proposed parameter diff, acceptance reasons and risks.
+- Passing validation creates `status=needs_review`, not `pending`; current approval flow cannot accidentally apply it.
+- Failing validation creates `status=rejected` with explicit `acceptance.risks`.
+- Console must show these proposals in a dedicated walk-forward module.
+- Any future auto-apply path requires a new ADR, a separate approval workflow, small-position forward test, and rollback plan.

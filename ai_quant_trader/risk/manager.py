@@ -104,7 +104,7 @@ class RiskManager:
         if remaining <= 0:
             return self._blocked(signal, max_total_notional, remaining, "max_total_leverage_reached")
 
-        target_notional = signal.current_price * signal.suggested_qty
+        strategy_baseline_notional = max(signal.current_price * signal.suggested_qty, 0.0)
         score, tier, breakdown, score_warnings = self._decision_score(signal, ai)
         if score < self.config.min_confidence_to_trade:
             blocked = self._blocked(signal, max_total_notional, remaining, "combined_decision_score_too_low")
@@ -153,7 +153,11 @@ class RiskManager:
 
         scale = POSITION_TIER_SCALE[tier]
 
-        scaled_notional = target_notional * scale
+        sizing_basis = "account_risk_cap" if self.config.ai_dynamic_position_sizing else "strategy_signal"
+        sizing_cap_notional = max_total_notional if self.config.ai_dynamic_position_sizing else strategy_baseline_notional
+        if strategy_baseline_notional <= 0:
+            sizing_cap_notional = 0.0
+        scaled_notional = sizing_cap_notional * scale
 
         clipped_notional = min(max(scaled_notional, 0.0), remaining)
         if self.config.small_position_mode:
@@ -166,6 +170,9 @@ class RiskManager:
             target_qty=signal.suggested_qty,
             clipped_qty=clipped_qty,
             target_notional=clipped_notional,
+            strategy_baseline_notional=strategy_baseline_notional,
+            ai_desired_notional=scaled_notional,
+            sizing_basis=sizing_basis,
             max_total_notional=max_total_notional,
             remaining_notional=remaining,
             decision_score=score,

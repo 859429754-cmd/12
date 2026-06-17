@@ -30,6 +30,7 @@ class RecordingGateway:
         self.recovered = recovered
         self.fail_cancel = fail_cancel
         self.submits = 0
+        self.fetch_order_calls = 0
 
     async def create_market_order(self, request: OrderRequest) -> OrderResult:
         self.submits += 1
@@ -52,6 +53,7 @@ class RecordingGateway:
         return self.recovered
 
     async def fetch_order_by_exchange_id(self, symbol: str, exchange_order_id: str) -> OrderResult | None:
+        self.fetch_order_calls += 1
         return self.recovered
 
     async def cancel_order(self, symbol: str, order_id: str, *, trigger: bool = False) -> bool:
@@ -204,6 +206,27 @@ async def test_order_lifecycle_refresh_updates_partial_fill(tmp_path: Path) -> N
     assert len(updates) == 1
     assert latest["status"] == "partially_filled"
     assert latest["reason"] == "exchange_order_status_refreshed"
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_order_lifecycle_marks_exchange_not_found_terminal(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    manager = OrderLifecycleManager(store)
+    request = make_request("not_found_client_id")
+    await manager.submit_market_order(RecordingGateway(status="open"), request)
+    gateway = RecordingGateway(recovered=None)
+
+    first_updates = await manager.refresh_recent_orders(gateway, symbols=[request.symbol])
+    second_updates = await manager.refresh_recent_orders(gateway, symbols=[request.symbol])
+    latest = store.fetch_payloads("order_lifecycle", limit=1)[0]["payload"]
+
+    assert len(first_updates) == 1
+    assert first_updates[0].status.value == "not_found"
+    assert second_updates == []
+    assert gateway.fetch_order_calls == 1
+    assert latest["status"] == "not_found"
+    assert latest["reason"] == "exchange_order_status_not_found_terminal"
     store.close()
 
 

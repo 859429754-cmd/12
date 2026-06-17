@@ -298,4 +298,35 @@ export type OptimizationResult = {
   candidates?: OptimizationCandidate[];
   searched_candidates?: number;
   selection_policy?: string;
+  walk_forward_proposal_id?: number;
+  walk_forward_acceptance?: WalkForwardAcceptance;
+};
+
+export type WalkForwardAcceptance = {
+  accepted?: boolean;
+  status?: "needs_review" | "rejected" | string;
+  reasons?: string[];
+  risks?: string[];
+  metrics?: Record<string, number>;
+  thresholds?: Record<string, number | boolean>;
+};
+
+export type WalkForwardProposalPayload = {
+  type?: "walk_forward_parameter_proposal" | string;
+  status?: "needs_review" | "rejected" | string;
+  symbol?: string;
+  timeframe?: string;
+  job_id?: string;
+  summary?: string;
+  baseline?: Record<string, number>;
+  baseline_params?: Record<string, number | string | boolean>;
+  best?: OptimizationCandidate;
+  candidates?: OptimizationCandidate[];
+  data_split?: Record<string, number>;
+  acceptance?: WalkForwardAcceptance;
+  proposed_changes?: Record<string, { old?: number | string | boolean | null; new?: number | string | boolean | null }>;
+  changes?: Record<string, unknown>;
+  source?: string;
+  auto_apply?: boolean;
+  risk_note?: string;
 };

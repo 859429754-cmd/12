@@ -1380,6 +1380,9 @@ class TradingApp:
             "risk_decision_score": float(risk.decision_score),
             "risk_clipped_qty": float(risk.clipped_qty),
             "risk_target_qty": float(risk.target_qty),
+            "strategy_baseline_notional": float(risk.strategy_baseline_notional),
+            "ai_desired_notional": float(risk.ai_desired_notional),
+            "sizing_basis": risk.sizing_basis,
             "risk_reason": risk.reason,
             "ai_confidence": float(ai.confidence),
             "ai_action_suggestion": ai.action_suggestion,
@@ -1889,10 +1892,16 @@ class TradingApp:
         return max((next_run - now).total_seconds(), 60.0)
 
     async def close(self) -> None:
-        await self.market.close()
-        await self.orderflow_client.close()
-        await self.execution.close()
+        close_errors: list[BaseException] = []
+        for resource in [self.market, self.orderflow_client, self.execution, self.follower_execution]:
+            try:
+                await resource.close()
+            except Exception as exc:  # noqa: BLE001
+                close_errors.append(exc)
+                logger.warning("trading_app_resource_close_failed", extra={"resource": resource.__class__.__name__, "error_type": type(exc).__name__})
         self.store.close()
+        if close_errors:
+            raise RuntimeError("trading_app_resource_close_failed") from close_errors[0]
 
 
 async def main() -> None:

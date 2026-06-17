@@ -161,13 +161,29 @@ class OrderLifecycleManager:
 
         updates: list[OrderLifecycleEvent] = []
         for payload in latest_by_client_id.values():
-            if str(payload.get("status") or "") in {"filled", "cancelled", "rejected", "blocked", "duplicate_suppressed"}:
+            if str(payload.get("status") or "") in {"filled", "cancelled", "rejected", "not_found", "blocked", "duplicate_suppressed"}:
                 continue
             exchange_order_id = str(payload.get("exchange_order_id") or "")
             if not exchange_order_id:
                 continue
             refreshed = await self._fetch_order_status(gateway, str(payload.get("symbol")), exchange_order_id)
             if refreshed is None:
+                event = OrderLifecycleEvent(
+                    client_order_id=str(payload.get("client_order_id")),
+                    symbol=str(payload.get("symbol") or ""),
+                    status=OrderLifecycleStatus.NOT_FOUND,
+                    account_slot=account_slot,
+                    order_type=str(payload.get("order_type") or "market"),  # type: ignore[arg-type]
+                    side=str(payload.get("side") or ""),
+                    amount=float(payload.get("amount") or 0.0),
+                    reduce_only=bool(payload.get("reduce_only")),
+                    gateway_mode=mode,
+                    reason="exchange_order_status_not_found_terminal",
+                    exchange_order_id=exchange_order_id,
+                    metadata=dict(payload.get("metadata") or {}),
+                )
+                self.store.insert("order_lifecycle", event, event.symbol)
+                updates.append(event)
                 continue
             status = self._status_from_order(refreshed)
             if status.value == payload.get("status") and refreshed.status == payload.get("order_status"):

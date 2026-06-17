@@ -142,6 +142,74 @@ def test_order_lifecycle_endpoint_filters_account_slot(tmp_path: Path) -> None:
     assert items[0]["payload"]["metadata"]["risk_position_tier"] == "weak"
 
 
+def test_walk_forward_proposal_is_needs_review_without_auto_apply(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    db_path = tmp_path / "trader.sqlite3"
+    audit_path = tmp_path / "audit.jsonl"
+    write_config(config_path, db_path, audit_path, symbols=["ETH/USDT:USDT"])
+    ctx = ConsoleContext(str(config_path))
+    body = server.BacktestOptimizeRequest(symbol="ETH/USDT:USDT", min_trades=2)
+    result = {
+        "baseline": {"total_return_pct": 8.0, "max_drawdown_pct": -12.0, "profit_factor": 1.25, "trade_count": 12},
+        "baseline_params": {"kc_scalar": 2.8, "volume_multiple": 2.5, "use_ema_filter": False},
+        "best": {
+            "params": {"kc_scalar": 3.0, "volume_multiple": 2.8, "use_ema_filter": False},
+            "validation": {"total_return_pct": 13.0, "max_drawdown_pct": -12.5, "profit_factor": 1.42, "trade_count": 8},
+            "train": {"total_return_pct": 10.0, "max_drawdown_pct": -11.0, "profit_factor": 1.35, "trade_count": 18},
+            "warnings": [],
+        },
+        "candidates": [],
+        "data_split": {"train_rows": 300, "validation_rows": 120},
+    }
+    try:
+        proposal_id = server._record_walk_forward_proposal(ctx, body, result, job_id="wf_ok")
+        row = ctx.store.fetch_by_id("optimization_proposals", proposal_id)
+        payload = row["payload"]
+        assert payload["type"] == "walk_forward_parameter_proposal"
+        assert payload["status"] == "needs_review"
+        assert payload["auto_apply"] is False
+        assert payload["changes"] == {}
+        assert payload["proposed_changes"]["kc_scalar"]["new"] == 3.0
+        assert payload["acceptance"]["accepted"] is True
+        assert result["walk_forward_proposal_id"] == proposal_id
+    finally:
+        ctx.close()
+
+
+def test_walk_forward_proposal_rejects_weak_validation_and_endpoint_filters(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    db_path = tmp_path / "trader.sqlite3"
+    audit_path = tmp_path / "audit.jsonl"
+    write_config(config_path, db_path, audit_path, symbols=["ETH/USDT:USDT", "BTC/USDT:USDT"])
+    ctx = ConsoleContext(str(config_path))
+    body = server.BacktestOptimizeRequest(symbol="ETH/USDT:USDT", min_trades=10)
+    result = {
+        "baseline": {"total_return_pct": 8.0, "max_drawdown_pct": -10.0, "profit_factor": 1.2, "trade_count": 15},
+        "baseline_params": {"kc_scalar": 2.8},
+        "best": {
+            "params": {"kc_scalar": 2.4},
+            "validation": {"total_return_pct": 6.0, "max_drawdown_pct": -14.0, "profit_factor": 0.9, "trade_count": 3},
+            "warnings": ["too_few_trades"],
+        },
+        "candidates": [],
+        "data_split": {"train_rows": 300, "validation_rows": 120},
+    }
+    try:
+        proposal_id = server._record_walk_forward_proposal(ctx, body, result, job_id="wf_bad")
+        client = TestClient(create_app(str(config_path)))
+        response = client.get("/api/walk-forward/proposals?symbol=ETH/USDT:USDT&status=rejected")
+        assert response.status_code == 200
+        items = response.json()["items"]
+        assert any(item["id"] == proposal_id for item in items)
+        payload = next(item["payload"] for item in items if item["id"] == proposal_id)
+        assert payload["status"] == "rejected"
+        assert payload["acceptance"]["accepted"] is False
+        assert payload["changes"] == {}
+        assert payload["acceptance"]["risks"]
+    finally:
+        ctx.close()
+
+
 def test_status_latest_decision_excludes_major_news_review_audit(tmp_path: Path, monkeypatch) -> None:
     for key in ["GATEIO_API_KEY", "GATEIO_API_SECRET", "GATEIO_TREND_API_KEY", "GATEIO_TREND_API_SECRET"]:
         monkeypatch.setenv(key, "")

@@ -159,6 +159,52 @@ def test_full_size_requires_high_confidence_multi_factor_consensus() -> None:
     assert decision.reason == "full_size_by_five_score_consensus"
 
 
+def test_ai_can_amplify_from_strategy_baseline_to_account_risk_tier() -> None:
+    state = RuntimeState(opening_paused=False, enabled_symbols={"ETH/USDT:USDT"})
+    manager = RiskManager(RiskConfig(max_total_leverage=4, ai_dynamic_position_sizing=True), state)
+    half_size_signal = _signal().model_copy(update={"suggested_qty": 20.0, "signal_strength": 0.96})
+
+    decision = manager.evaluate(half_size_signal, _ai(confidence=0.92), 1000, [])
+
+    assert decision.allowed
+    assert decision.position_tier == "full"
+    assert decision.position_scale == 1.0
+    assert decision.sizing_basis == "account_risk_cap"
+    assert decision.strategy_baseline_notional == 2000.0
+    assert decision.ai_desired_notional == 4000.0
+    assert decision.target_notional == 4000.0
+    assert decision.clipped_qty == 40.0
+
+
+def test_ai_dynamic_sizing_does_not_create_qty_when_strategy_qty_is_zero() -> None:
+    state = RuntimeState(opening_paused=False, enabled_symbols={"ETH/USDT:USDT"})
+    manager = RiskManager(RiskConfig(max_total_leverage=4, ai_dynamic_position_sizing=True), state)
+    zero_qty_signal = _signal().model_copy(update={"suggested_qty": 0.0, "signal_strength": 0.96})
+
+    decision = manager.evaluate(zero_qty_signal, _ai(confidence=0.92), 1000, [])
+
+    assert not decision.allowed
+    assert decision.sizing_basis == "account_risk_cap"
+    assert decision.strategy_baseline_notional == 0.0
+    assert decision.ai_desired_notional == 0.0
+    assert decision.reason == "qty_clipped_to_zero"
+
+
+def test_legacy_strategy_signal_sizing_can_be_kept_by_config() -> None:
+    state = RuntimeState(opening_paused=False, enabled_symbols={"ETH/USDT:USDT"})
+    manager = RiskManager(RiskConfig(max_total_leverage=4, ai_dynamic_position_sizing=False), state)
+    half_size_signal = _signal().model_copy(update={"suggested_qty": 20.0, "signal_strength": 0.96})
+
+    decision = manager.evaluate(half_size_signal, _ai(confidence=0.92), 1000, [])
+
+    assert decision.allowed
+    assert decision.sizing_basis == "strategy_signal"
+    assert decision.strategy_baseline_notional == 2000.0
+    assert decision.ai_desired_notional == 2000.0
+    assert decision.target_notional == 2000.0
+    assert decision.clipped_qty == 20.0
+
+
 def test_five_score_model_maps_to_clear_position_tiers() -> None:
     state = RuntimeState(opening_paused=False, enabled_symbols={"ETH/USDT:USDT"})
     manager = RiskManager(RiskConfig(max_total_leverage=4), state)
