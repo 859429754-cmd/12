@@ -38,12 +38,14 @@ def test_remote_sync_preserves_runtime_directories() -> None:
     for required in (
         ".env.runtime",
         ".venv/",
-        "data/",
-        "logs/",
-        "output/",
-        "backups/",
+        "/data/",
+        "/logs/",
+        "/output/",
+        "/backups/",
         "config/config.yaml",
     ):
         assert required in REMOTE_RSYNC_EXCLUDES
         assert f"--exclude '{required}'" in script
+    assert "data/" not in REMOTE_RSYNC_EXCLUDES
+    assert "logs/" not in REMOTE_RSYNC_EXCLUDES
     assert "systemctl restart ai-quant-console.service ai-quant-trader.service" in script
