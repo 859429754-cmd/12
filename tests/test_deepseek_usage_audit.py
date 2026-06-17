@@ -39,3 +39,33 @@ def test_deepseek_usage_audit_counts_skipped_major_news_reviews(tmp_path: Path) 
     assert report["major_news_reviews"]["local_skipped"] == 1
     assert report["major_news_reviews"]["no_signal_blocked"] == 1
     assert report["recommendation"] == "major_news_prefilter_active"
+
+
+def test_deepseek_usage_audit_reports_cache_hit_and_miss_tokens(tmp_path: Path) -> None:
+    store = SQLiteStore(str(tmp_path / "trader.sqlite3"), str(tmp_path / "audit.jsonl"))
+    try:
+        store.insert(
+            "ai_call_usage_events",
+            {
+                "symbol": "ETH/USDT:USDT",
+                "call_type": "trading_cycle",
+                "credential_label": "backup",
+                "status": "success",
+                "prompt_tokens": 100,
+                "prompt_cache_hit_tokens": 70,
+                "prompt_cache_miss_tokens": 30,
+                "completion_tokens": 20,
+                "total_tokens": 120,
+            },
+            "ETH/USDT:USDT",
+        )
+    finally:
+        store.close()
+
+    report = audit_deepseek_usage(tmp_path / "trader.sqlite3")
+
+    assert report["usage"]["total_events"] == 1
+    assert report["usage"]["by_type"]["trading_cycle"]["prompt_cache_hit_tokens"] == 70
+    assert report["usage"]["by_type"]["trading_cycle"]["prompt_cache_miss_tokens"] == 30
+    assert report["usage"]["by_type"]["trading_cycle"]["cache_hit_ratio"] == 0.7
+    assert report["usage"]["by_credential"]["backup"]["total_tokens"] == 120

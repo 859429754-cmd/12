@@ -128,6 +128,7 @@ class RiskManager:
             tier = "strong"
         if consensus_score >= 3 and ai.confidence >= self.config.ai_full_size_confidence and score >= 0.85:
             tier = self._max_tier(tier, "full")
+        tier = self._apply_post_consensus_caps(tier, ai, score_warnings)
         if major_news_context and ai.news_alignment in {Alignment.NEUTRAL, Alignment.UNKNOWN}:
             tier = self._min_tier(tier, "normal")
             score_warnings.append(f"major_news_{ai.news_alignment}_caps_normal")
@@ -141,6 +142,14 @@ class RiskManager:
             score_warnings.append("major_news_full_requires_orderflow_and_dense_zone_confirmation")
         if ai.veto_action == VetoAction.REDUCE:
             tier = self._reduce_tier_cap(tier)
+        if tier == "block":
+            blocked = self._blocked(signal, max_total_notional, remaining, "post_consensus_risk_caps_block")
+            blocked.decision_score = score
+            blocked.position_scale = 0.0
+            blocked.position_tier = "block"
+            blocked.score_breakdown = breakdown
+            blocked.warnings = [*ai.data_quality_warnings, *score_warnings]
+            return blocked
 
         scale = POSITION_TIER_SCALE[tier]
 
@@ -191,6 +200,8 @@ class RiskManager:
             score += 1
         if ai.orderflow_alignment == Alignment.ALIGNED:
             score += 1
+        if ai.btc_leader_alignment == Alignment.ALIGNED and ai.btc_leader_impact_score >= 0.25:
+            score += 1
         if ai.dense_zone_position in {"above_value", "below_value"}:
             score += 1
         return score
@@ -220,16 +231,22 @@ class RiskManager:
         trend = min(max(ai.trend_confirmation_score, 0.0), 1.0)
         range_safety = 1.0 - min(max(ai.range_risk_score, 0.0), 1.0)
         news_safety = 1.0 - min(max(ai.news_risk_score, 0.0), 1.0)
+        pattern = min(max(ai.pattern_confirmation_score, 0.0), 1.0)
         orderflow = min(max(ai.orderflow_confirmation_score, 0.0), 1.0)
         dense_zone = min(max(ai.dense_zone_breakout_score, 0.0), 1.0)
+        btc_leader = self._btc_leader_score(ai)
+        eth_btc_rotation = min(max(ai.eth_btc_rotation_score, 0.0), 1.0)
         raw_score = min(
             max(
                 technical * 0.25
-                + trend * 0.25
-                + range_safety * 0.15
-                + news_safety * 0.15
+                + trend * 0.22
+                + range_safety * 0.13
+                + news_safety * 0.13
+                + pattern * 0.06
                 + orderflow * 0.10
-                + dense_zone * 0.10,
+                + dense_zone * 0.08
+                + btc_leader * 0.02
+                + eth_btc_rotation * 0.01,
                 0.0,
             ),
             1.0,
@@ -264,6 +281,30 @@ class RiskManager:
         if ai.dense_zone_breakout_score < 0.25:
             tier = self._min_tier(tier, "normal")
             warnings.append("dense_zone_breakout_quality_weak_caps_normal")
+        if ai.pattern_confirmation_score < 0.25:
+            tier = self._min_tier(tier, "weak")
+            warnings.append("pattern_confirmation_very_weak_caps_weak")
+        elif ai.pattern_confirmation_score < 0.40:
+            tier = self._min_tier(tier, "normal")
+            warnings.append("pattern_confirmation_weak_caps_normal")
+        rotation_context = ai.btc_leader_regime in {"rotation_lag", "leader_pullback"} and ai.eth_btc_rotation_score >= 0.55
+        if ai.btc_leader_alignment == Alignment.CONFLICT and ai.btc_leader_impact_score >= 0.80 and not rotation_context:
+            tier = self._min_tier(tier, "weak")
+            warnings.append("btc_leader_conflict_high_impact_caps_weak")
+        elif ai.btc_leader_alignment == Alignment.CONFLICT and ai.btc_leader_impact_score >= 0.45 and not rotation_context:
+            tier = self._min_tier(tier, "normal")
+            warnings.append("btc_leader_conflict_caps_normal")
+        if rotation_context:
+            warnings.append("btc_eth_rotation_context_prevents_false_conflict_cap")
+        if ai.btc_leader_alignment in {Alignment.NEUTRAL, Alignment.UNKNOWN} and ai.btc_leader_impact_score >= 0.60:
+            tier = self._min_tier(tier, "strong")
+            warnings.append("btc_leader_unclear_high_impact_size_not_full")
+        if ai.news_alignment in {Alignment.NEUTRAL, Alignment.UNKNOWN} and ai.crypto_market_impact_score >= 0.65:
+            tier = self._min_tier(tier, "normal")
+            warnings.append("broad_crypto_news_unclear_caps_normal")
+        if ai.news_alignment in {Alignment.NEUTRAL, Alignment.UNKNOWN} and ai.symbol_news_impact_score >= 0.65:
+            tier = self._min_tier(tier, "normal")
+            warnings.append("symbol_news_unclear_caps_normal")
         if ai.news_alignment == Alignment.NEUTRAL:
             warnings.append("news_neutral_size_not_full")
         if ai.orderflow_alignment == Alignment.NEUTRAL:
@@ -273,10 +314,87 @@ class RiskManager:
             "trend_confirmation_score": trend,
             "range_safety_score": range_safety,
             "news_safety_score": news_safety,
+            "crypto_market_impact_score": min(max(ai.crypto_market_impact_score, 0.0), 1.0),
+            "btc_leader_score": btc_leader,
+            "btc_leader_impact_score": min(max(ai.btc_leader_impact_score, 0.0), 1.0),
+            "eth_btc_rotation_score": eth_btc_rotation,
+            "symbol_news_impact_score": min(max(ai.symbol_news_impact_score, 0.0), 1.0),
+            "pattern_confirmation_score": pattern,
             "orderflow_confirmation_score": orderflow,
             "dense_zone_breakout_score": dense_zone,
             "combined_decision_score": raw_score,
         }, warnings
+
+    def _btc_leader_score(self, ai: AiDecision) -> float:
+        impact = min(max(ai.btc_leader_impact_score, 0.0), 1.0)
+        rotation = min(max(ai.eth_btc_rotation_score, 0.0), 1.0)
+        if ai.btc_leader_regime in {"rotation_lag", "leader_pullback"}:
+            return min(1.0, 0.55 + rotation * 0.35)
+        if ai.btc_leader_alignment == Alignment.ALIGNED:
+            return min(1.0, 0.5 + impact * 0.5)
+        if ai.btc_leader_alignment == Alignment.CONFLICT:
+            return max(0.0, 0.5 - impact * 0.5)
+        return 0.5
+
+    def _apply_post_consensus_caps(self, tier: str, ai: AiDecision, warnings: list[str]) -> str:
+        def warn_once(value: str) -> None:
+            if value not in warnings:
+                warnings.append(value)
+
+        if ai.range_risk_score >= 0.85:
+            warn_once("range_risk_extreme_blocks_entry")
+            return "block"
+        if ai.range_risk_score >= 0.70:
+            tier = self._min_tier(tier, "weak")
+            warn_once("range_risk_high_caps_weak")
+        elif ai.range_risk_score >= 0.55:
+            tier = self._min_tier(tier, "normal")
+            warn_once("range_risk_elevated_caps_normal")
+
+        if ai.news_risk_score >= 0.85 and ai.news_alignment == Alignment.ALIGNED:
+            tier = self._min_tier(tier, "weak")
+            warn_once("aligned_major_news_extreme_risk_caps_weak")
+        elif ai.news_risk_score >= 0.85:
+            warn_once("news_risk_extreme_blocks_entry")
+            return "block"
+        elif ai.news_risk_score >= 0.70:
+            tier = self._min_tier(tier, "weak")
+            warn_once("news_risk_high_caps_weak")
+        elif ai.news_risk_score >= 0.55:
+            tier = self._min_tier(tier, "normal")
+            warn_once("news_risk_elevated_caps_normal")
+
+        if ai.orderflow_confirmation_score < 0.35:
+            tier = self._min_tier(tier, "weak")
+            warn_once("orderflow_confirmation_weak_caps_weak")
+        if ai.dense_zone_breakout_score < 0.25:
+            tier = self._min_tier(tier, "normal")
+            warn_once("dense_zone_breakout_quality_weak_caps_normal")
+        if ai.pattern_confirmation_score < 0.25:
+            tier = self._min_tier(tier, "weak")
+            warn_once("pattern_confirmation_very_weak_caps_weak")
+        elif ai.pattern_confirmation_score < 0.40:
+            tier = self._min_tier(tier, "normal")
+            warn_once("pattern_confirmation_weak_caps_normal")
+        rotation_context = ai.btc_leader_regime in {"rotation_lag", "leader_pullback"} and ai.eth_btc_rotation_score >= 0.55
+        if ai.btc_leader_alignment == Alignment.CONFLICT and ai.btc_leader_impact_score >= 0.80 and not rotation_context:
+            tier = self._min_tier(tier, "weak")
+            warn_once("btc_leader_conflict_high_impact_caps_weak")
+        elif ai.btc_leader_alignment == Alignment.CONFLICT and ai.btc_leader_impact_score >= 0.45 and not rotation_context:
+            tier = self._min_tier(tier, "normal")
+            warn_once("btc_leader_conflict_caps_normal")
+        if rotation_context:
+            warn_once("btc_eth_rotation_context_prevents_false_conflict_cap")
+        if ai.btc_leader_alignment in {Alignment.NEUTRAL, Alignment.UNKNOWN} and ai.btc_leader_impact_score >= 0.60:
+            tier = self._min_tier(tier, "strong")
+            warn_once("btc_leader_unclear_high_impact_size_not_full")
+        if ai.news_alignment in {Alignment.NEUTRAL, Alignment.UNKNOWN} and ai.crypto_market_impact_score >= 0.65:
+            tier = self._min_tier(tier, "normal")
+            warn_once("broad_crypto_news_unclear_caps_normal")
+        if ai.news_alignment in {Alignment.NEUTRAL, Alignment.UNKNOWN} and ai.symbol_news_impact_score >= 0.65:
+            tier = self._min_tier(tier, "normal")
+            warn_once("symbol_news_unclear_caps_normal")
+        return tier
 
     def _score_to_tier(self, score: float) -> str:
         if score >= 0.85:

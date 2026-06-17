@@ -4,6 +4,7 @@ import argparse
 import json
 import sqlite3
 from collections import Counter
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,7 @@ def audit_deepseek_usage(db_path: Path, *, limit: int = 5000) -> dict[str, Any]:
     conn.row_factory = sqlite3.Row
     try:
         budget_rows = _fetch(conn, "ai_call_budget_events", limit)
+        usage_rows = _fetch(conn, "ai_call_usage_events", limit)
         news_rows = _fetch(conn, "news_risk_reviews", limit)
         decision_rows = _fetch(conn, "ai_decisions", limit)
     finally:
@@ -46,6 +48,39 @@ def audit_deepseek_usage(db_path: Path, *, limit: int = 5000) -> dict[str, Any]:
         budget_by_status[str(payload.get("status") or "unknown")] += 1
         budget_by_reason[str(payload.get("reason") or "")] += 1
         budget_by_day[str(row["created_at"] or "")[:10]] += 1
+
+    usage_by_day: dict[str, dict[str, int]] = defaultdict(lambda: Counter())
+    usage_by_type: dict[str, dict[str, int]] = defaultdict(lambda: Counter())
+    usage_by_credential: dict[str, dict[str, int]] = defaultdict(lambda: Counter())
+    usage_status: Counter[str] = Counter()
+    for row in usage_rows:
+        payload = _loads(row["payload"])
+        day = str(row["created_at"] or "")[:10]
+        call_type = str(payload.get("call_type") or "unknown")
+        credential = str(payload.get("credential_label") or "unknown")
+        status = str(payload.get("status") or "unknown")
+        hit = int(payload.get("prompt_cache_hit_tokens") or 0)
+        miss = int(payload.get("prompt_cache_miss_tokens") or 0)
+        prompt = int(payload.get("prompt_tokens") or 0)
+        completion = int(payload.get("completion_tokens") or 0)
+        total = int(payload.get("total_tokens") or 0)
+        for bucket in (usage_by_day[day], usage_by_type[call_type], usage_by_credential[credential]):
+            bucket["calls"] += 1
+            bucket["prompt_cache_hit_tokens"] += hit
+            bucket["prompt_cache_miss_tokens"] += miss
+            bucket["prompt_tokens"] += prompt
+            bucket["completion_tokens"] += completion
+            bucket["total_tokens"] += total
+        usage_status[status] += 1
+
+    def finalize_usage(counter: dict[str, int]) -> dict[str, Any]:
+        hit = int(counter.get("prompt_cache_hit_tokens") or 0)
+        miss = int(counter.get("prompt_cache_miss_tokens") or 0)
+        denom = hit + miss
+        out = dict(counter)
+        out["cache_hit_ratio"] = round(hit / denom, 4) if denom else None
+        out["cache_miss_ratio"] = round(miss / denom, 4) if denom else None
+        return out
 
     news_total = len(news_rows)
     news_skipped = 0
@@ -84,6 +119,13 @@ def audit_deepseek_usage(db_path: Path, *, limit: int = 5000) -> dict[str, Any]:
             "by_status": dict(budget_by_status.most_common()),
             "top_reasons": dict(budget_by_reason.most_common(12)),
             "by_day": dict(sorted(budget_by_day.items())),
+        },
+        "usage": {
+            "total_events": len(usage_rows),
+            "by_status": dict(usage_status.most_common()),
+            "by_day": {day: finalize_usage(values) for day, values in sorted(usage_by_day.items())},
+            "by_type": {call_type: finalize_usage(values) for call_type, values in sorted(usage_by_type.items())},
+            "by_credential": {label: finalize_usage(values) for label, values in sorted(usage_by_credential.items())},
         },
         "major_news_reviews": {
             "total": news_total,

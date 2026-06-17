@@ -95,3 +95,64 @@ python scripts/public_repo_preflight.py
 ```
 
 如果交易逻辑、账户权限、AI 决策、Gateway 或云端部署发生变化，必须同步更新本文件、`CONTEXT.md`、相关 ADR 和 handoff。
+
+## 7. 新闻背景层当前规则（2026-06-18）
+
+以后以本节为准，忽略之前“策略信号触发后只读取最近 1 小时新闻给 DeepSeek”的方案。
+
+当前新闻输入分为两层：
+
+- `market_background`：事件级重大市场背景，保留 24-72 小时衰减窗口，包含方向、严重度、风险分、置信度、影响资产和事件摘要。
+- `news`：实时新闻窗口，通常是最近约 1 小时的快讯。
+
+DeepSeek 必须先理解 `market_background`，再判断 `news` 是否强化、削弱或冲突当前策略信号。消息面方向规则：
+
+- 做空 + 利空背景 = `aligned`
+- 做多 + 利多背景 = `aligned`
+- 做空 + 利多背景 = `conflict`
+- 做多 + 利空背景 = `conflict`
+- 中立或方向不足 = `neutral/unknown`
+
+重大新闻同向不等于自动满仓；仍必须经过订单流、密集区、流动性、风控上限和五档仓位映射。新闻背景层只提供事实和风险上下文，不允许发明交易方向，不允许绕过本地策略信号和 RiskManager。
+
+相关实现与审计：
+
+- `ai_quant_trader/data/news_context.py`
+- `ai_quant_trader/core/models.py::NewsEvent`
+- `ai_quant_trader/core/models.py::MarketBackgroundSnapshot`
+- `docs/audits/2026-06-18-production-news-background.md`
+## 2026-06-18 AI 新闻与 BTC 风向标决策合同
+
+以后以本合同为准，忽略旧方案中“重大新闻风险本身近似等于禁止开仓”的粗口径。
+
+1. 策略方向来源不变：ETH 1h 本地趋势策略产生 `LONG/SHORT/EXIT/HOLD`，AI 只确认、降仓或否决。
+2. 新闻方向和新闻风险分离：
+   - `news_alignment`：新闻方向是否支持本地策略方向。
+   - `news_risk_score`：事件执行风险、波动风险、滑点风险、流动性风险。
+3. AI 必须输出或被本地归一化为这些字段：
+   - `crypto_market_impact_score`
+   - `btc_leader_alignment`
+   - `btc_leader_impact_score`
+   - `symbol_news_impact_score`
+   - `pattern_confirmation_score`
+4. BTC 作为 ETH 风向标：BTC 同向可以提高确认度；BTC 强冲突只能限仓/降仓，不能让 AI 自己生成反向交易。
+5. 形态确认用于仓位缩放：强形态支持仓位，弱形态限制仓位；形态不能绕过本地策略信号。
+6. RiskManager 后置限仓不可被“高共识满仓提升”覆盖。范围风险、极端新闻风险、BTC 强冲突、形态弱、订单流弱等风险 cap 必须在最终档位上生效。
+
+## 2026-06-18 BTC/ETH 轮动风向标合同
+
+以后以本节为准，忽略之前“BTC 同向/反向作为 ETH 唯一风向标”的简化方案。
+
+BTC 仍是 ETH 重要风向标，但不能只看绝对涨跌。系统必须同时判断：
+
+- BTC 1h / 4h / 24h 变化。
+- ETH 相对 BTC 的 1h / 4h 强弱。
+- `btc_leader_regime`：`leader_uptrend`、`rotation_lag`、`leader_pullback`、`distribution_risk`、`leader_downtrend`、`unknown`。
+- `eth_btc_rotation_score`：ETH 相对 BTC 补涨或轮动质量。
+
+规则：
+
+- ETH 没有本地 1h 策略信号时，BTC/ETH 轮动不得触发开仓。
+- ETH 多头信号 + BTC 轻微回踩或震荡 + ETH 相对 BTC 明显走强，可识别为 `rotation_lag` 或 `leader_pullback`，不应被当成 BTC 强冲突。
+- ETH 多头信号 + BTC 4h/24h 明确破位或分配风险，仍必须限仓；不能用“ETH 补涨”解释系统性风险。
+- BTC/ETH 轮动只参与仓位缩放和风险解释，不允许 AI 发明方向，不允许绕过 RiskManager。

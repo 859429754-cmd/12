@@ -37,6 +37,8 @@ class SQLiteStore:
             "orderflow_summaries",
             "dense_zones",
             "news_summaries",
+            "news_events",
+            "market_background_snapshots",
             "strategy_params_versions",
             "optimization_proposals",
             "approval_events",
@@ -56,6 +58,7 @@ class SQLiteStore:
             "runtime_metrics",
             "maintenance_runs",
             "ai_call_budget_events",
+            "ai_call_usage_events",
             "follower_executions",
             "account_balance_snapshots",
         ]

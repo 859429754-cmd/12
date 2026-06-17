@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
+import time
 from typing import Any
 
 import aiohttp
@@ -16,6 +18,7 @@ from ai_quant_trader.core.models import (
     AiDecision,
     Alignment,
     DenseZone,
+    MarketLeaderContext,
     MarketRegime,
     NewsDigest,
     NewsDirection,
@@ -27,6 +30,8 @@ from ai_quant_trader.core.models import (
     VetoAction,
 )
 from ai_quant_trader.data.macro_entities import MacroEntityStore
+from ai_quant_trader.brain.credentials import DeepSeekCredentialRouter
+from ai_quant_trader.storage.sqlite import SQLiteStore
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +50,7 @@ class DeepSeekBrain:
         model: str | None = None,
         knowledge_base: TradingKnowledgeBase | None = None,
         macro_entities: MacroEntityStore | None = None,
+        store: SQLiteStore | None = None,
     ):
         self.api_key = api_key or os.getenv("DEEPSEEK_API_KEY")
         self.backup_api_key = os.getenv("DEEPSEEK_BACKUP_API_KEY")
@@ -52,6 +58,8 @@ class DeepSeekBrain:
         self.model = model or os.getenv("DEEPSEEK_DECISION_MODEL") or "deepseek-v4-pro"
         self.knowledge_base = knowledge_base or TradingKnowledgeBase()
         self.macro_entities = macro_entities or MacroEntityStore()
+        self.store = store
+        self.credential_router = DeepSeekCredentialRouter(store)
 
     def reload_from_env(self) -> None:
         self.api_key = os.getenv("DEEPSEEK_API_KEY")
@@ -67,13 +75,19 @@ class DeepSeekBrain:
         pattern: PatternCandidate,
         news: NewsDigest,
         regime_pattern: RegimePattern | None = None,
+        market_leader_context: MarketLeaderContext | None = None,
+        call_type: str = "trading_cycle",
     ) -> AiDecision:
-        payload = self._compact_payload(self._build_payload(signal, orderflow, dense_zone, pattern, news, regime_pattern))
+        payload = self._compact_payload(
+            self._build_payload(signal, orderflow, dense_zone, pattern, news, regime_pattern, market_leader_context)
+        )
         if not self._api_key_candidates():
-            return self._fallback_decision(signal, orderflow, dense_zone, pattern, news, "missing_deepseek_api_key", regime_pattern)
+            return self._fallback_decision(
+                signal, orderflow, dense_zone, pattern, news, "missing_deepseek_api_key", regime_pattern, market_leader_context
+            )
 
         try:
-            data = await self._chat_json(payload, timeout_seconds=75, retries=3)
+            data = await self._chat_json(payload, timeout_seconds=75, retries=3, call_type=call_type, symbol=signal.symbol)
             content = data["choices"][0]["message"]["content"]
             parsed = json.loads(content)
             parsed = self._extract_decision_json(parsed)
@@ -82,7 +96,16 @@ class DeepSeekBrain:
             return AiDecision.model_validate(parsed)
         except (aiohttp.ClientError, requests.RequestException, KeyError, json.JSONDecodeError, ValidationError, TimeoutError, asyncio.TimeoutError) as exc:
             logger.warning("DeepSeek 分析失败，使用保守降级决策: %r", exc)
-            return self._fallback_decision(signal, orderflow, dense_zone, pattern, news, f"deepseek_error:{type(exc).__name__}", regime_pattern)
+            return self._fallback_decision(
+                signal,
+                orderflow,
+                dense_zone,
+                pattern,
+                news,
+                f"deepseek_error:{type(exc).__name__}",
+                regime_pattern,
+                market_leader_context,
+            )
 
     def local_fallback_decision(
         self,
@@ -93,20 +116,57 @@ class DeepSeekBrain:
         news: NewsDigest,
         reason: str,
         regime_pattern: RegimePattern | None = None,
+        market_leader_context: MarketLeaderContext | None = None,
     ) -> AiDecision:
-        return self._fallback_decision(signal, orderflow, dense_zone, pattern, news, reason, regime_pattern)
+        return self._fallback_decision(signal, orderflow, dense_zone, pattern, news, reason, regime_pattern, market_leader_context)
 
-    async def _chat_json(self, payload: dict[str, Any], timeout_seconds: int, retries: int) -> dict[str, Any]:
+    async def _chat_json(
+        self,
+        payload: dict[str, Any],
+        timeout_seconds: int,
+        retries: int,
+        call_type: str = "direct",
+        symbol: str | None = None,
+    ) -> dict[str, Any]:
         last_exc: Exception | None = None
+        request_fingerprint = self._request_fingerprint(payload)
         for credential_label, api_key in self._api_key_candidates():
             for attempt in range(retries):
+                started = time.perf_counter()
+                response: dict[str, Any] | None = None
                 try:
                     response = await asyncio.to_thread(self._chat_json_sync, payload, timeout_seconds, api_key)
                     content = response["choices"][0]["message"]["content"]
                     json.loads(content)
+                    latency_ms = int((time.perf_counter() - started) * 1000)
+                    self.credential_router.record_success(credential_label)
+                    self._record_usage_event(
+                        payload=response,
+                        status="success",
+                        call_type=call_type,
+                        symbol=symbol,
+                        credential_label=credential_label,
+                        latency_ms=latency_ms,
+                        request_fingerprint=request_fingerprint,
+                    )
                     return response
                 except (aiohttp.ClientError, requests.RequestException, TimeoutError, asyncio.TimeoutError, KeyError, json.JSONDecodeError) as exc:
                     last_exc = exc
+                    latency_ms = int((time.perf_counter() - started) * 1000)
+                    failure = self.credential_router.classify_exception(exc)
+                    self.credential_router.record_failure(credential_label, failure)
+                    self._record_usage_event(
+                        payload=response,
+                        status="failure",
+                        call_type=call_type,
+                        symbol=symbol,
+                        credential_label=credential_label,
+                        latency_ms=latency_ms,
+                        request_fingerprint=request_fingerprint,
+                        error_type=failure.error_type,
+                        error_category=failure.category,
+                        http_status=failure.http_status,
+                    )
                     logger.warning(
                         "deepseek_call_failed",
                         extra={
@@ -114,8 +174,12 @@ class DeepSeekBrain:
                             "attempt": attempt + 1,
                             "retries": retries,
                             "error_type": type(exc).__name__,
+                            "error_category": failure.category,
+                            "http_status": failure.http_status,
                         },
                     )
+                    if failure.category in {"quota_exhausted", "invalid_auth"}:
+                        break
                     if attempt < retries - 1:
                         await asyncio.sleep(1.5 * (attempt + 1))
             if credential_label == "primary" and self.backup_api_key:
@@ -130,7 +194,7 @@ class DeepSeekBrain:
             candidates.append(("primary", self.api_key))
         if self.backup_api_key and self.backup_api_key != self.api_key:
             candidates.append(("backup", self.backup_api_key))
-        return candidates
+        return self.credential_router.candidates(candidates)
 
     def _chat_json_sync(self, payload: dict[str, Any], timeout_seconds: int, api_key: str | None = None) -> dict[str, Any]:
         response = requests.post(
@@ -138,10 +202,7 @@ class DeepSeekBrain:
             headers={"Authorization": f"Bearer {api_key or self.api_key}", "Content-Type": "application/json"},
             json={
                 "model": self.model,
-                "messages": [
-                    {"role": "system", "content": self._system_prompt()},
-                    {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-                ],
+                "messages": self._request_messages(payload),
                 "response_format": {"type": "json_object"},
                 "thinking": {"type": "enabled"},
                 "reasoning_effort": "high",
@@ -149,7 +210,120 @@ class DeepSeekBrain:
             timeout=timeout_seconds,
         )
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+        if isinstance(data, dict):
+            data["_deepseek_transport"] = {"http_status": response.status_code}
+        return data
+
+    def _request_messages(self, payload: dict[str, Any]) -> list[dict[str, str]]:
+        user_payload = {
+            "stable_contract": self._stable_request_contract(),
+            "dynamic_context": payload,
+        }
+        return [
+            {"role": "system", "content": self._system_prompt()},
+            {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False, separators=(",", ":"))},
+        ]
+
+    def _stable_request_contract(self) -> dict[str, Any]:
+        return {
+            "schema_version": "ai_quant_decision_v2",
+            "ai_role": "confirm_reduce_or_block_only",
+            "strategy_direction_source": "local_closed_1h_trend_strategy",
+            "required_scores": [
+                "trend_confirmation_score",
+                "range_risk_score",
+                "news_risk_score",
+                "crypto_market_impact_score",
+                "btc_leader_impact_score",
+                "eth_btc_rotation_score",
+                "symbol_news_impact_score",
+                "pattern_confirmation_score",
+                "orderflow_confirmation_score",
+                "dense_zone_breakout_score",
+            ],
+            "position_tiers": {
+                "block": 0.0,
+                "weak": 0.25,
+                "normal": 0.5,
+                "strong": 0.75,
+                "full": 1.0,
+            },
+            "score_semantics": {
+                "news_alignment": "strategy-relative direction agreement: short+bearish or long+bullish is aligned; opposite is conflict.",
+                "news_risk_score": "event execution/volatility/liquidity risk, not absolute direction.",
+                "crypto_market_impact_score": "broad crypto market impact from current and background news.",
+                "btc_leader_alignment": "BTC leader context relative to local strategy direction.",
+                "btc_leader_regime": "BTC/ETH structure: leader_uptrend, rotation_lag, leader_pullback, distribution_risk, leader_downtrend, or unknown.",
+                "btc_leader_impact_score": "how much BTC context should affect ETH sizing.",
+                "eth_btc_rotation_score": "ETH relative-strength or lagged catch-up quality versus BTC; supports ETH long only when local strategy already fired.",
+                "symbol_news_impact_score": "direct impact on current trading symbol.",
+                "pattern_confirmation_score": "chart pattern support for local strategy direction.",
+            },
+            "hard_rules": [
+                "no_local_entry_signal_no_auto_entry",
+                "ai_cannot_invent_direction",
+                "aligned_major_news_can_reduce_but_not_auto_block_without_execution_risk",
+                "conflicting_news_or_orderflow_can_block",
+                "btc_leader_context_can_scale_or_cap_but_cannot_create_direction",
+                "btc_pullback_with_eth_relative_strength_is_rotation_not_automatic_conflict",
+                "pattern_confirmation_scales_position_but_cannot_create_direction",
+            ],
+        }
+
+    def _record_usage_event(
+        self,
+        *,
+        payload: dict[str, Any] | None,
+        status: str,
+        call_type: str,
+        symbol: str | None,
+        credential_label: str,
+        latency_ms: int,
+        request_fingerprint: str,
+        error_type: str | None = None,
+        error_category: str | None = None,
+        http_status: int | None = None,
+    ) -> None:
+        if self.store is None:
+            return
+        usage = payload.get("usage") if isinstance(payload, dict) else {}
+        usage = usage if isinstance(usage, dict) else {}
+        transport = payload.get("_deepseek_transport") if isinstance(payload, dict) else {}
+        transport = transport if isinstance(transport, dict) else {}
+        event = {
+            "symbol": symbol,
+            "call_type": call_type,
+            "model": self.model,
+            "credential_label": credential_label,
+            "status": status,
+            "latency_ms": latency_ms,
+            "http_status": http_status if http_status is not None else transport.get("http_status"),
+            "error_type": error_type,
+            "error_category": error_category,
+            "request_fingerprint": request_fingerprint,
+            "stable_prefix_hash": self._stable_prefix_hash(),
+            "prompt_tokens": int(usage.get("prompt_tokens") or 0),
+            "prompt_cache_hit_tokens": int(usage.get("prompt_cache_hit_tokens") or 0),
+            "prompt_cache_miss_tokens": int(usage.get("prompt_cache_miss_tokens") or 0),
+            "completion_tokens": int(usage.get("completion_tokens") or 0),
+            "reasoning_tokens": int(((usage.get("completion_tokens_details") or {}) if isinstance(usage.get("completion_tokens_details"), dict) else {}).get("reasoning_tokens") or 0),
+            "total_tokens": int(usage.get("total_tokens") or 0),
+        }
+        self.store.insert("ai_call_usage_events", event, symbol)
+
+    def _request_fingerprint(self, payload: dict[str, Any]) -> str:
+        encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()[:24]
+
+    def _stable_prefix_hash(self) -> str:
+        prefix = json.dumps(
+            {"system": self._system_prompt(), "stable_contract": self._stable_request_contract()},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(prefix.encode("utf-8")).hexdigest()[:24]
 
     def _system_prompt(self) -> str:
         return (
@@ -209,6 +383,8 @@ class DeepSeekBrain:
         item["veto_action"] = self._normalize_veto(item.get("veto_action"))
         item["news_alignment"] = self._normalize_alignment(item.get("news_alignment"))
         item["orderflow_alignment"] = self._normalize_alignment(item.get("orderflow_alignment"))
+        item["btc_leader_alignment"] = self._normalize_alignment(item.get("btc_leader_alignment"))
+        item["btc_leader_regime"] = self._normalize_btc_leader_regime(item.get("btc_leader_regime"))
         for key in ("entry_zone_estimate", "tp_estimate", "sl_estimate"):
             item[key] = self._normalize_optional_float(item.get(key))
         item["confidence"] = self._clip_float(item.get("confidence"), 0.0, 1.0, 0.35)
@@ -216,6 +392,11 @@ class DeepSeekBrain:
         item["trend_confirmation_score"] = self._clip_float(item.get("trend_confirmation_score"), 0.0, 1.0, 0.35)
         item["range_risk_score"] = self._clip_float(item.get("range_risk_score"), 0.0, 1.0, 0.65)
         item["news_risk_score"] = self._clip_float(item.get("news_risk_score"), 0.0, 1.0, 0.65)
+        item["crypto_market_impact_score"] = self._clip_float(item.get("crypto_market_impact_score"), 0.0, 1.0, 0.0)
+        item["btc_leader_impact_score"] = self._clip_float(item.get("btc_leader_impact_score"), 0.0, 1.0, 0.0)
+        item["eth_btc_rotation_score"] = self._clip_float(item.get("eth_btc_rotation_score"), 0.0, 1.0, 0.0)
+        item["symbol_news_impact_score"] = self._clip_float(item.get("symbol_news_impact_score"), 0.0, 1.0, 0.0)
+        item["pattern_confirmation_score"] = self._clip_float(item.get("pattern_confirmation_score"), 0.0, 1.0, 0.5)
         item["orderflow_confirmation_score"] = self._clip_float(item.get("orderflow_confirmation_score"), 0.0, 1.0, 0.35)
         item["dense_zone_breakout_score"] = self._clip_float(item.get("dense_zone_breakout_score"), 0.0, 1.0, 0.35)
         if not isinstance(item.get("reason_codes"), list):
@@ -326,6 +507,7 @@ class DeepSeekBrain:
         pattern: PatternCandidate,
         news: NewsDigest,
         regime_pattern: RegimePattern | None = None,
+        market_leader_context: MarketLeaderContext | None = None,
     ) -> dict[str, Any]:
         return {
             "schema_hint": {
@@ -346,6 +528,8 @@ class DeepSeekBrain:
             "dense_zone": dense_zone.model_dump(mode="json"),
             "pattern": pattern.model_dump(mode="json"),
             "regime_pattern": regime_pattern.model_dump(mode="json") if regime_pattern else None,
+            "market_leader_context": market_leader_context.model_dump(mode="json") if market_leader_context else None,
+            "market_background": news.market_background.model_dump(mode="json") if news.market_background else None,
             "news": news.model_dump(mode="json"),
             "news_direction_hint": self._news_direction_hint(news),
             "news_strategy_alignment_hint": self._news_alignment_for_signal(news, signal),
@@ -370,6 +554,14 @@ class DeepSeekBrain:
                     "dense_zone_breakout_score 低代表密集区突破质量差，应缩仓或阻断。",
                 ],
             },
+            "news_context_policy": {
+                "market_background": "Long-lived factual context built from decayed high-impact events.",
+                "realtime_news": "Short window news must be judged against market_background, not in isolation.",
+                "direction_rule": "Short plus bearish news is aligned; long plus bullish news is aligned. Opposite combinations are conflict.",
+                "btc_leader_rule": "ETH sizing must account for BTC leader context: BTC aligned supports, BTC conflict caps/reduces, BTC unknown is neutral.",
+                "btc_rotation_rule": "If BTC is only pulling back or consolidating while ETH has strong relative strength, classify as rotation_lag/leader_pullback instead of automatic conflict.",
+                "market_vs_event_rule": "Separate absolute news direction, broad crypto impact, symbol impact, and execution/volatility risk.",
+            },
             "hard_rules": [
                 "没有本地技术开仓信号时，不得自动开仓。",
                 "AI信心超过65%但技术信号未触发时，只能生成候选交易计划并等待审批。",
@@ -381,7 +573,30 @@ class DeepSeekBrain:
 
     def _compact_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         compact = dict(payload)
+        background = dict(compact.get("market_background") or {})
+        for key, limit in (("active_events", 10), ("realtime_events", 6)):
+            events = []
+            for event in (background.get(key) or [])[:limit]:
+                if isinstance(event, dict):
+                    events.append(
+                        {
+                            "title": str(event.get("title") or "")[:220],
+                            "source": event.get("source"),
+                            "published_at": event.get("published_at"),
+                            "direction": event.get("direction"),
+                            "severity": event.get("severity"),
+                            "risk_score": event.get("risk_score"),
+                            "confidence": event.get("confidence"),
+                            "summary": str(event.get("summary") or "")[:320],
+                        }
+                    )
+            if background:
+                background[key] = events
+        if background:
+            compact["market_background"] = background
         news = dict(compact.get("news") or {})
+        news.pop("market_background", None)
+        news.pop("active_news_events", None)
         items = []
         for item in (news.get("items") or [])[:16]:
             if isinstance(item, dict):
@@ -408,6 +623,18 @@ class DeepSeekBrain:
             return "neutral"
         return "unknown"
 
+    def _normalize_btc_leader_regime(self, value: Any) -> str:
+        text = str(value or "").strip().lower()
+        allowed = {
+            "leader_uptrend",
+            "rotation_lag",
+            "leader_pullback",
+            "distribution_risk",
+            "leader_downtrend",
+            "unknown",
+        }
+        return text if text in allowed else "unknown"
+
     def _news_alignment_for_signal(self, news: NewsDigest, signal: StrategySignal) -> Alignment:
         if news.news_direction == NewsDirection.NEUTRAL:
             return Alignment.NEUTRAL
@@ -419,6 +646,39 @@ class DeepSeekBrain:
             return Alignment.ALIGNED if news.news_direction == NewsDirection.BEARISH else Alignment.CONFLICT
         return Alignment.UNKNOWN
 
+    def _background_impact_score(self, news: NewsDigest) -> float:
+        events = list(news.active_news_events)
+        if news.market_background is not None:
+            events.extend(news.market_background.active_events)
+            events.extend(news.market_background.realtime_events)
+        if not events:
+            return 0.0
+        score = max((event.risk_score * max(event.confidence, 0.1) for event in events), default=0.0)
+        crypto_events = [
+            event for event in events
+            if any(str(scope).lower() in {"crypto", "btc", "eth", "risk_assets"} for scope in event.asset_scope)
+        ]
+        if crypto_events:
+            score = max(score, max(event.risk_score for event in crypto_events))
+        return round(max(0.0, min(1.0, score)), 4)
+
+    def _symbol_news_impact_score(self, news: NewsDigest, symbol: str) -> float:
+        base = symbol.split("/", 1)[0].upper()
+        events = list(news.active_news_events)
+        if news.market_background is not None:
+            events.extend(news.market_background.active_events)
+            events.extend(news.market_background.realtime_events)
+        if not events:
+            return 0.0
+        direct = [
+            event for event in events
+            if any(str(scope).upper() in {base, symbol.upper()} for scope in event.asset_scope)
+        ]
+        if not direct:
+            return 0.0
+        score = max(event.risk_score * max(event.confidence, 0.1) for event in direct)
+        return round(max(0.0, min(1.0, score)), 4)
+
     def _fallback_decision(
         self,
         signal: StrategySignal,
@@ -428,6 +688,7 @@ class DeepSeekBrain:
         news: NewsDigest,
         reason: str,
         regime_pattern: RegimePattern | None = None,
+        market_leader_context: MarketLeaderContext | None = None,
     ) -> AiDecision:
         is_entry = signal.action in {SignalAction.LONG, SignalAction.SHORT}
         direction = Side.LONG if signal.action == SignalAction.LONG else Side.SHORT if signal.action == SignalAction.SHORT else Side.FLAT
@@ -452,6 +713,7 @@ class DeepSeekBrain:
             trend_confirmation_score = 0.0
             range_risk_score = 0.75
             news_risk_score = 0.75 if news.warnings else 0.55
+            pattern_confirmation_score = 0.2
             orderflow_confirmation_score = 0.0
             dense_zone_breakout_score = 0.0
         elif regime_blocks_entry:
@@ -462,6 +724,7 @@ class DeepSeekBrain:
             trend_confirmation_score = 0.2
             range_risk_score = 0.85 if strategy_allowed == "range" else 0.7
             news_risk_score = 0.65 if news.warnings else 0.45
+            pattern_confirmation_score = max(0.2, min(0.45, pattern.confidence))
             orderflow_confirmation_score = 0.35
             dense_zone_breakout_score = max(0.15, min(0.45, dense_zone.trend_score))
         elif is_entry and data_ok and aligned_orderflow and signal.signal_strength >= 0.7:
@@ -472,6 +735,7 @@ class DeepSeekBrain:
             trend_confirmation_score = min(1.0, max(0.55, signal.signal_strength))
             range_risk_score = min(0.55, max(0.15, dense_zone.range_score))
             news_risk_score = 0.35
+            pattern_confirmation_score = max(0.45, min(0.75, pattern.confidence))
             orderflow_confirmation_score = min(0.8, max(0.6, orderflow.data_quality))
             dense_zone_breakout_score = min(0.75, max(0.45, dense_zone.trend_score or dense_zone.strength))
         else:
@@ -482,6 +746,7 @@ class DeepSeekBrain:
             trend_confirmation_score = 0.35 if is_entry else 0.0
             range_risk_score = 0.65
             news_risk_score = 0.65 if news.warnings else 0.5
+            pattern_confirmation_score = max(0.25, min(0.55, pattern.confidence))
             orderflow_confirmation_score = 0.35 if orderflow.alignment_hint == Alignment.ALIGNED else 0.2
             dense_zone_breakout_score = 0.35
 
@@ -498,11 +763,18 @@ class DeepSeekBrain:
             multiplier=0.5,
             news_alignment=self._news_alignment_for_signal(news, signal),
             orderflow_alignment=orderflow.alignment_hint,
+            btc_leader_alignment=market_leader_context.strategy_alignment_hint if market_leader_context else Alignment.UNKNOWN,
+            btc_leader_regime=market_leader_context.leader_regime if market_leader_context else "unknown",
             dense_zone_position=dense_zone.current_position,
             pattern_type=pattern.pattern_type,
             trend_confirmation_score=trend_confirmation_score,
             range_risk_score=range_risk_score,
             news_risk_score=news_risk_score,
+            crypto_market_impact_score=self._background_impact_score(news),
+            btc_leader_impact_score=market_leader_context.impact_score if market_leader_context else 0.0,
+            eth_btc_rotation_score=market_leader_context.eth_btc_rotation_score if market_leader_context else 0.0,
+            symbol_news_impact_score=self._symbol_news_impact_score(news, signal.symbol),
+            pattern_confirmation_score=pattern_confirmation_score,
             orderflow_confirmation_score=orderflow_confirmation_score,
             dense_zone_breakout_score=dense_zone_breakout_score,
             entry_zone_estimate=price if is_entry else None,

@@ -22,6 +22,8 @@ from ai_quant_trader.core.models import (
     Side,
     StrategySignal,
     VetoAction,
+    WakeupEvent,
+    WakeupSeverity,
 )
 from ai_quant_trader.storage.sqlite import SQLiteStore
 
@@ -65,6 +67,139 @@ def make_inputs() -> tuple[StrategySignal, AggregatedOrderflow, DenseZone, Patte
             reason_codes=["trend_score_dominant"],
         ),
     )
+
+
+def test_market_leader_context_aligns_btc_bearish_move_with_eth_short_signal(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl")
+    app = TradingApp(str(config_path))
+    candles = pd.DataFrame(
+        {
+            "open": [100.0 - i * 0.2 for i in range(30)],
+            "high": [101.0 - i * 0.2 for i in range(30)],
+            "low": [99.0 - i * 0.2 for i in range(30)],
+            "close": [100.0 - i * 0.25 for i in range(30)],
+            "volume": [1000.0] * 30,
+        }
+    )
+    signal = make_signal(SignalAction.SHORT)
+
+    try:
+        context = app._build_market_leader_context("BTC/USDT:USDT", "1h", candles, signal)
+    finally:
+        app.store.close()
+
+    assert context.available is True
+    assert context.market_direction == "bearish"
+    assert context.strategy_alignment_hint == "aligned"
+    assert context.impact_score > 0
+
+
+def test_market_leader_context_detects_eth_lagged_rotation_during_btc_pullback(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl")
+    app = TradingApp(str(config_path))
+    btc_candles = pd.DataFrame(
+        {
+            "open": [100.0] * 30,
+            "high": [101.0] * 30,
+            "low": [99.0] * 30,
+            "close": [100.0 + i * 0.08 for i in range(25)] + [102.0, 101.9, 101.8, 101.6, 101.5],
+            "volume": [1000.0] * 30,
+        }
+    )
+    eth_candles = pd.DataFrame(
+        {
+            "open": [100.0] * 30,
+            "high": [101.0] * 30,
+            "low": [99.0] * 30,
+            "close": [100.0 + i * 0.04 for i in range(25)] + [101.0, 101.2, 101.7, 102.4, 103.1],
+            "volume": [1000.0] * 30,
+        }
+    )
+
+    try:
+        context = app._build_market_leader_context(
+            "BTC/USDT:USDT",
+            "1h",
+            btc_candles,
+            make_signal(SignalAction.LONG),
+            eth_candles,
+        )
+    finally:
+        app.store.close()
+
+    assert context.leader_regime == "rotation_lag"
+    assert context.strategy_alignment_hint == "aligned"
+    assert context.eth_btc_rotation_score >= 0.55
+    assert context.relative_strength_1h_pct is not None
+    assert context.relative_strength_4h_pct is not None
+
+
+def test_market_leader_context_keeps_btc_breakdown_as_conflict(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl")
+    app = TradingApp(str(config_path))
+    btc_candles = pd.DataFrame(
+        {
+            "open": [100.0] * 30,
+            "high": [101.0] * 30,
+            "low": [99.0] * 30,
+            "close": [100.0 - i * 0.35 for i in range(30)],
+            "volume": [1000.0] * 30,
+        }
+    )
+    eth_candles = pd.DataFrame(
+        {
+            "open": [100.0] * 30,
+            "high": [101.0] * 30,
+            "low": [99.0] * 30,
+            "close": [100.0 + i * 0.02 for i in range(30)],
+            "volume": [1000.0] * 30,
+        }
+    )
+
+    try:
+        context = app._build_market_leader_context(
+            "BTC/USDT:USDT",
+            "1h",
+            btc_candles,
+            make_signal(SignalAction.LONG),
+            eth_candles,
+        )
+    finally:
+        app.store.close()
+
+    assert context.leader_regime == "leader_downtrend"
+    assert context.strategy_alignment_hint == "conflict"
+    assert context.eth_btc_rotation_score == 0.0
+
+
+@pytest.mark.asyncio
+async def test_price_wakeup_deepseek_guard_keeps_critical_events_and_positions(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl")
+    app = TradingApp(str(config_path))
+    try:
+        flat = PositionSnapshot(symbol="ETH/USDT:USDT", side=Side.FLAT, qty=0.0)
+        long_position = PositionSnapshot(symbol="ETH/USDT:USDT", side=Side.LONG, qty=0.1)
+        hold_signal = make_signal(SignalAction.HOLD)
+        long_signal = make_signal(SignalAction.LONG)
+        ordinary_event = WakeupEvent(
+            event_type="price_move",
+            severity=WakeupSeverity.MEDIUM,
+            symbol="ETH/USDT:USDT",
+            title="ordinary move",
+            raw={"pct_1m": 0.7, "pct_5m": 1.1},
+        )
+        critical_event = ordinary_event.model_copy(update={"severity": WakeupSeverity.CRITICAL})
+
+        assert app._should_call_deepseek_for_price_wakeup(ordinary_event, hold_signal, flat) is False
+        assert app._should_call_deepseek_for_price_wakeup(ordinary_event, long_signal, flat) is True
+        assert app._should_call_deepseek_for_price_wakeup(ordinary_event, hold_signal, long_position) is True
+        assert app._should_call_deepseek_for_price_wakeup(critical_event, hold_signal, flat) is True
+    finally:
+        await app.close()
 
 
 def test_deepseek_budget_blocks_hourly_limit(tmp_path: Path) -> None:

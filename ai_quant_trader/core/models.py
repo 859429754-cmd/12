@@ -45,6 +45,13 @@ class NewsDirection(StrEnum):
     UNKNOWN = "unknown"
 
 
+class NewsSeverity(StrEnum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
 class VetoAction(StrEnum):
     ALLOW = "allow"
     REDUCE = "reduce"
@@ -337,6 +344,61 @@ class NewsItem(BaseModel):
     raw_summary: str = ""
 
 
+class NewsEvent(BaseModel):
+    event_id: str
+    title: str
+    source: str
+    published_at: datetime
+    category: str = "macro"
+    direction: NewsDirection = NewsDirection.UNKNOWN
+    severity: NewsSeverity = NewsSeverity.LOW
+    risk_score: float = Field(default=0.0, ge=0, le=1)
+    confidence: float = Field(default=0.0, ge=0, le=1)
+    asset_scope: list[str] = Field(default_factory=list)
+    summary: str = ""
+    decay_until: datetime
+    source_item_key: str = ""
+
+
+class MarketBackgroundSnapshot(BaseModel):
+    generated_at: datetime = Field(default_factory=utc_now)
+    lookback_hours: int = 48
+    realtime_minutes: int = 60
+    background_direction: NewsDirection = NewsDirection.UNKNOWN
+    risk_level: Literal["low", "medium", "high", "critical", "unknown"] = "unknown"
+    active_events: list[NewsEvent] = Field(default_factory=list)
+    realtime_events: list[NewsEvent] = Field(default_factory=list)
+    summary: str = ""
+    warnings: list[str] = Field(default_factory=list)
+
+
+class MarketLeaderContext(BaseModel):
+    symbol: str = "BTC/USDT:USDT"
+    timeframe: str = "1h"
+    generated_at: datetime = Field(default_factory=utc_now)
+    available: bool = False
+    price: float | None = None
+    change_1h_pct: float | None = None
+    change_4h_pct: float | None = None
+    change_24h_pct: float | None = None
+    relative_strength_1h_pct: float | None = None
+    relative_strength_4h_pct: float | None = None
+    market_direction: NewsDirection = NewsDirection.UNKNOWN
+    strategy_alignment_hint: Alignment = Alignment.UNKNOWN
+    leader_regime: Literal[
+        "leader_uptrend",
+        "rotation_lag",
+        "leader_pullback",
+        "distribution_risk",
+        "leader_downtrend",
+        "unknown",
+    ] = "unknown"
+    eth_btc_rotation_score: float = Field(default=0.0, ge=0, le=1)
+    impact_score: float = Field(default=0.0, ge=0, le=1)
+    summary: str = ""
+    warnings: list[str] = Field(default_factory=list)
+
+
 class NewsDigest(BaseModel):
     generated_at: datetime = Field(default_factory=utc_now)
     items: list[NewsItem] = Field(default_factory=list)
@@ -349,6 +411,8 @@ class NewsDigest(BaseModel):
     crypto_sentiment: Alignment = Alignment.UNKNOWN
     summary: str = ""
     warnings: list[str] = Field(default_factory=list)
+    active_news_events: list[NewsEvent] = Field(default_factory=list)
+    market_background: MarketBackgroundSnapshot | None = None
 
     @model_validator(mode="after")
     def normalize_news_direction(self) -> "NewsDigest":
@@ -443,11 +507,18 @@ class AiDecision(BaseModel):
     multiplier: float = Field(ge=0.5, le=1.5)
     news_alignment: Alignment = Alignment.UNKNOWN
     orderflow_alignment: Alignment = Alignment.UNKNOWN
+    btc_leader_alignment: Alignment = Alignment.UNKNOWN
+    btc_leader_regime: str = "unknown"
     dense_zone_position: str = "unknown"
     pattern_type: str = "unknown"
     trend_confirmation_score: float = Field(default=0.0, ge=0, le=1)
     range_risk_score: float = Field(default=0.0, ge=0, le=1)
     news_risk_score: float = Field(default=0.0, ge=0, le=1)
+    crypto_market_impact_score: float = Field(default=0.0, ge=0, le=1)
+    btc_leader_impact_score: float = Field(default=0.0, ge=0, le=1)
+    eth_btc_rotation_score: float = Field(default=0.0, ge=0, le=1)
+    symbol_news_impact_score: float = Field(default=0.0, ge=0, le=1)
+    pattern_confirmation_score: float = Field(default=0.5, ge=0, le=1)
     orderflow_confirmation_score: float = Field(default=0.0, ge=0, le=1)
     dense_zone_breakout_score: float = Field(default=0.0, ge=0, le=1)
     entry_zone_estimate: float | None = None

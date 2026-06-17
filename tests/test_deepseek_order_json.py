@@ -11,6 +11,7 @@ from ai_quant_trader.core.models import (
     AiDecision,
     Alignment,
     DenseZone,
+    MarketLeaderContext,
     NewsDigest,
     NewsDirection,
     NewsItem,
@@ -19,6 +20,7 @@ from ai_quant_trader.core.models import (
     SignalAction,
     StrategySignal,
 )
+from ai_quant_trader.storage.sqlite import SQLiteStore
 
 
 @pytest.mark.asyncio
@@ -64,10 +66,97 @@ async def test_deepseek_chat_json_falls_back_when_primary_returns_invalid_json(m
 
 
 @pytest.mark.asyncio
+async def test_deepseek_quota_failure_sticks_to_backup_key(tmp_path, monkeypatch) -> None:
+    store = SQLiteStore(str(tmp_path / "trader.sqlite3"), str(tmp_path / "audit.jsonl"))
+    primary_key = "primary-" + "test-key"
+    backup_key = "backup-" + "test-key"
+    brain = DeepSeekBrain(api_key=primary_key, model="deepseek-v4-flash", store=store)
+    brain.backup_api_key = backup_key
+    seen_keys: list[str] = []
+
+    def quota_error() -> requests.HTTPError:
+        response = requests.Response()
+        response.status_code = 402
+        error = requests.HTTPError("Insufficient Balance")
+        error.response = response
+        return error
+
+    def fake_chat_json_sync(payload, timeout_seconds: int, api_key: str):  # noqa: ANN001
+        seen_keys.append(api_key)
+        if api_key == primary_key:
+            raise quota_error()
+        return {
+            "choices": [{"message": {"content": json.dumps({"ok": True})}}],
+            "usage": {
+                "prompt_tokens": 10,
+                "prompt_cache_hit_tokens": 7,
+                "prompt_cache_miss_tokens": 3,
+                "completion_tokens": 2,
+                "total_tokens": 12,
+            },
+        }
+
+    try:
+        monkeypatch.setattr(brain, "_chat_json_sync", fake_chat_json_sync)
+        await brain._chat_json({"messages": ["first"]}, timeout_seconds=1, retries=1, call_type="trading_cycle", symbol="ETH/USDT:USDT")
+        await brain._chat_json({"messages": ["second"]}, timeout_seconds=1, retries=1, call_type="trading_cycle", symbol="ETH/USDT:USDT")
+
+        assert seen_keys == [primary_key, backup_key, backup_key]
+        state = store.fetch_latest("runtime_state", "deepseek_credentials")
+        assert state is not None
+        assert state["payload"]["active_label"] == "backup"
+        usage_rows = store.fetch_payloads("ai_call_usage_events", limit=10, symbol="ETH/USDT:USDT")
+        assert any(row["payload"]["prompt_cache_hit_tokens"] == 7 for row in usage_rows)
+        assert any(row["payload"]["credential_label"] == "backup" for row in usage_rows)
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_deepseek_transient_failure_uses_backup_once_but_keeps_primary(monkeypatch) -> None:
+    primary_key = "primary-" + "test-key"
+    backup_key = "backup-" + "test-key"
+    brain = DeepSeekBrain(api_key=primary_key, model="deepseek-v4-flash")
+    brain.backup_api_key = backup_key
+    seen_keys: list[str] = []
+    primary_failures_remaining = 1
+
+    def fake_chat_json_sync(payload, timeout_seconds: int, api_key: str):  # noqa: ANN001
+        nonlocal primary_failures_remaining
+        seen_keys.append(api_key)
+        if api_key == primary_key and primary_failures_remaining > 0:
+            primary_failures_remaining -= 1
+            raise requests.Timeout("temporary timeout")
+        return {"choices": [{"message": {"content": json.dumps({"ok": True})}}]}
+
+    monkeypatch.setattr(brain, "_chat_json_sync", fake_chat_json_sync)
+    await brain._chat_json({"messages": ["first"]}, timeout_seconds=1, retries=1)
+    await brain._chat_json({"messages": ["second"]}, timeout_seconds=1, retries=1)
+
+    assert seen_keys == [primary_key, backup_key, primary_key]
+
+
+def test_deepseek_request_messages_keep_stable_contract_before_dynamic_context() -> None:
+    brain = DeepSeekBrain(api_key="test-key", model="deepseek-v4-flash")
+    messages = brain._request_messages({"technical_signal": {"action": "long", "current_price": 1234.56}})
+
+    assert messages[0]["role"] == "system"
+    assert messages[1]["role"] == "user"
+    payload = json.loads(messages[1]["content"])
+    assert list(payload.keys()) == ["stable_contract", "dynamic_context"]
+    assert payload["stable_contract"]["ai_role"] == "confirm_reduce_or_block_only"
+    assert "btc_leader_impact_score" in payload["stable_contract"]["required_scores"]
+    assert "eth_btc_rotation_score" in payload["stable_contract"]["required_scores"]
+    assert payload["stable_contract"]["score_semantics"]["btc_leader_alignment"].startswith("BTC")
+    assert "relative-strength" in payload["stable_contract"]["score_semantics"]["eth_btc_rotation_score"]
+    assert payload["dynamic_context"]["technical_signal"]["action"] == "long"
+
+
+@pytest.mark.asyncio
 async def test_deepseek_decision_requires_structured_trade_prices(monkeypatch) -> None:
     brain = DeepSeekBrain(api_key="test-key", model="deepseek-v4-pro")
 
-    async def fake_chat_json(payload, timeout_seconds: int, retries: int):  # noqa: ANN001
+    async def fake_chat_json(payload, timeout_seconds: int, retries: int, **kwargs):  # noqa: ANN001, ANN003
         assert payload["technical_signal"]["action"] == "long"
         assert payload["regime_pattern"]["strategy_allowed"] == "trend"
         return {
@@ -143,10 +232,12 @@ async def test_deepseek_decision_requires_structured_trade_prices(monkeypatch) -
 async def test_deepseek_payload_separates_news_direction_from_strategy_alignment(monkeypatch) -> None:
     brain = DeepSeekBrain(api_key="test-key", model="deepseek-v4-pro")
 
-    async def fake_chat_json(payload, timeout_seconds: int, retries: int):  # noqa: ANN001
+    async def fake_chat_json(payload, timeout_seconds: int, retries: int, **kwargs):  # noqa: ANN001, ANN003
         assert payload["technical_signal"]["action"] == "short"
         assert payload["news_direction_hint"] == "bearish"
         assert payload["news_strategy_alignment_hint"] == "aligned"
+        assert payload["market_leader_context"]["symbol"] == "BTC/USDT:USDT"
+        assert payload["market_leader_context"]["strategy_alignment_hint"] == "aligned"
         return {
             "choices": [
                 {
@@ -160,6 +251,11 @@ async def test_deepseek_payload_separates_news_direction_from_strategy_alignment
                                 "multiplier": 0.8,
                                 "news_alignment": "aligned",
                                 "orderflow_alignment": "aligned",
+                                "btc_leader_alignment": "aligned",
+                                "crypto_market_impact_score": 0.8,
+                                "btc_leader_impact_score": 0.7,
+                                "symbol_news_impact_score": 0.6,
+                                "pattern_confirmation_score": 0.74,
                                 "dense_zone_position": "below_value",
                                 "action_suggestion": "open_short",
                                 "veto_action": "reduce",
@@ -189,10 +285,25 @@ async def test_deepseek_payload_separates_news_direction_from_strategy_alignment
             items=[NewsItem(title="Fed hawkish comments pressure risk assets", source="test")],
             crypto_sentiment=Alignment.CONFLICT,
         ),
+        market_leader_context=MarketLeaderContext(
+            available=True,
+            price=100_000,
+            change_1h_pct=-1.2,
+            change_4h_pct=-2.4,
+            change_24h_pct=-3.0,
+            market_direction=NewsDirection.BEARISH,
+            strategy_alignment_hint=Alignment.ALIGNED,
+            impact_score=0.7,
+        ),
     )
 
     assert decision.direction == "short"
     assert decision.news_alignment == "aligned"
+    assert decision.btc_leader_alignment == "aligned"
+    assert decision.crypto_market_impact_score == 0.8
+    assert decision.btc_leader_impact_score == 0.7
+    assert decision.symbol_news_impact_score == 0.6
+    assert decision.pattern_confirmation_score == 0.74
     assert decision.veto_action == "reduce"
 
 
@@ -209,6 +320,10 @@ def test_deepseek_normalizes_five_score_fields_conservatively() -> None:
             "trend_confirmation_score": 3.0,
             "range_risk_score": -1.0,
             "news_risk_score": "not-a-number",
+            "crypto_market_impact_score": 2.0,
+            "btc_leader_impact_score": -1.0,
+            "symbol_news_impact_score": "bad",
+            "pattern_confirmation_score": None,
             "orderflow_confirmation_score": None,
             "dense_zone_breakout_score": 0.72,
         }
@@ -219,6 +334,10 @@ def test_deepseek_normalizes_five_score_fields_conservatively() -> None:
     assert decision.trend_confirmation_score == 1.0
     assert decision.range_risk_score == 0.0
     assert decision.news_risk_score == 0.65
+    assert decision.crypto_market_impact_score == 1.0
+    assert decision.btc_leader_impact_score == 0.0
+    assert decision.symbol_news_impact_score == 0.0
+    assert decision.pattern_confirmation_score == 0.5
     assert decision.orderflow_confirmation_score == 0.35
     assert decision.dense_zone_breakout_score == 0.72
 

@@ -137,7 +137,7 @@ async def test_major_news_review_skips_deepseek_without_signal_or_position(
         async def fake_fetch_summaries(symbol: str):  # noqa: ANN001
             raise AssertionError("Orderflow fetch must not run when major news review is locally skipped.")
 
-        async def fake_analyze_symbol(signal, orderflow, dense_zone, pattern, news, regime_pattern=None):  # noqa: ANN001
+        async def fake_analyze_symbol(signal, orderflow, dense_zone, pattern, news, regime_pattern=None, **kwargs):  # noqa: ANN001, ANN003
             assert signal.action == SignalAction.HOLD
             assert signal.technical_evidence["news_risk_review"] is True
             return AiDecision(
@@ -243,7 +243,7 @@ async def test_major_news_review_with_strategy_signal_stays_out_of_trade_decisio
         def fake_aggregate(symbol, summaries):  # noqa: ANN001
             return AggregatedOrderflow(symbol=symbol, alignment_hint=Alignment.ALIGNED, data_quality=0.9, source_count=2)
 
-        async def fake_analyze_symbol(signal, orderflow, dense_zone, pattern, news, regime_pattern=None):  # noqa: ANN001
+        async def fake_analyze_symbol(signal, orderflow, dense_zone, pattern, news, regime_pattern=None, **kwargs):  # noqa: ANN001, ANN003
             assert signal.action == SignalAction.HOLD
             assert signal.technical_evidence["original_strategy_action"] == "short"
             return AiDecision(

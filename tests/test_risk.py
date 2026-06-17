@@ -39,6 +39,11 @@ def _ai(**kwargs) -> AiDecision:
         "trend_confirmation_score": 0.86,
         "range_risk_score": 0.15,
         "news_risk_score": 0.20,
+        "btc_leader_alignment": Alignment.ALIGNED,
+        "crypto_market_impact_score": 0.35,
+        "btc_leader_impact_score": 0.65,
+        "symbol_news_impact_score": 0.35,
+        "pattern_confirmation_score": 0.82,
         "orderflow_confirmation_score": 0.85,
         "dense_zone_breakout_score": 0.75,
         "veto_action": VetoAction.ALLOW,
@@ -299,3 +304,86 @@ def test_major_news_aligned_extreme_event_risk_caps_weak_not_hard_block() -> Non
     assert decision.position_tier == "weak"
     assert decision.position_scale == 0.25
     assert "aligned_major_news_extreme_risk_caps_weak" in decision.warnings
+
+
+def test_btc_leader_conflict_caps_but_does_not_invent_direction_or_auto_block() -> None:
+    state = RuntimeState(opening_paused=False, enabled_symbols={"ETH/USDT:USDT"})
+    manager = RiskManager(RiskConfig(max_total_leverage=4), state)
+    signal = _signal().model_copy(update={"signal_strength": 0.96})
+
+    decision = manager.evaluate(
+        signal,
+        _ai(
+            confidence=0.95,
+            trend_confirmation_score=0.95,
+            range_risk_score=0.05,
+            news_risk_score=0.05,
+            orderflow_confirmation_score=0.90,
+            dense_zone_breakout_score=0.90,
+            pattern_confirmation_score=0.90,
+            btc_leader_alignment=Alignment.CONFLICT,
+            btc_leader_impact_score=0.90,
+        ),
+        1000,
+        [],
+    )
+
+    assert decision.allowed
+    assert decision.position_tier == "weak"
+    assert decision.position_scale == 0.25
+    assert "btc_leader_conflict_high_impact_caps_weak" in decision.warnings
+
+
+def test_eth_btc_rotation_context_prevents_false_btc_conflict_cap() -> None:
+    state = RuntimeState(opening_paused=False, enabled_symbols={"ETH/USDT:USDT"})
+    manager = RiskManager(RiskConfig(max_total_leverage=4), state)
+    signal = _signal().model_copy(update={"signal_strength": 0.96})
+
+    decision = manager.evaluate(
+        signal,
+        _ai(
+            confidence=0.95,
+            trend_confirmation_score=0.95,
+            range_risk_score=0.05,
+            news_risk_score=0.05,
+            orderflow_confirmation_score=0.90,
+            dense_zone_breakout_score=0.90,
+            pattern_confirmation_score=0.90,
+            btc_leader_alignment=Alignment.CONFLICT,
+            btc_leader_regime="rotation_lag",
+            btc_leader_impact_score=0.70,
+            eth_btc_rotation_score=0.78,
+        ),
+        1000,
+        [],
+    )
+
+    assert decision.allowed
+    assert decision.position_tier in {"strong", "full"}
+    assert "btc_leader_conflict_caps_normal" not in decision.warnings
+    assert "btc_eth_rotation_context_prevents_false_conflict_cap" in decision.warnings
+
+
+def test_weak_pattern_confirmation_caps_position_even_with_strong_news_and_orderflow() -> None:
+    state = RuntimeState(opening_paused=False, enabled_symbols={"ETH/USDT:USDT"})
+    manager = RiskManager(RiskConfig(max_total_leverage=4), state)
+    signal = _signal().model_copy(update={"signal_strength": 0.96})
+
+    decision = manager.evaluate(
+        signal,
+        _ai(
+            confidence=0.95,
+            trend_confirmation_score=0.95,
+            range_risk_score=0.05,
+            news_risk_score=0.05,
+            orderflow_confirmation_score=0.90,
+            dense_zone_breakout_score=0.90,
+            pattern_confirmation_score=0.20,
+        ),
+        1000,
+        [],
+    )
+
+    assert decision.allowed
+    assert decision.position_tier == "weak"
+    assert "pattern_confirmation_very_weak_caps_weak" in decision.warnings

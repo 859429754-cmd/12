@@ -17,10 +17,13 @@ from ai_quant_trader.core.models import (
     AggregatedOrderflow,
     AiDecision,
     AiDriftReport,
+    Alignment,
     DenseZone,
     FollowerAccountConfig,
     HealthStatus,
+    MarketLeaderContext,
     NewsDigest,
+    NewsDirection,
     OrderRequest,
     PatternCandidate,
     PositionSnapshot,
@@ -32,6 +35,7 @@ from ai_quant_trader.core.models import (
 )
 from ai_quant_trader.data.market import MarketDataClient
 from ai_quant_trader.data.news import NewsCollector
+from ai_quant_trader.data.news_context import MarketNewsContextBuilder
 from ai_quant_trader.data.news_memory import DailyNewsFlashStore, NewsMemoryStore
 from ai_quant_trader.data.orderflow import MultiExchangeOrderflowClient
 from ai_quant_trader.execution.gateway import create_exchange_gateway, execution_mode_from_config
@@ -88,9 +92,11 @@ class TradingApp:
         )
         self.news_memory = NewsMemoryStore()
         self.daily_news = DailyNewsFlashStore()
+        self.news_context = MarketNewsContextBuilder(self.store)
         self.brain = DeepSeekBrain(
             base_url=self.config.ai.base_url,
             model=self.config.ai.decision_model,
+            store=self.store,
         )
         self.brain.backup_api_key = os.getenv(self.config.ai.backup_api_key_env)
         self.deepseek_budget = DeepSeekBudgetGuard.from_config(self.store, self.config.ai)
@@ -159,7 +165,13 @@ class TradingApp:
             pattern = self.patterns.detect(symbol_cfg.symbol, candles)
             regime_pattern = self.regime_patterns.analyze(symbol_cfg.symbol, candles, zone, pattern)
             signal = self.regime_patterns.enrich_signal(signal, regime_pattern)
-            if self._ai_enabled_for_symbol(symbol_cfg.symbol) and self._should_call_deepseek_for_signal(signal, position):
+            should_call_deepseek = self._ai_enabled_for_symbol(symbol_cfg.symbol) and self._should_call_deepseek_for_signal(signal, position)
+            market_leader_context = (
+                await self._market_leader_context(symbol_cfg.symbol, symbol_cfg.timeframe, signal, candles)
+                if should_call_deepseek
+                else None
+            )
+            if should_call_deepseek:
                 ai = await self._analyze_with_deepseek_budget(
                     "trading_cycle",
                     signal,
@@ -168,6 +180,7 @@ class TradingApp:
                     pattern,
                     news_digest,
                     regime_pattern,
+                    market_leader_context=market_leader_context,
                 )
             elif self._ai_enabled_for_symbol(symbol_cfg.symbol):
                 self.deepseek_budget.record_skipped(
@@ -183,6 +196,7 @@ class TradingApp:
                     news_digest,
                     "deepseek_skipped:no_signal_no_position",
                     regime_pattern,
+                    market_leader_context,
                 )
             else:
                 ai = self.brain.local_fallback_decision(
@@ -193,6 +207,7 @@ class TradingApp:
                     news_digest,
                     "ai_disabled_for_symbol",
                     regime_pattern,
+                    market_leader_context,
                 )
             drift = self._evaluate_ai_drift_for_signal(symbol_cfg.symbol, signal, position, ai)
             data_health = self.data_health.evaluate_symbol(
@@ -548,15 +563,34 @@ class TradingApp:
         pattern = self.patterns.detect(event.symbol, candles)
         regime_pattern = self.regime_patterns.analyze(event.symbol, candles, zone, pattern)
         review_signal = self.regime_patterns.enrich_signal(review_signal, regime_pattern)
-        ai = await self._analyze_with_deepseek_budget(
-            "price_wakeup",
-            review_signal,
-            aggregated,
-            zone,
-            pattern,
-            news_digest,
-            regime_pattern,
-        )
+        market_leader_context = await self._market_leader_context(event.symbol, symbol_cfg.timeframe, original_signal, candles)
+        if self._should_call_deepseek_for_price_wakeup(event, original_signal, position):
+            ai = await self._analyze_with_deepseek_budget(
+                "price_wakeup",
+                review_signal,
+                aggregated,
+                zone,
+                pattern,
+                news_digest,
+                regime_pattern,
+                market_leader_context=market_leader_context,
+            )
+        else:
+            self.deepseek_budget.record_skipped(
+                symbol=event.symbol,
+                call_type="price_wakeup",
+                reason="local_only_no_position_no_signal",
+            )
+            ai = self.brain.local_fallback_decision(
+                review_signal,
+                aggregated,
+                zone,
+                pattern,
+                news_digest,
+                "deepseek_skipped:price_wakeup_local_only",
+                regime_pattern,
+                market_leader_context,
+            )
         drift = self.ai_drift.evaluate(event.symbol, ai)
         data_health = self.data_health.evaluate_symbol(
             symbol=event.symbol,
@@ -587,6 +621,7 @@ class TradingApp:
         digest = await self.news.collect()
         digest = self.news_memory.update(digest)
         digest = self.daily_news.update(digest)
+        digest = self.news_context.update_digest(digest)
         digest = self._enrich_digest_with_recent_news_context(digest)
         self.store.insert("news_summaries", digest.model_dump(mode="json"))
         if notify:
@@ -689,6 +724,8 @@ class TradingApp:
             summary=f"{event.title}\n{event.summary}\n{self.daily_news.context_summary(limit=30)}\n{self.news_memory.context_summary(days=2, limit=20)}",
             warnings=["major_news_risk_review_only_no_order"],
         )
+        event_digest = self._enrich_digest_with_recent_news_context(event_digest)
+        market_leader_context = await self._market_leader_context(symbol, timeframe, signal, candles)
         ai = await self._analyze_with_deepseek_budget(
             "major_news_risk_review",
             review_signal,
@@ -697,6 +734,7 @@ class TradingApp:
             pattern,
             event_digest,
             regime_pattern,
+            market_leader_context=market_leader_context,
             event_key=self._news_risk_event_key(event),
         )
         risk = self.risk.evaluate(review_signal, ai, equity=0.0, positions=[])
@@ -727,6 +765,21 @@ class TradingApp:
 
     def _should_call_deepseek_for_signal(self, signal: StrategySignal, position: PositionSnapshot) -> bool:
         return signal.action != SignalAction.HOLD or self._has_open_position(position)
+
+    def _should_call_deepseek_for_price_wakeup(self, event, signal: StrategySignal, position: PositionSnapshot) -> bool:
+        if self._should_call_deepseek_for_signal(signal, position):
+            return True
+        severity = str(getattr(event, "severity", "") or "").lower()
+        if severity.endswith("high") or severity.endswith("critical"):
+            return True
+        raw = getattr(event, "raw", {}) or {}
+        try:
+            pct_1m = abs(float(raw.get("pct_1m") or raw.get("move_1m_pct") or 0.0))
+            pct_5m = abs(float(raw.get("pct_5m") or raw.get("move_5m_pct") or 0.0))
+        except (TypeError, ValueError):
+            return False
+        threshold = max(float(self.config.runtime.price_wakeup_threshold_pct or 1.0), 0.1)
+        return pct_1m >= threshold * 3.0 or pct_5m >= threshold * 4.0
 
     def _evaluate_ai_drift_for_signal(
         self,
@@ -802,6 +855,7 @@ class TradingApp:
         )
 
     def _enrich_digest_with_recent_news_context(self, digest: NewsDigest) -> NewsDigest:
+        digest = self.news_context.attach_latest_background(digest)
         digest = self.daily_news.enrich_digest(digest)
         context = self.news_memory.context_summary(days=2, limit=20)
         if not context or context in digest.summary:
@@ -1550,6 +1604,208 @@ class TradingApp:
                 return position
         return None
 
+    async def _market_leader_context(
+        self,
+        symbol: str,
+        timeframe: str,
+        signal: StrategySignal,
+        symbol_candles=None,
+    ) -> MarketLeaderContext:
+        leader_symbol = "BTC/USDT:USDT"
+        try:
+            candles = await self.market.fetch_ohlcv(leader_symbol, timeframe, limit=72, source="auto", closed_only=True)
+            return self._build_market_leader_context(leader_symbol, timeframe, candles, signal, symbol_candles)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "market_leader_context_unavailable",
+                extra={"symbol": symbol, "leader_symbol": leader_symbol, "error_type": type(exc).__name__},
+            )
+            return MarketLeaderContext(
+                symbol=leader_symbol,
+                timeframe=timeframe,
+                available=False,
+                strategy_alignment_hint=Alignment.UNKNOWN,
+                summary=f"BTC leader context unavailable: {type(exc).__name__}",
+                warnings=["btc_leader_context_unavailable"],
+            )
+
+    def _build_market_leader_context(
+        self,
+        leader_symbol: str,
+        timeframe: str,
+        candles,
+        signal: StrategySignal,
+        symbol_candles=None,
+    ) -> MarketLeaderContext:
+        if candles is None or len(candles) < 5 or "close" not in candles:
+            return MarketLeaderContext(
+                symbol=leader_symbol,
+                timeframe=timeframe,
+                available=False,
+                summary="BTC leader context unavailable: insufficient candles",
+                warnings=["btc_leader_context_insufficient_candles"],
+            )
+        closes = [float(value) for value in candles["close"].tolist() if float(value) > 0]
+        if len(closes) < 5:
+            return MarketLeaderContext(
+                symbol=leader_symbol,
+                timeframe=timeframe,
+                available=False,
+                summary="BTC leader context unavailable: insufficient valid closes",
+                warnings=["btc_leader_context_insufficient_valid_closes"],
+            )
+        last = closes[-1]
+        change_1h = self._pct_change_from(closes, 1)
+        change_4h = self._pct_change_from(closes, 4)
+        change_24h = self._pct_change_from(closes, 24)
+        symbol_closes = self._valid_closes_from_candles(symbol_candles)
+        symbol_change_1h = self._pct_change_from(symbol_closes, 1) if len(symbol_closes) >= 2 else 0.0
+        symbol_change_4h = self._pct_change_from(symbol_closes, 4) if len(symbol_closes) >= 5 else 0.0
+        relative_strength_1h = round(symbol_change_1h - change_1h, 4)
+        relative_strength_4h = round(symbol_change_4h - change_4h, 4)
+        direction = self._leader_direction(change_1h, change_4h, change_24h)
+        leader_regime = self._leader_regime(
+            change_1h,
+            change_4h,
+            change_24h,
+            relative_strength_1h,
+            relative_strength_4h,
+            signal,
+        )
+        alignment = self._leader_alignment_for_signal(direction, signal, leader_regime)
+        impact = self._leader_impact_score(change_1h, change_4h, change_24h)
+        rotation_score = self._eth_btc_rotation_score(
+            relative_strength_1h,
+            relative_strength_4h,
+            leader_regime,
+            signal,
+        )
+        warnings: list[str] = []
+        if leader_regime in {"leader_downtrend", "distribution_risk"}:
+            warnings.append(f"btc_leader_{leader_regime}")
+        elif leader_regime in {"rotation_lag", "leader_pullback"}:
+            warnings.append(f"btc_eth_{leader_regime}")
+        return MarketLeaderContext(
+            symbol=leader_symbol,
+            timeframe=timeframe,
+            available=True,
+            price=last,
+            change_1h_pct=change_1h,
+            change_4h_pct=change_4h,
+            change_24h_pct=change_24h,
+            relative_strength_1h_pct=relative_strength_1h,
+            relative_strength_4h_pct=relative_strength_4h,
+            market_direction=direction,
+            strategy_alignment_hint=alignment,
+            leader_regime=leader_regime,
+            eth_btc_rotation_score=rotation_score,
+            impact_score=impact,
+            summary=(
+                f"BTC {timeframe} leader context: direction={direction.value}, regime={leader_regime}, "
+                f"alignment={alignment.value}, impact={impact:.2f}, rotation={rotation_score:.2f}, "
+                f"btc_chg1h={change_1h:.2f}%, btc_chg4h={change_4h:.2f}%, btc_chg24h={change_24h:.2f}%, "
+                f"eth_rel1h={relative_strength_1h:.2f}%, eth_rel4h={relative_strength_4h:.2f}%."
+            ),
+            warnings=warnings,
+        )
+
+    def _valid_closes_from_candles(self, candles) -> list[float]:
+        if candles is None or "close" not in candles:
+            return []
+        closes: list[float] = []
+        for value in candles["close"].tolist():
+            try:
+                close = float(value)
+            except (TypeError, ValueError):
+                continue
+            if close > 0:
+                closes.append(close)
+        return closes
+
+    def _pct_change_from(self, closes: list[float], bars_back: int) -> float:
+        if len(closes) <= bars_back or closes[-bars_back - 1] <= 0:
+            return 0.0
+        return round((closes[-1] / closes[-bars_back - 1] - 1.0) * 100.0, 4)
+
+    def _leader_direction(self, change_1h: float, change_4h: float, change_24h: float) -> NewsDirection:
+        weighted = change_1h * 0.45 + change_4h * 0.35 + change_24h * 0.20
+        if weighted >= 0.35:
+            return NewsDirection.BULLISH
+        if weighted <= -0.35:
+            return NewsDirection.BEARISH
+        return NewsDirection.NEUTRAL
+
+    def _leader_alignment_for_signal(
+        self,
+        direction: NewsDirection,
+        signal: StrategySignal,
+        leader_regime: str = "unknown",
+    ) -> Alignment:
+        if signal.action == SignalAction.LONG and leader_regime in {"rotation_lag", "leader_pullback"}:
+            return Alignment.ALIGNED
+        if direction == NewsDirection.NEUTRAL:
+            return Alignment.NEUTRAL
+        if direction == NewsDirection.UNKNOWN:
+            return Alignment.UNKNOWN
+        if signal.action == SignalAction.LONG:
+            return Alignment.ALIGNED if direction == NewsDirection.BULLISH else Alignment.CONFLICT
+        if signal.action == SignalAction.SHORT:
+            return Alignment.ALIGNED if direction == NewsDirection.BEARISH else Alignment.CONFLICT
+        return Alignment.UNKNOWN
+
+    def _leader_impact_score(self, change_1h: float, change_4h: float, change_24h: float) -> float:
+        weighted_abs = abs(change_1h) * 0.45 + abs(change_4h) * 0.35 + abs(change_24h) * 0.20
+        return round(max(0.0, min(1.0, weighted_abs / 4.0)), 4)
+
+    def _leader_regime(
+        self,
+        change_1h: float,
+        change_4h: float,
+        change_24h: float,
+        relative_strength_1h: float,
+        relative_strength_4h: float,
+        signal: StrategySignal,
+    ) -> str:
+        if change_4h <= -1.2 or change_24h <= -2.8:
+            return "leader_downtrend"
+        if signal.action == SignalAction.LONG:
+            if change_1h <= -0.35 and change_4h <= -0.35 and relative_strength_4h <= 0.0:
+                return "distribution_risk"
+            if -0.70 <= change_1h <= 0.15 and change_4h >= -0.60 and relative_strength_1h >= 0.35 and relative_strength_4h >= 0.20:
+                return "rotation_lag"
+            if change_1h < 0.0 and change_4h >= 0.0 and change_24h >= 0.0 and relative_strength_4h >= -0.10:
+                return "leader_pullback"
+            if change_4h > 0.35 or change_24h > 0.80:
+                return "leader_uptrend"
+        if signal.action == SignalAction.SHORT:
+            if change_4h <= -0.35 or change_24h <= -0.80:
+                return "leader_downtrend"
+            if change_1h > 0.35 and change_4h >= 0.0:
+                return "distribution_risk"
+        if change_4h > 0.35 or change_24h > 0.80:
+            return "leader_uptrend"
+        if change_4h < -0.35 or change_24h < -0.80:
+            return "leader_downtrend"
+        return "unknown"
+
+    def _eth_btc_rotation_score(
+        self,
+        relative_strength_1h: float,
+        relative_strength_4h: float,
+        leader_regime: str,
+        signal: StrategySignal,
+    ) -> float:
+        if signal.action != SignalAction.LONG:
+            return 0.0
+        if leader_regime not in {"rotation_lag", "leader_pullback", "leader_uptrend"}:
+            return 0.0
+        raw = 0.45 + max(relative_strength_1h, 0.0) * 0.18 + max(relative_strength_4h, 0.0) * 0.22
+        if leader_regime == "rotation_lag":
+            raw += 0.15
+        elif leader_regime == "leader_pullback":
+            raw += 0.05
+        return round(max(0.0, min(1.0, raw)), 4)
+
     def _same_direction_trend_state_exists(self, symbol: str, signal) -> bool:
         state = self.trend_state.get(symbol)
         if state is None:
@@ -1571,6 +1827,7 @@ class TradingApp:
         news: NewsDigest,
         regime_pattern: RegimePattern | None = None,
         *,
+        market_leader_context: MarketLeaderContext | None = None,
         event_key: str | None = None,
     ) -> AiDecision:
         reservation = self.deepseek_budget.reserve(symbol=signal.symbol, call_type=call_type, event_key=event_key)
@@ -1580,9 +1837,27 @@ class TradingApp:
                 "deepseek_budget_blocked",
                 extra={"symbol": signal.symbol, "call_type": call_type, "reason": reservation.reason},
             )
-            return self.brain.local_fallback_decision(signal, orderflow, dense_zone, pattern, news, reason, regime_pattern)
+            return self.brain.local_fallback_decision(
+                signal,
+                orderflow,
+                dense_zone,
+                pattern,
+                news,
+                reason,
+                regime_pattern,
+                market_leader_context,
+            )
         try:
-            decision = await self.brain.analyze_symbol(signal, orderflow, dense_zone, pattern, news, regime_pattern)
+            decision = await self.brain.analyze_symbol(
+                signal,
+                orderflow,
+                dense_zone,
+                pattern,
+                news,
+                regime_pattern,
+                market_leader_context=market_leader_context,
+                call_type=call_type,
+            )
         except Exception as exc:  # noqa: BLE001
             self.deepseek_budget.record_failure(
                 reservation.row_id,

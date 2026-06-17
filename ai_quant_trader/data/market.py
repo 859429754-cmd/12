@@ -13,7 +13,7 @@ import pandas as pd
 import requests
 
 
-MarketSource = Literal["auto", "gateio", "binance", "okx", "cryptocompare", "synthetic"]
+MarketSource = Literal["auto", "gateio", "binance", "okx", "bybit", "cryptocompare", "synthetic"]
 
 
 SYMBOL_MAP: dict[str, dict[str, str]] = {
@@ -32,7 +32,15 @@ SYMBOL_MAP: dict[str, dict[str, str]] = {
         "ETH/USDT:USDT": "ETH/USDT:USDT",
         "SOL/USDT:USDT": "SOL/USDT:USDT",
     },
+    "bybit": {
+        "BTC/USDT:USDT": "BTC/USDT:USDT",
+        "ETH/USDT:USDT": "ETH/USDT:USDT",
+        "SOL/USDT:USDT": "SOL/USDT:USDT",
+    },
 }
+
+
+AUTO_MARKET_SOURCES = ["binance", "okx", "bybit", "gateio"]
 
 
 TIMEFRAME_MS: dict[str, int] = {
@@ -86,9 +94,9 @@ class MarketDataClient:
     async def fetch_ticker(
         self,
         symbol: str,
-        source: Literal["auto", "gateio", "binance", "okx"] = "auto",
+        source: Literal["auto", "gateio", "binance", "okx", "bybit"] = "auto",
     ) -> dict[str, Any]:
-        sources = [source] if source != "auto" else ["binance", "gateio", "okx"]
+        sources = [source] if source != "auto" else AUTO_MARKET_SOURCES
         last_error = ""
         for item in sources:
             try:
@@ -125,7 +133,7 @@ class MarketDataClient:
         if end_ms <= start_ms:
             raise ValueError("回测结束时间必须晚于开始时间")
 
-        sources = [source] if source != "auto" else ["binance", "gateio", "okx"]
+        sources = [source] if source != "auto" else AUTO_MARKET_SOURCES
         last_error = ""
         for item in sources:
             try:
@@ -182,7 +190,7 @@ class MarketDataClient:
         max_candles: int,
     ) -> pd.DataFrame:
         direct_error = ""
-        if source in {"binance", "gateio", "okx"}:
+        if source in {"binance", "gateio", "okx", "bybit"}:
             try:
                 return await self._fetch_from_public_rest(source, symbol, timeframe, start_ms, end_ms, limit_per_call, max_candles)
             except Exception as exc:  # noqa: BLE001
@@ -268,6 +276,8 @@ class MarketDataClient:
             return await self._fetch_gate_rest(symbol, timeframe, start_ms, end_ms, limit_per_call, max_candles)
         if source == "okx":
             return await self._fetch_okx_rest(symbol, timeframe, start_ms, end_ms, limit_per_call, max_candles)
+        if source == "bybit":
+            return await self._fetch_bybit_rest(symbol, timeframe, start_ms, end_ms, limit_per_call, max_candles)
         raise ValueError(f"不支持的原生行情源：{source}")
 
     async def _fetch_public_ticker(self, source: str, symbol: str) -> dict[str, Any]:
@@ -323,6 +333,28 @@ class MarketDataClient:
                 "ask": float(item["askPx"]) if item.get("askPx") else None,
                 "mark": None,
                 "index": None,
+                "timestamp": datetime.now(tz=UTC).isoformat(),
+                "warning": "",
+            }
+        if source == "bybit":
+            market = f"{symbol.split('/')[0].upper()}USDT"
+            payload = await asyncio.to_thread(
+                self._requests_json,
+                "https://api.bybit.com/v5/market/tickers",
+                {"category": "linear", "symbol": market},
+            )
+            data = payload.get("result", {}).get("list", []) if isinstance(payload, dict) else []
+            if not data:
+                raise RuntimeError("empty_bybit_ticker")
+            item = data[0]
+            return {
+                "symbol": symbol,
+                "source": "bybit",
+                "last": float(item["lastPrice"]),
+                "bid": float(item["bid1Price"]) if item.get("bid1Price") else None,
+                "ask": float(item["ask1Price"]) if item.get("ask1Price") else None,
+                "mark": float(item["markPrice"]) if item.get("markPrice") else None,
+                "index": float(item["indexPrice"]) if item.get("indexPrice") else None,
                 "timestamp": datetime.now(tz=UTC).isoformat(),
                 "warning": "",
             }
@@ -519,6 +551,57 @@ class MarketDataClient:
         rows.sort(key=lambda item: int(item[0]))
         return self._frame_from_rows(rows[-max_candles:])
 
+    async def _fetch_bybit_rest(
+        self,
+        symbol: str,
+        timeframe: str,
+        start_ms: int,
+        end_ms: int,
+        limit_per_call: int,
+        max_candles: int,
+    ) -> pd.DataFrame:
+        interval = {
+            "1m": "1",
+            "5m": "5",
+            "15m": "15",
+            "30m": "30",
+            "1h": "60",
+            "4h": "240",
+            "1d": "D",
+            "1w": "W",
+            "1M": "M",
+        }.get(timeframe, timeframe)
+        market = f"{symbol.split('/')[0].upper()}USDT"
+        tf_ms = TIMEFRAME_MS.get(timeframe, TIMEFRAME_MS["1h"])
+        since = start_ms
+        rows: list[list[float]] = []
+        seen: set[int] = set()
+        while since < end_ms and len(rows) < max_candles:
+            window_end = min(end_ms, since + min(limit_per_call, 1000) * tf_ms)
+            params = {
+                "category": "linear",
+                "symbol": market,
+                "interval": interval,
+                "start": since,
+                "end": window_end,
+                "limit": min(1000, limit_per_call, max_candles - len(rows)),
+            }
+            payload = await asyncio.to_thread(self._requests_payload, "https://api.bybit.com/v5/market/kline", params)
+            data = payload.get("result", {}).get("list", []) if isinstance(payload, dict) else []
+            if not data:
+                since = window_end + tf_ms
+                continue
+            for item in data:
+                ts = int(item[0])
+                if ts in seen or ts < start_ms or ts > end_ms:
+                    continue
+                seen.add(ts)
+                rows.append([ts, float(item[1]), float(item[2]), float(item[3]), float(item[4]), float(item[5])])
+            since = window_end + tf_ms
+            await asyncio.sleep(0.08)
+        rows.sort(key=lambda item: int(item[0]))
+        return self._frame_from_rows(rows[-max_candles:])
+
     def _get_exchange(self, source: str) -> Any:
         if source in self._exchanges:
             return self._exchanges[source]
@@ -533,6 +616,8 @@ class MarketDataClient:
             exchange = ccxt.binanceusdm({"enableRateLimit": True})
         elif source == "okx":
             exchange = ccxt.okx({"enableRateLimit": True, "options": {"defaultType": "swap"}})
+        elif source == "bybit":
+            exchange = ccxt.bybit({"enableRateLimit": True, "options": {"defaultType": "swap"}})
         else:
             raise ValueError(f"不支持的行情源：{source}")
         self._exchanges[source] = exchange
