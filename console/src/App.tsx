@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useMemo, useState } from "react";
+﻿import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   BarChart3,
@@ -19,7 +19,6 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { api } from "./lib/api";
-import { MarketChart } from "./MarketChart";
 import type {
   ApiList,
   BacktestJob,
@@ -44,6 +43,8 @@ import type {
   WorkspaceId,
 } from "./types";
 import { JsonBlock, Metric, Surface, button, danger, errText, input, mono, num, pct, shortSymbol } from "./ui";
+
+const MarketChart = lazy(() => import("./MarketChart").then((module) => ({ default: module.MarketChart })));
 
 const DEFAULT_SYMBOL = "ETH/USDT:USDT";
 const WORKSPACE_IDS: WorkspaceId[] = ["dashboard", "market", "strategy", "ai", "agent", "execution", "data"];
@@ -1196,17 +1197,19 @@ function MarketWorkspace({
           {warning ? <span className="rounded-full border border-[#854d0e] bg-[#241806] px-3 py-1 text-[#facc15]">{warning}</span> : null}
         </div>
         <div className="mt-3">
-          <MarketChart
-            candles={candles}
-            profile={profile}
-            orders={orders}
-            decisions={decisions}
-            denseZone={denseZone?.payload}
-            height={700}
-            timeframe={timeframe}
-            timeframeOptions={timeframes}
-            onTimeframeChange={setTimeframe}
-          />
+          <Suspense fallback={<div className="flex h-[520px] items-center justify-center rounded-xl border border-[#263246] bg-[#101a2d] text-xs text-[#94a3b8]">正在加载专业K线图表...</div>}>
+            <MarketChart
+              candles={candles}
+              profile={profile}
+              orders={orders}
+              decisions={decisions}
+              denseZone={denseZone?.payload}
+              height={700}
+              timeframe={timeframe}
+              timeframeOptions={timeframes}
+              onTimeframeChange={setTimeframe}
+            />
+          </Suspense>
         </div>
         <div className="mt-3 flex flex-wrap gap-3 pb-1 text-[11px] text-[#94a3b8]">
           <span><span className="text-[#22c55e]">■</span> 阳线 / 成交量</span>

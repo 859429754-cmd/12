@@ -22,13 +22,14 @@
 - `/api/news/latest` 轻量响应保留 `important` 字段，避免前端只能靠 source/credibility 猜测重要性。
 - 新闻排序优先考虑 `important`，前端对重要新闻显示红色标记。
 - 控制台新闻时间统一显示为北京时间，并附带“几分钟前”相对时间。
+- 前端将 `MarketChart` 改为 lazy chunk，首页首屏不再静态加载 `lightweight-charts` 图表模块。
 
 ## 未决风险
 
 - 如果用户预期账号2应该有大额资金，但 live API 返回接近 0，应在 Gate 官方后台检查 API 绑定账户、子账户、合约账户资产位置和 USDT 永续账户余额。本系统不能把交易所返回的 0 伪造成有资金。
-- 当前前端仍是单 bundle，Vite 构建后主 JS 超过 500 kB。后续应做 workspace 级动态拆包，继续降低首屏加载时间。
+- 当前已拆出 `MarketChart` chunk，主 JS 从约 `524 kB` 降到约 `348 kB`。后续若仍慢，应继续按 workspace 拆分 AI、回测、执行页，而不是增加接口超时掩盖问题。
 
 ## 验证
 
 - `python -m pytest tests/test_news.py tests/test_console_api.py -q` -> `61 passed`
-- `cd console && npm.cmd run build` -> passed，仍有既有 Vite chunk 体积警告。
+- `cd console && npm.cmd run build` -> passed，主包约 `347.74 kB`，`MarketChart` 单独约 `177.55 kB`。
