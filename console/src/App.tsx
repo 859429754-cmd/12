@@ -156,16 +156,16 @@ export function App() {
       });
       const primaryAccountSlot = activeSession?.user?.account_slot || "trend";
       void api<Record<string, unknown>>(
-        `/api/account/balance?account_slot=${encodeURIComponent(primaryAccountSlot)}&max_cache_age_seconds=12`,
-        { retries: 0, timeoutMs: 4500 },
+        `/api/account/balance?account_slot=${encodeURIComponent(primaryAccountSlot)}&max_cache_age_seconds=120`,
+        { retries: 0, timeoutMs: 9000 },
       )
         .then(setBalance)
         .catch(() => {
           setBalance((current) => balanceFallbackPayload(current, primaryAccountSlot, "余额刷新超时，控制台保留上一轮可信快照。"));
         });
       void api<Record<string, unknown>>(
-        "/api/account/balance?account_slot=follower&max_cache_age_seconds=12",
-        { retries: 0, timeoutMs: 4500 },
+        "/api/account/balance?account_slot=follower&max_cache_age_seconds=120",
+        { retries: 0, timeoutMs: 9000 },
       )
         .then(setFollowerBalance)
         .catch(() => {
@@ -1996,9 +1996,15 @@ function isInternalNewsItem(item: Record<string, unknown>) {
 
 function isInternalNewsText(value: unknown) {
   const text = String(value || "").toLowerCase();
+  if (text.includes("_context_attached") || text.includes("_window_attached") || text.includes("market_background_")) {
+    return true;
+  }
   return [
     "daily_news_flash_context_attached",
     "news_context_48h_attached",
+    "market_background_uses_decayed_events",
+    "market_background_attached",
+    "realtime_news_window_attached",
     "rss_error",
     "readtimeout",
     "httperror",

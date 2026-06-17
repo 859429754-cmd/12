@@ -580,6 +580,7 @@ def test_account_balance_returns_cached_snapshot_when_gate_is_slow(tmp_path: Pat
     assert body["stale"] is True
     assert body["balance_source"] == "cached_live_balance"
     assert body["usdt_total"] == 456.0
+    assert body["cache_age_seconds"] >= 0
     assert "10000" not in body["message"]
 
 
@@ -612,7 +613,7 @@ def test_account_balance_uses_fresh_cached_snapshot_without_gate_call(tmp_path: 
         symbol="trend",
     )
 
-    response = client.get("/api/account/balance?account_slot=trend&max_cache_age_seconds=60")
+    response = client.get("/api/account/balance?account_slot=trend&max_cache_age_seconds=600")
 
     assert response.status_code == 200
     body = response.json()
@@ -1348,6 +1349,29 @@ def test_news_response_repairs_cached_mojibake() -> None:
 
     assert response["timeline"][0]["title"] == target
     assert response["warnings"] == []
+
+
+def test_news_response_hides_internal_context_warnings() -> None:
+    row = {
+        "created_at": datetime.now(UTC).isoformat(),
+        "payload": {
+            "generated_at": datetime.now(UTC).isoformat(),
+            "items": [{"title": "真实快讯", "summary": "市场新闻", "source": "jin10"}],
+            "warnings": [
+                "daily_news_flash_context_attached",
+                "market_background_uses_decayed_events",
+                "realtime_news_window_attached",
+                "market_background_attached",
+                "news_context_48h_attached",
+                "jin10_error:temporary timeout",
+            ],
+        },
+    }
+
+    response = server._news_latest_response([row], None, max_age_minutes=65)
+
+    assert response["warnings"] == ["jin10_error:temporary timeout"]
+    assert response["latest_digest"]["warnings"] == ["jin10_error:temporary timeout"]
 
 
 def test_console_strategy_lab_activate_and_custom_backtest(tmp_path: Path, monkeypatch) -> None:

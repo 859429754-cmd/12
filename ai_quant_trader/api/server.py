@@ -12,7 +12,7 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Iterable, Literal
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -915,7 +915,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         account_slot: Literal["default", "trend", "follower", "range"] | None = Query(default=None),
         prefer_live: bool = True,
         timeout_seconds: float = Query(default=4.0, ge=0.1, le=20.0),
-        max_cache_age_seconds: float = Query(default=12.0, ge=0.0, le=120.0),
+        max_cache_age_seconds: float = Query(default=120.0, ge=0.0, le=900.0),
     ) -> dict[str, Any]:
         ctx = _ctx(app)
         ctx.reload()
@@ -974,6 +974,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
                         "stale": True,
                         "balance_source": "cached_live_balance",
                         "cache_created_at": cached.get("created_at"),
+                        "cache_age_seconds": cached_age_seconds,
                         "error_type": type(exc).__name__,
                         "message": "Gate.io 余额读取超时或失败，控制台显示最近一次成功快照；新开仓仍受 readiness 和实盘对账限制。",
                     }
@@ -3037,7 +3038,7 @@ def _news_latest_response(
     age_minutes = _minutes_since(generated_at)
     item_limit = max(1, timeline_limit or len(rows) or 1)
     timeline = [_sanitize_news_item(item) for item in (latest_payload.get("items") or [])[:item_limit]]
-    warnings = latest_payload.get("warnings") or []
+    warnings = _user_facing_news_warnings(latest_payload.get("warnings") or [])
     if timeline and any(str(item.get("title") or item.get("summary") or "").strip() for item in timeline):
         warnings = [warning for warning in warnings if not str(warning).startswith(("rss_error:", "scrape_error:"))]
     stale = age_minutes is None or age_minutes > max_age_minutes
@@ -3082,9 +3083,32 @@ def _compact_news_digest(payload: dict[str, Any]) -> dict[str, Any]:
         "news_direction": payload.get("news_direction"),
         "crypto_sentiment": payload.get("crypto_sentiment"),
         "macro_risk": payload.get("macro_risk"),
-        "warnings": payload.get("warnings") or [],
+        "warnings": _user_facing_news_warnings(payload.get("warnings") or []),
         "item_count": len(payload.get("items") or []),
     }
+
+
+_INTERNAL_NEWS_WARNING_MARKERS = (
+    "daily_news_flash_context_attached",
+    "news_context_48h_attached",
+    "market_background_uses_decayed_events",
+    "market_background_attached",
+    "realtime_news_window_attached",
+)
+
+
+def _user_facing_news_warnings(warnings: Iterable[Any]) -> list[Any]:
+    output: list[Any] = []
+    for warning in warnings:
+        text = str(warning or "").lower()
+        if any(marker in text for marker in _INTERNAL_NEWS_WARNING_MARKERS):
+            continue
+        if "_context_attached" in text or "_window_attached" in text:
+            continue
+        if "market_background_" in text:
+            continue
+        output.append(warning)
+    return output
 
 
 def _sanitize_news_item(item: Any) -> dict[str, Any]:
