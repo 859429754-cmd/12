@@ -1119,7 +1119,7 @@ function MarketWorkspace({
               ))}
             </select>
             <select className={`${input} ${mono}`} value={source} onChange={(event) => setSource(event.target.value)}>
-              {["binance", "okx", "gateio", "auto"].map((item) => (
+              {["binance", "okx", "bybit", "gateio", "auto"].map((item) => (
                 <option key={item} value={item}>
                   {item}
                 </option>
@@ -3055,7 +3055,7 @@ function BacktestPanel({
             </BacktestField>
             <BacktestField label="数据源">
               <select className={`${input} ${mono} w-full`} value={dataSource} onChange={(event) => setDataSource(event.target.value)}>
-                {["binance", "okx", "gateio", "auto"].map((item) => <option key={item} value={item}>{item}</option>)}
+                {["binance", "okx", "bybit", "gateio", "auto"].map((item) => <option key={item} value={item}>{item}</option>)}
               </select>
             </BacktestField>
             <BacktestField label="开始日期">

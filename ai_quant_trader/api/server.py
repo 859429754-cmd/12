@@ -142,7 +142,7 @@ class CustomBacktestRequest(BaseModel):
     symbol: str
     timeframe: str = "1h"
     limit: int = Field(default=700, ge=120, le=50_000)
-    data_source: Literal["auto", "gateio", "binance", "okx", "cryptocompare"] = "auto"
+    data_source: Literal["auto", "gateio", "binance", "okx", "bybit", "cryptocompare"] = "auto"
     start_date: str | None = Field(default=None)
     end_date: str | None = Field(default=None)
     initial_equity: float = Field(default=10_000.0, gt=0)
@@ -156,7 +156,7 @@ class BacktestRequest(BaseModel):
     symbol: str
     timeframe: str = "1h"
     limit: int = Field(default=700, ge=120, le=50_000)
-    data_source: Literal["auto", "gateio", "binance", "okx", "cryptocompare"] = "auto"
+    data_source: Literal["auto", "gateio", "binance", "okx", "bybit", "cryptocompare"] = "auto"
     start_date: str | None = Field(default=None)
     end_date: str | None = Field(default=None)
     initial_equity: float = Field(default=200.0, gt=0)
@@ -881,7 +881,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         symbol: str,
         timeframe: str = "1h",
         limit: int = Query(default=5000, ge=120, le=20_000),
-        source: Literal["auto", "gateio", "binance", "okx", "cryptocompare"] = "auto",
+        source: Literal["auto", "gateio", "binance", "okx", "bybit", "cryptocompare"] = "auto",
         closed_only: bool = Query(default=True),
     ) -> dict[str, Any]:
         market = MarketDataClient()
@@ -901,7 +901,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
     @app.get("/api/market/ticker")
     async def market_ticker(
         symbol: str,
-        source: Literal["auto", "gateio", "binance", "okx"] = "auto",
+        source: Literal["auto", "gateio", "binance", "okx", "bybit"] = "auto",
     ) -> dict[str, Any]:
         market = MarketDataClient()
         try:
