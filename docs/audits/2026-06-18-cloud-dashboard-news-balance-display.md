@@ -35,6 +35,14 @@
 - `cd console && npm.cmd run build` -> passed
 - `python scripts/public_repo_preflight.py` -> `ok=true`
 
+## 云端验收
+
+- `scripts/cloud_release_deploy.py --restart` 已执行，保护 `.env.runtime`、`config/config.yaml`、`data/`、`logs/`。
+- `ai-quant-console.service` 与 `ai-quant-trader.service` 均为 `active`。
+- 登录账户1后请求 `/api/account/balance?account_slot=trend&max_cache_age_seconds=600&timeout_seconds=2` 返回 HTTP 200，使用 `cached_live_balance`，不再因为 600 秒展示缓存窗口触发 422。
+- 登录账户1后请求 `/api/news/latest?limit=8&compact=true&max_age_minutes=15` 返回 HTTP 200，`warnings=[]`，不再暴露 `market_background_*` 内部标记。
+- `/api/system/readiness` 当前仍为 `block`，原因是 `Opening authorization: 0/3 symbols authorized for opening` 与 `Opening is paused`；这是当前开仓状态，不属于本次新闻/余额显示修复。
+
 ## 未决风险
 
 - 前端主 chunk 约 522KB，仍需后续做代码分包和首屏 API 聚合。
