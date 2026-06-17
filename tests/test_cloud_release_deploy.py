@@ -48,4 +48,6 @@ def test_remote_sync_preserves_runtime_directories() -> None:
         assert f"--exclude '{required}'" in script
     assert "data/" not in REMOTE_RSYNC_EXCLUDES
     assert "logs/" not in REMOTE_RSYNC_EXCLUDES
+    assert 'cp "$remote_dir"/deploy/systemd/*.service "$remote_dir"/deploy/systemd/*.timer /etc/systemd/system/' in script
+    assert "systemctl daemon-reload" in script
     assert "systemctl restart ai-quant-console.service ai-quant-trader.service" in script

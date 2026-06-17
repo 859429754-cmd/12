@@ -22,7 +22,8 @@ def test_systemd_units_use_restart_and_watchdogs() -> None:
     assert "Restart=always" in order_status
     assert "main.py --order-status-worker" in order_status
     assert "scripts/http_readiness_check.py" in watchdog
-    assert "--mode readiness" in watchdog
+    assert "--mode health" in watchdog
+    assert "--mode readiness" not in watchdog
     assert "scripts/runtime_maintenance.py" in maintenance
     assert "--backup-keep" in maintenance
 

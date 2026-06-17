@@ -20,5 +20,5 @@ Operational notes:
 - `ai-quant-trader.service` uses native `sd_notify` readiness and `WatchdogSec`.
 - Default low-memory deployments should run one consolidated worker through `ai-quant-trader.service`; it owns trading, news refresh, price wakeup, and order-status polling in a single Python process.
 - `ai-quant-order-status-worker.service` is retained only for decoupled-worker deployments. Do not enable it together with `ai-quant-trader.service` unless you intentionally want duplicate order-status polling.
-- The console stays behind the HTTP readiness watchdog timer because uvicorn is launched directly and does not own the trading worker lifecycle.
+- The console stays behind an HTTP health watchdog timer because uvicorn is launched directly and readiness is protected by account login.
 - `ai-quant-maintenance.timer` runs SQLite backup, log rotation, backup retention, and disk-space checks.

@@ -120,6 +120,9 @@ rsync -a --delete {excludes} "$stage"/ "$remote_dir"/
 rm -rf "$remote_dir/console/dist"
 mkdir -p "$remote_dir/console/dist"
 rsync -a --delete "$console_stage"/ "$remote_dir/console/dist"/
+if [ -d "$remote_dir/deploy/systemd" ]; then
+  cp "$remote_dir"/deploy/systemd/*.service "$remote_dir"/deploy/systemd/*.timer /etc/systemd/system/
+fi
 {install_block}{restart_block}"""
 
 
