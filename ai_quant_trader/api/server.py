@@ -3123,6 +3123,7 @@ def _sanitize_news_item(item: Any) -> dict[str, Any]:
         "time": item.get("time"),
         "category": item.get("category"),
         "credibility": item.get("credibility"),
+        "important": item.get("important"),
         "importance": item.get("importance"),
         "bias": item.get("bias"),
         "news_direction": item.get("news_direction"),

@@ -1176,6 +1176,7 @@ def test_news_latest_compact_omits_heavy_rows(tmp_path: Path, monkeypatch) -> No
                     source="Fed",
                     summary="Fresh macro update for compact console rendering.",
                     credibility=0.95,
+                    important=True,
                     category="macro",
                 )
             ],
@@ -1196,6 +1197,7 @@ def test_news_latest_compact_omits_heavy_rows(tmp_path: Path, monkeypatch) -> No
     assert body["items"] == []
     assert body["latest_digest"] == {}
     assert body["timeline"][0]["title"] == "Fed says policy path remains data dependent"
+    assert body["timeline"][0]["important"] is True
 
 
 def test_news_latest_defaults_to_lightweight_rows(tmp_path: Path) -> None:

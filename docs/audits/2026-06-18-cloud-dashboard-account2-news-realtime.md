@@ -12,12 +12,14 @@
 - 云端 `/api/news/latest?limit=8&compact=true&max_age_minutes=15` 返回 `source_status=fresh`，新闻 age 小于 1 分钟。
 - `config/config.yaml` 中 `news.jin10_enabled=true`，`NewsCollector` 会优先读取 `flash-api.jin10.com/get_flash_list`。
 - 金十公开接口的 `important` 字段此前只被转成 `credibility=0.86`，前端无法明确展示红字/加粗重要快讯。
+- 部署后复验发现，采集器保留 `important` 后，`/api/news/latest?compact=true` 的 `_sanitize_news_item` 仍会裁掉该字段；这是第二层 API 展示 bug。
 
 ## 修复
 
 - `console/src/App.tsx` 新增金额展示函数：极小非零余额显示为 `<0.01`，避免账号2真实近零余额被误判成固定 0。
 - 账号2登录时复用 primary follower balance 请求结果，不再重复请求 follower 余额接口，降低公网加载压力和状态覆盖风险。
 - `NewsItem` 新增 `important` 字段，金十 `important` 原样保留。
+- `/api/news/latest` 轻量响应保留 `important` 字段，避免前端只能靠 source/credibility 猜测重要性。
 - 新闻排序优先考虑 `important`，前端对重要新闻显示红色标记。
 - 控制台新闻时间统一显示为北京时间，并附带“几分钟前”相对时间。
 
