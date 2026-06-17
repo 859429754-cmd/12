@@ -143,6 +143,8 @@ def test_jin10_public_flash_items_are_kept_as_chinese_timeline(monkeypatch) -> N
     items = collector._fetch_jin10_public_flash_sync()
     assert len(items) == 1
     assert items[0].source == "金十数据"
+    assert items[0].important is True
+    assert items[0].credibility >= 0.86
     assert "美国国务院批准" in items[0].summary
     assert "2.36亿美元" in items[0].summary
     assert items[0].published_at.tzinfo is not None
@@ -185,6 +187,40 @@ async def test_collect_prioritizes_jin10_timeline_over_low_information_fallback(
     assert digest.items[0].source == "金十数据"
     assert "伊朗总统" in digest.items[0].title
     assert all("宏观金融消息更新" not in item.title + item.summary for item in digest.items)
+
+
+async def test_collect_prioritizes_important_jin10_flash(monkeypatch) -> None:
+    collector = NewsCollector([], [], jin10_enabled=True)
+    now = datetime.now(UTC)
+
+    monkeypatch.setattr(
+        collector,
+        "_fetch_jin10_public_flash_sync",
+        lambda: [
+            NewsItem(
+                title="普通快讯",
+                source="金十数据",
+                published_at=now,
+                summary="普通快讯",
+                category="macro",
+                credibility=0.8,
+                important=False,
+            ),
+            NewsItem(
+                title="重要快讯",
+                source="金十数据",
+                published_at=now - timedelta(minutes=3),
+                summary="重要快讯",
+                category="macro",
+                credibility=0.86,
+                important=True,
+            ),
+        ],
+    )
+
+    digest = await collector.collect()
+    assert digest.items[0].title == "重要快讯"
+    assert digest.items[0].important is True
 
 
 def test_news_direction_hint_is_absolute_not_strategy_relative() -> None:

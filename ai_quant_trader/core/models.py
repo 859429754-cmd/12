@@ -341,6 +341,7 @@ class NewsItem(BaseModel):
     published_at: datetime = Field(default_factory=utc_now)
     category: str = "crypto"
     credibility: float = Field(default=0.5, ge=0, le=1)
+    important: bool = False
     summary: str = ""
     raw_title: str = ""
     raw_summary: str = ""

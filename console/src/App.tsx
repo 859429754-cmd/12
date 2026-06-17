@@ -61,6 +61,46 @@ function chartCandleLimits(timeframe: string) {
   return map[timeframe] || map["1h"];
 }
 
+function money(value: unknown, digits = 2): string {
+  if (value === null || value === undefined) return "--";
+  if (typeof value === "string" && value.trim() === "") return "--";
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "--";
+  const threshold = 1 / 10 ** digits;
+  if (n > 0 && n < threshold) return `<${num(threshold, digits)}`;
+  if (n < 0 && Math.abs(n) < threshold) return `>-${num(threshold, digits)}`;
+  return num(n, digits);
+}
+
+function formatNewsTimestamp(value: unknown): string {
+  if (!value) return "--";
+  const date = new Date(String(value));
+  if (Number.isNaN(date.getTime())) return String(value);
+  const text = date.toLocaleString("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  return `${text} 北京时间`;
+}
+
+function formatRelativeAge(value: unknown): string {
+  if (!value) return "";
+  const date = new Date(String(value));
+  if (Number.isNaN(date.getTime())) return "";
+  const ageMs = Date.now() - date.getTime();
+  if (ageMs < 0) return "刚刚";
+  const minutes = Math.floor(ageMs / 60_000);
+  if (minutes < 1) return "刚刚";
+  if (minutes < 60) return `${minutes} 分钟前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  return `${Math.floor(hours / 24)} 天前`;
+}
+
 export function App() {
   const [workspace, setWorkspace] = useState<WorkspaceId>(() => readWorkspaceHash());
   const [session, setSession] = useState<ConsoleSession | null>(null);
@@ -159,18 +199,28 @@ export function App() {
         `/api/account/balance?account_slot=${encodeURIComponent(primaryAccountSlot)}&max_cache_age_seconds=120`,
         { retries: 0, timeoutMs: 9000 },
       )
-        .then(setBalance)
+        .then((payload) => {
+          setBalance(payload);
+          if (primaryAccountSlot === "follower") {
+            setFollowerBalance(payload);
+          }
+        })
         .catch(() => {
           setBalance((current) => balanceFallbackPayload(current, primaryAccountSlot, "余额刷新超时，控制台保留上一轮可信快照。"));
+          if (primaryAccountSlot === "follower") {
+            setFollowerBalance((current) => balanceFallbackPayload(current, "follower", "账号2余额刷新超时，控制台保留上一轮可信快照。"));
+          }
         });
-      void api<Record<string, unknown>>(
-        "/api/account/balance?account_slot=follower&max_cache_age_seconds=120",
-        { retries: 0, timeoutMs: 9000 },
-      )
-        .then(setFollowerBalance)
-        .catch(() => {
-          setFollowerBalance((current) => balanceFallbackPayload(current, "follower", "账号2余额刷新超时，控制台保留上一轮可信快照。"));
-        });
+      if (primaryAccountSlot !== "follower" && (activeSession?.user?.visible_account_slots || visibleSlots).includes("follower")) {
+        void api<Record<string, unknown>>(
+          "/api/account/balance?account_slot=follower&max_cache_age_seconds=120",
+          { retries: 0, timeoutMs: 9000 },
+        )
+          .then(setFollowerBalance)
+          .catch(() => {
+            setFollowerBalance((current) => balanceFallbackPayload(current, "follower", "账号2余额刷新超时，控制台保留上一轮可信快照。"));
+          });
+      }
       const [
         nextStatus,
         nextPlatform,
@@ -1713,11 +1763,11 @@ function DashboardWorkspace({
                   {account.sourceLabel}
                 </span>
               </div>
-              <div className={`${mono} mt-2 text-3xl font-semibold`}>{num(account.total)}</div>
+              <div className={`${mono} mt-2 text-3xl font-semibold`}>{money(account.total)}</div>
               {account.message ? <div className="mt-2 rounded-lg border border-[#263246] bg-[#07111f] px-3 py-2 text-[11px] text-[#94a3b8]">{account.message}</div> : null}
               <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-                <PlainKV label="可用" value={`${num(account.free)} USDT`} />
-                <PlainKV label="已用" value={`${num(account.used)} USDT`} />
+                <PlainKV label="可用" value={`${money(account.free)} USDT`} />
+                <PlainKV label="已用" value={`${money(account.used)} USDT`} />
                 <PlainKV label="风控上限" value={`${num(runtimeStatus?.risk?.max_total_leverage || 4, 1)}x`} />
                 <PlainKV label="余额来源" value={account.sourceLabel} />
               </div>
@@ -1916,15 +1966,27 @@ function newsSourceLabel(source: unknown) {
   return labels[text] || text || "新闻缓存";
 }
 
+function isImportantNewsItem(item: Record<string, unknown>): boolean {
+  const credibility = Number(item.credibility);
+  const source = String(item.source || "");
+  return item.important === true || source === "金十数据" && Number.isFinite(credibility) && credibility >= 0.86;
+}
+
 function DashboardNewsItem({ item }: { item: Record<string, unknown> }) {
   const title = cleanNewsText(item.title || item.headline || item.summary || "--");
   const source = cleanNewsText(item.source || "新闻源");
+  const time = item.published_at || item.time || "";
+  const age = formatRelativeAge(time);
+  const important = isImportantNewsItem(item);
   return (
-    <div className="rounded-xl border border-[#263246] bg-[#101a2d] p-3 text-xs">
-      <div className="line-clamp-3 font-medium leading-5 text-[#e5eefb]">{title}</div>
+    <div className={`rounded-xl border p-3 text-xs ${important ? "border-[#7f1d1d] bg-[#241016]" : "border-[#263246] bg-[#101a2d]"}`}>
+      <div className={`line-clamp-3 font-medium leading-5 ${important ? "text-[#fecdd3]" : "text-[#e5eefb]"}`}>
+        {important ? <span className="mr-2 rounded-full bg-[#7f1d1d] px-2 py-0.5 text-[10px] text-[#fecdd3]">重要</span> : null}
+        {title}
+      </div>
       <div className="mt-2 flex items-center justify-between gap-3 text-[11px] text-[#94a3b8]">
         <span>{source}</span>
-        <span className={mono}>{String(item.published_at || item.time || "")}</span>
+        <span className={mono}>{age ? `${age} / ${formatNewsTimestamp(time)}` : formatNewsTimestamp(time)}</span>
       </div>
     </div>
   );
@@ -3792,9 +3854,9 @@ function ExecutionWorkspace({
           <Metric label="交易模式" value={status?.trade_mode || platform?.platform.trade_mode || "--"} />
           <Metric label="开仓状态" value={status?.opening_paused ? "已暂停" : "允许"} tone={status?.opening_paused ? "warn" : "good"} />
           <Metric label="授权标的" value={`${enabled.length}`} />
-          <Metric label="账号1权益" value={totalEquity == null ? "--" : num(totalEquity)} />
-          <Metric label="账号2权益" value={followerBalance?.ok === false && followerEquity == null ? "未配置" : followerEquity == null ? "--" : num(followerEquity)} tone={followerBalance?.ok === false ? "warn" : undefined} />
-          <Metric label="最大名义" value={num(maxNotional)} />
+          <Metric label="账号1权益" value={totalEquity == null ? "--" : money(totalEquity)} />
+          <Metric label="账号2权益" value={followerBalance?.ok === false && followerEquity == null ? "未配置" : followerEquity == null ? "--" : money(followerEquity)} tone={followerBalance?.ok === false ? "warn" : undefined} />
+          <Metric label="最大名义" value={money(maxNotional)} />
         </div>
         <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
           <ExecutionStep title="控制台/智能体" body="只能提交动作请求，不能直接碰交易所密钥。" done />
@@ -3860,10 +3922,10 @@ function ExecutionWorkspace({
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 2xl:grid-cols-4">
         <Surface title={<><Wallet size={13} /> 账户与风控</>}>
           <div className="grid grid-cols-2 gap-3">
-            <Metric label="账号1 USDT总额" value={num(balance?.total_usdt ?? balance?.usdt_total ?? usdt.total)} />
-            <Metric label="账号1 USDT可用" value={num(balance?.free_usdt ?? balance?.usdt_free ?? usdt.free)} />
-            <Metric label="账号2 USDT总额" value={followerBalance?.ok === false ? "未配置" : num(followerBalance?.total_usdt ?? followerBalance?.usdt_total ?? followerUsdt.total)} tone={followerBalance?.ok === false ? "warn" : undefined} />
-            <Metric label="账号2 USDT可用" value={followerBalance?.ok === false ? "--" : num(followerBalance?.free_usdt ?? followerBalance?.usdt_free ?? followerUsdt.free)} />
+            <Metric label="账号1 USDT总额" value={money(balance?.total_usdt ?? balance?.usdt_total ?? usdt.total)} />
+            <Metric label="账号1 USDT可用" value={money(balance?.free_usdt ?? balance?.usdt_free ?? usdt.free)} />
+            <Metric label="账号2 USDT总额" value={followerBalance?.ok === false ? "未配置" : money(followerBalance?.total_usdt ?? followerBalance?.usdt_total ?? followerUsdt.total)} tone={followerBalance?.ok === false ? "warn" : undefined} />
+            <Metric label="账号2 USDT可用" value={followerBalance?.ok === false ? "--" : money(followerBalance?.free_usdt ?? followerBalance?.usdt_free ?? followerUsdt.free)} />
             <Metric label="杠杆硬上限" value={`${num(riskCap, 1)}x`} />
             <Metric label="最低AI置信度" value={num(riskSummary?.min_confidence_to_trade ?? status?.risk?.min_confidence_to_trade, 2)} />
           </div>
@@ -4448,12 +4510,20 @@ function RightRail({
         ) : null}
         <NewsStatusLine news={news} />
         <div className="space-y-2">
-          {railNewsItems.length ? railNewsItems.map((item, idx) => (
-            <div key={idx} className="rounded-xl border border-[#263246] bg-[#101a2d] p-3 text-xs">
-              <div className="font-medium text-[#e5eefb]">{String(item.title || item.headline || item.summary || "--")}</div>
-              <div className="mt-1 text-[11px] text-[#94a3b8]">{String(item.published_at || item.time || item.source || "")}</div>
+          {railNewsItems.length ? railNewsItems.map((item, idx) => {
+            const important = isImportantNewsItem(item);
+            const time = item.published_at || item.time || "";
+            const age = formatRelativeAge(time);
+            return (
+            <div key={idx} className={`rounded-xl border p-3 text-xs ${important ? "border-[#7f1d1d] bg-[#241016]" : "border-[#263246] bg-[#101a2d]"}`}>
+              <div className={`font-medium ${important ? "text-[#fecdd3]" : "text-[#e5eefb]"}`}>
+                {important ? <span className="mr-2 rounded-full bg-[#7f1d1d] px-2 py-0.5 text-[10px] text-[#fecdd3]">重要</span> : null}
+                {String(item.title || item.headline || item.summary || "--")}
+              </div>
+              <div className="mt-1 text-[11px] text-[#94a3b8]">{age ? `${age} / ${formatNewsTimestamp(time)}` : formatNewsTimestamp(time)}</div>
             </div>
-          )) : (
+            );
+          }) : (
             <div className="rounded-xl border border-[#263246] bg-[#101a2d] p-3 text-xs text-[#94a3b8]">暂无新闻快讯。</div>
           )}
         </div>

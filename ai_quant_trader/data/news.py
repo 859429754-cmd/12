@@ -200,7 +200,7 @@ class NewsCollector:
             self._localize_item(item)
         deduped = [item for item in deduped if not self._is_low_information_item(item)]
         deduped.sort(
-            key=lambda item: (item.source == "金十数据", item.published_at, self._importance_score(item), item.credibility),
+            key=lambda item: (item.important, item.source == "金十数据", item.published_at, self._importance_score(item), item.credibility),
             reverse=True,
         )
 
@@ -255,6 +255,7 @@ class NewsCollector:
                     published_at=published_at,
                     category=self._category(content),
                     credibility=0.86 if row.get("important") else 0.8,
+                    important=bool(row.get("important")),
                     summary=content,
                     raw_title=title,
                     raw_summary=content,
