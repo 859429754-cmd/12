@@ -64,10 +64,12 @@ class GateExecutionClient:
         total = balance.get("total", {}) or {}
         free = balance.get("free", {}) or {}
         used = balance.get("used", {}) or {}
+        if "USDT" not in total:
+            raise RuntimeError("gate_balance_missing_usdt_total")
         return {
             "ok": True,
             "account_slot": self.account_slot,
-            "usdt_total": float(total.get("USDT") or 0.0),
+            "usdt_total": float(total["USDT"]),
             "usdt_free": float(free.get("USDT") or 0.0),
             "usdt_used": float(used.get("USDT") or 0.0),
             "raw": balance,

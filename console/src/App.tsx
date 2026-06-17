@@ -154,13 +154,27 @@ export function App() {
         }
       });
       const primaryAccountSlot = activeSession?.user?.account_slot || "trend";
+      void api<Record<string, unknown>>(
+        `/api/account/balance?account_slot=${encodeURIComponent(primaryAccountSlot)}&max_cache_age_seconds=12`,
+        { retries: 0, timeoutMs: 4500 },
+      )
+        .then(setBalance)
+        .catch(() => {
+          setBalance((current) => balanceFallbackPayload(current, primaryAccountSlot, "余额刷新超时，控制台保留上一轮可信快照。"));
+        });
+      void api<Record<string, unknown>>(
+        "/api/account/balance?account_slot=follower&max_cache_age_seconds=12",
+        { retries: 0, timeoutMs: 4500 },
+      )
+        .then(setFollowerBalance)
+        .catch(() => {
+          setFollowerBalance((current) => balanceFallbackPayload(current, "follower", "账号2余额刷新超时，控制台保留上一轮可信快照。"));
+        });
       const [
         nextStatus,
         nextPlatform,
         nextReadiness,
         nextMarkets,
-        nextBalance,
-        nextFollowerBalance,
         nextPositions,
         nextRiskSummary,
         nextAccountSlots,
@@ -174,12 +188,6 @@ export function App() {
           api<PlatformOverview>("/api/platform/overview", { retries: 1 }),
           api<SystemReadiness>("/api/system/readiness", { retries: 1 }),
           api<MarketSymbolsResponse>("/api/markets/symbols", { retries: 1 }),
-          api<Record<string, unknown>>(`/api/account/balance?account_slot=${encodeURIComponent(primaryAccountSlot)}`, { retries: 1 }),
-          safe(api<Record<string, unknown>>("/api/account/balance?account_slot=follower", { retries: 1 }), {
-            ok: false,
-            account_slot: "follower",
-            message: "账号2未配置或暂时无法读取。",
-          }),
           api<ApiList>(`/api/positions?limit=50&account_slot=${encodeURIComponent(primaryAccountSlot)}`, { retries: 1 }),
           api<Record<string, unknown>>("/api/risk/summary", { retries: 1 }),
           safe(api<{ items: ExecutionAccountSlot[] }>("/api/execution/accounts", { retries: 1 }), { items: [] }),
@@ -192,8 +200,6 @@ export function App() {
       setPlatform(nextPlatform);
       setReadiness(nextReadiness);
       setMarkets(nextMarkets);
-      setBalance(nextBalance);
-      setFollowerBalance(nextFollowerBalance);
       setPositions(nextPositions.items || []);
       setRiskSummary(nextRiskSummary);
       setAccountSlots(nextAccountSlots.items || []);
@@ -2078,6 +2084,28 @@ function accountSnapshot(balance: Record<string, unknown> | null) {
   return { total, free, used, source, sourceLabel, ok: payload.ok, message, hardFailed, cachedBalance };
 }
 
+function balanceFallbackPayload(current: Record<string, unknown> | null, accountSlot: string, message: string): Record<string, unknown> {
+  const payload = current ? { ...current } : {};
+  const raw = objectPayload(payload.raw);
+  const rawUsdt = objectPayload(raw.USDT);
+  const hasBalance =
+    numberValue(payload.usdt_total, payload.total_usdt, rawUsdt.total, objectPayload(payload.total).USDT) !== null ||
+    numberValue(payload.usdt_free, payload.free_usdt, rawUsdt.free, objectPayload(payload.free).USDT) !== null ||
+    numberValue(payload.usdt_used, payload.used_usdt, rawUsdt.used, objectPayload(payload.used).USDT) !== null;
+  return {
+    ...payload,
+    ok: false,
+    account_slot: accountSlot,
+    cached: hasBalance,
+    stale: hasBalance,
+    balance_source: hasBalance ? "cached_live_balance" : "balance_unavailable",
+    message,
+    usdt_total: hasBalance ? payload.usdt_total ?? payload.total_usdt ?? rawUsdt.total ?? objectPayload(payload.total).USDT : null,
+    usdt_free: hasBalance ? payload.usdt_free ?? payload.free_usdt ?? rawUsdt.free ?? objectPayload(payload.free).USDT : null,
+    usdt_used: hasBalance ? payload.usdt_used ?? payload.used_usdt ?? rawUsdt.used ?? objectPayload(payload.used).USDT : null,
+  };
+}
+
 function objectPayload(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
@@ -2460,6 +2488,8 @@ function truthyFlag(value: unknown): boolean {
 
 function numberValue(...values: unknown[]): number | null {
   for (const value of values) {
+    if (value === null || value === undefined) continue;
+    if (typeof value === "string" && value.trim() === "") continue;
     const number = Number(value);
     if (Number.isFinite(number)) return number;
   }
@@ -3642,9 +3672,9 @@ function ExecutionWorkspace({
   const executionMode = status?.execution_mode || platform?.platform.execution_mode || "mock";
   const enabled = status?.enabled_symbols || [];
   const riskCap = Number(riskSummary?.max_total_leverage ?? status?.risk?.max_total_leverage ?? 4);
-  const totalEquity = Number(balance?.total_usdt ?? balance?.usdt_total ?? usdt.total ?? 0);
-  const followerEquity = Number(followerBalance?.total_usdt ?? followerBalance?.usdt_total ?? followerUsdt.total ?? 0);
-  const maxNotional = totalEquity > 0 ? totalEquity * riskCap : 0;
+  const totalEquity = numberValue(balance?.total_usdt, balance?.usdt_total, usdt.total);
+  const followerEquity = numberValue(followerBalance?.total_usdt, followerBalance?.usdt_total, followerUsdt.total);
+  const maxNotional = totalEquity != null && totalEquity > 0 ? totalEquity * riskCap : null;
   const channels = platform?.strategy_channels || [];
   const visibleChannels = channels.filter((item) => visibleSlots.includes(item.account_slot));
   const trendChannel = channels.find((item) => item.channel === "trend");
@@ -3658,8 +3688,8 @@ function ExecutionWorkspace({
           <Metric label="交易模式" value={status?.trade_mode || platform?.platform.trade_mode || "--"} />
           <Metric label="开仓状态" value={status?.opening_paused ? "已暂停" : "允许"} tone={status?.opening_paused ? "warn" : "good"} />
           <Metric label="授权标的" value={`${enabled.length}`} />
-          <Metric label="账号1权益" value={num(totalEquity)} />
-          <Metric label="账号2权益" value={followerBalance?.ok === false ? "未配置" : num(followerEquity)} tone={followerBalance?.ok === false ? "warn" : undefined} />
+          <Metric label="账号1权益" value={totalEquity == null ? "--" : num(totalEquity)} />
+          <Metric label="账号2权益" value={followerBalance?.ok === false && followerEquity == null ? "未配置" : followerEquity == null ? "--" : num(followerEquity)} tone={followerBalance?.ok === false ? "warn" : undefined} />
           <Metric label="最大名义" value={num(maxNotional)} />
         </div>
         <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">

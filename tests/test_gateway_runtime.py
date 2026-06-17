@@ -111,6 +111,25 @@ async def test_gate_contract_positions_are_normalized_to_base_qty() -> None:
 
 
 @pytest.mark.asyncio
+async def test_gate_balance_missing_usdt_total_does_not_return_fake_zero(monkeypatch) -> None:
+    class FakeGateExchange:
+        async def fetch_balance(self):
+            return {"total": {}, "free": {}, "used": {}}
+
+        async def close(self):
+            return None
+
+    monkeypatch.setenv("GATEIO_API_KEY", "test_key")
+    monkeypatch.setenv("GATEIO_API_SECRET", "test_secret")
+    client = GateExecutionClient(dry_run=False)
+    await client.exchange.close()
+    client.exchange = FakeGateExchange()
+
+    with pytest.raises(RuntimeError, match="gate_balance_missing_usdt_total"):
+        await client.fetch_balance_summary()
+
+
+@pytest.mark.asyncio
 async def test_gate_duplicate_flat_positions_are_deduplicated() -> None:
     class FakeGateExchange:
         async def load_markets(self):

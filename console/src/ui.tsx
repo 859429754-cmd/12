@@ -9,6 +9,8 @@ export const danger =
   "inline-flex h-9 items-center justify-center gap-1 rounded-lg border border-[#7f1d1d] bg-[#2a0f14] px-3 text-xs font-medium text-[#fb7185] hover:border-[#fb7185] hover:text-[#fecdd3] disabled:opacity-50";
 
 export const num = (value: unknown, digits = 2): string => {
+  if (value === null || value === undefined) return "--";
+  if (typeof value === "string" && value.trim() === "") return "--";
   const n = Number(value);
   return Number.isFinite(n) ? n.toLocaleString("zh-CN", { maximumFractionDigits: digits }) : "--";
 };

@@ -503,7 +503,7 @@ def test_account_balance_returns_cached_snapshot_when_gate_is_slow(tmp_path: Pat
         symbol="trend",
     )
 
-    response = client.get("/api/account/balance?account_slot=trend&timeout_seconds=0.1")
+    response = client.get("/api/account/balance?account_slot=trend&timeout_seconds=0.1&max_cache_age_seconds=0")
 
     assert response.status_code == 200
     body = response.json()
@@ -513,6 +513,47 @@ def test_account_balance_returns_cached_snapshot_when_gate_is_slow(tmp_path: Pat
     assert body["balance_source"] == "cached_live_balance"
     assert body["usdt_total"] == 456.0
     assert "10000" not in body["message"]
+
+
+def test_account_balance_uses_fresh_cached_snapshot_without_gate_call(tmp_path: Path, monkeypatch) -> None:
+    for key in ["GATEIO_API_KEY", "GATEIO_API_SECRET", "GATEIO_TREND_API_KEY", "GATEIO_TREND_API_SECRET"]:
+        monkeypatch.setenv(key, "")
+    config_path = tmp_path / "config.yaml"
+    db_path = tmp_path / "trader.sqlite3"
+    write_config(config_path, db_path, tmp_path / "audit.jsonl", ["ETH/USDT:USDT"])
+
+    def fail_factory(mode_or_config: object, account_slot: str = "default"):
+        raise AssertionError("fresh cached balance should not construct a gateway")
+
+    monkeypatch.setattr(server, "_account_slot_configured", lambda slot: slot == "trend")
+    monkeypatch.setattr(server, "create_exchange_gateway", fail_factory)
+    client = TestClient(create_app(str(config_path)))
+    store = server._ctx(client.app).store
+    assert store is not None
+    store.insert(
+        "account_balance_snapshots",
+        {
+            "ok": True,
+            "execution_mode": "mock",
+            "balance_source": "gate_live_readonly",
+            "read_only_live_balance": True,
+            "usdt_total": 456.0,
+            "usdt_free": 400.0,
+            "usdt_used": 56.0,
+        },
+        symbol="trend",
+    )
+
+    response = client.get("/api/account/balance?account_slot=trend&max_cache_age_seconds=60")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["cached"] is True
+    assert body["stale"] is False
+    assert body["balance_source"] == "cached_live_balance"
+    assert body["usdt_total"] == 456.0
+    assert body["cache_age_seconds"] >= 0
 
 
 def test_positions_prefer_gate_readonly_when_mock_has_configured_account(tmp_path: Path, monkeypatch) -> None:

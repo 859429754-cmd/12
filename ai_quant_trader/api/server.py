@@ -915,6 +915,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         account_slot: Literal["default", "trend", "follower", "range"] | None = Query(default=None),
         prefer_live: bool = True,
         timeout_seconds: float = Query(default=4.0, ge=0.1, le=20.0),
+        max_cache_age_seconds: float = Query(default=12.0, ge=0.0, le=120.0),
     ) -> dict[str, Any]:
         ctx = _ctx(app)
         ctx.reload()
@@ -923,6 +924,31 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         runtime_mode = execution_mode_from_config(ctx.config)
         live_readonly = prefer_live and runtime_mode == "mock" and configured_slot
         gateway_mode = "live" if live_readonly else runtime_mode
+        cached = _latest_account_balance_snapshot(ctx, account_slot)
+        cached_age_seconds = _row_age_seconds(cached)
+        if (
+            gateway_mode == "live"
+            and cached is not None
+            and cached_age_seconds is not None
+            and max_cache_age_seconds > 0
+            and cached_age_seconds <= max_cache_age_seconds
+        ):
+            payload = dict(cached.get("payload") or {})
+            payload.update(
+                {
+                    "ok": True,
+                    "dry_run": runtime_mode == "mock",
+                    "execution_mode": runtime_mode,
+                    "read_only_live_balance": live_readonly,
+                    "cached": True,
+                    "stale": False,
+                    "balance_source": "cached_live_balance",
+                    "cache_created_at": cached.get("created_at"),
+                    "cache_age_seconds": cached_age_seconds,
+                    "message": "显示最近成功余额快照，后台下次刷新会继续读取 Gate.io。",
+                }
+            )
+            return payload
         execution = create_exchange_gateway(gateway_mode, account_slot=account_slot)
         try:
             summary = await asyncio.wait_for(execution.fetch_balance_summary(), timeout=timeout_seconds)
@@ -939,7 +965,6 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
                 ctx.store.insert("account_balance_snapshots", response, symbol=account_slot)
             return response
         except Exception as exc:
-            cached = _latest_account_balance_snapshot(ctx, account_slot)
             if cached is not None and gateway_mode == "live":
                 payload = dict(cached.get("payload") or {})
                 payload.update(
@@ -2014,6 +2039,11 @@ def _row_age_minutes(row: dict[str, Any] | None) -> float | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
     return max((datetime.now(UTC) - parsed.astimezone(UTC)).total_seconds() / 60.0, 0.0)
+
+
+def _row_age_seconds(row: dict[str, Any] | None) -> float | None:
+    age_minutes = _row_age_minutes(row)
+    return None if age_minutes is None else age_minutes * 60.0
 
 
 def _freshness_message(row: dict[str, Any] | None, label: str) -> str:
