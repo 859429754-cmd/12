@@ -85,6 +85,9 @@ SYMBOL_PARAM_TO_GLOBAL = {
 class RuntimeControlManager:
     """运行期控制器：负责开关、参数提案和配置热更新。"""
 
+    runtime_control_symbol = "runtime_control"
+    runtime_control_keys = frozenset({"opening_paused", "enabled_symbols", "report_symbols", "major_news_only"})
+
     def __init__(self, store: SQLiteStore, config_path: str = "config/config.yaml"):
         self.store = store
         self.config_path = Path(config_path)
@@ -99,7 +102,7 @@ class RuntimeControlManager:
         self.config_path.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
     def load_state(self, configured_symbols: list[str]) -> RuntimeState:
-        latest = self.store.fetch_latest("runtime_state")
+        latest = self._latest_runtime_control_row()
         state = RuntimeState(report_symbols=set(configured_symbols))
         if latest:
             payload = latest["payload"]
@@ -110,6 +113,16 @@ class RuntimeControlManager:
         state.enabled_symbols.intersection_update(configured_symbols)
         state.report_symbols.intersection_update(configured_symbols)
         return state
+
+    def _latest_runtime_control_row(self) -> dict[str, Any] | None:
+        latest = self.store.fetch_latest("runtime_state", self.runtime_control_symbol)
+        if latest:
+            return latest
+        for row in self.store.fetch_payloads("runtime_state", limit=500):
+            payload = row.get("payload") or {}
+            if isinstance(payload, dict) and self.runtime_control_keys.intersection(payload):
+                return row
+        return None
 
     def save_state(self, state: RuntimeState, operator_id: str, reason: str) -> None:
         self.store.insert(
@@ -122,6 +135,7 @@ class RuntimeControlManager:
                 "operator_id": operator_id,
                 "reason": reason,
             },
+            symbol=self.runtime_control_symbol,
         )
 
     def pause(self, state: RuntimeState, symbols: list[str], operator_id: str) -> str:

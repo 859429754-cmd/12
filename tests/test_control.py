@@ -98,3 +98,23 @@ def test_major_news_only_state_is_persisted(tmp_path) -> None:
         assert loaded.major_news_only is True
     finally:
         store.close()
+
+
+def test_runtime_state_ignores_deepseek_credential_rows(tmp_path) -> None:
+    store = SQLiteStore(str(tmp_path / "test.sqlite3"), str(tmp_path / "audit.jsonl"))
+    try:
+        manager = RuntimeControlManager(store, str(tmp_path / "config.yaml"))
+        state = manager.load_state(["ETH/USDT:USDT"])
+        manager.authorize_opening(state, ["ETH/USDT:USDT"], "admin", dry_run=False)
+
+        store.insert(
+            "runtime_state",
+            {"active_label": "backup", "credentials": {"backup": {"status": "available"}}, "reason": "backup_success"},
+            symbol="deepseek_credentials",
+        )
+
+        loaded = manager.load_state(["ETH/USDT:USDT"])
+        assert loaded.opening_paused is False
+        assert loaded.enabled_symbols == {"ETH/USDT:USDT"}
+    finally:
+        store.close()
