@@ -65,6 +65,7 @@ ln -sfn "$release_dir" "$current_link"
 if [ -d "$release_dir/deploy/systemd" ]; then
   cp "$release_dir"/deploy/systemd/*.service "$release_dir"/deploy/systemd/*.timer /etc/systemd/system/
 fi
+cd "$remote_dir"
 {install_block}{restart_block}echo "$release_id" > "$remote_dir/releases/.last_successful_release"
 """
 

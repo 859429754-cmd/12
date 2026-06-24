@@ -42,6 +42,7 @@ def test_release_deploy_script_uses_current_symlink_and_rollback() -> None:
     assert "releases/<git_sha>" in script or "release/<git_sha>" in script
     assert "current_link" in script
     assert "previous_target" in script
+    assert 'cd "$remote_dir"' in script
     assert "release_health_check_failed_rolled_back" in script
     assert "http_readiness_check.py" in script
 
