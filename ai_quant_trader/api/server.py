@@ -2954,6 +2954,7 @@ def _console_users() -> dict[str, dict[str, Any]]:
 
     env_specs = [
         ("admin", "CONSOLE_ADMIN_USER", "CONSOLE_ADMIN_PASSWORD", "CONSOLE_ADMIN_PASSWORD_SHA256", None, "管理员"),
+        ("admin", "CONSOLE_ALERT_USER", "CONSOLE_ALERT_PASSWORD", "CONSOLE_ALERT_PASSWORD_SHA256", None, "告警服务"),
         ("account1", "CONSOLE_ACCOUNT1_USER", "CONSOLE_ACCOUNT1_PASSWORD", "CONSOLE_ACCOUNT1_PASSWORD_SHA256", "trend", "账号1"),
         ("account2", "CONSOLE_ACCOUNT2_USER", "CONSOLE_ACCOUNT2_PASSWORD", "CONSOLE_ACCOUNT2_PASSWORD_SHA256", "follower", "账号2"),
         ("range", "CONSOLE_RANGE_USER", "CONSOLE_RANGE_PASSWORD", "CONSOLE_RANGE_PASSWORD_SHA256", "range", "震荡账户"),

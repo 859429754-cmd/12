@@ -96,6 +96,16 @@ def test_console_ip_allowlist_blocks_untrusted_clients(tmp_path: Path, monkeypat
     assert allowed.status_code == 200
 
 
+def test_console_alert_user_is_admin_credential(monkeypatch) -> None:
+    monkeypatch.setenv("CONSOLE_ALERT_USER", "alert")
+    monkeypatch.setenv("CONSOLE_ALERT_PASSWORD", "alert-secret")
+
+    user = server._authenticate_console_user("alert", "alert-secret")
+
+    assert user is not None
+    assert user["role"] == "admin"
+
+
 def test_readiness_exposes_runtime_alerts_for_unknown_order(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("CONSOLE_AUTH_DISABLED", "1")
     config_path = tmp_path / "config.yaml"
