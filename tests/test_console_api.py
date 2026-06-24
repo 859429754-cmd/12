@@ -1264,7 +1264,7 @@ def test_news_latest_compact_omits_heavy_rows(tmp_path: Path, monkeypatch) -> No
     monkeypatch.setattr(server, "_collect_news_digest", fake_collect)
     client = TestClient(create_app(str(config_path)))
 
-    response = client.get("/api/news/latest?limit=4&auto_refresh=true&compact=true")
+    response = client.get("/api/news/latest?limit=4&auto_refresh=true&compact=true&max_age_minutes=2")
 
     assert response.status_code == 200
     body = response.json()

@@ -851,7 +851,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
     @app.get("/api/news/latest")
     async def latest_news(
         limit: int = Query(default=20, ge=1, le=100),
-        max_age_minutes: int = Query(default=65, ge=15, le=24 * 60),
+        max_age_minutes: int = Query(default=5, ge=1, le=24 * 60),
         auto_refresh: bool = Query(default=True),
         compact: bool = Query(default=False),
         include_payload: bool = Query(default=False),

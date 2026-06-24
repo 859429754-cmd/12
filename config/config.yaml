@@ -104,7 +104,7 @@ news:
   jin10_enabled: true
   jin10_public_url: https://www.jin10.com/
   entity_refresh_hours: 24
-  refresh_interval_minutes: 10
+  refresh_interval_minutes: 5
   max_age_hours: 6
   rss_sources:
   - https://www.coindesk.com/arc/outboundfeeds/rss/

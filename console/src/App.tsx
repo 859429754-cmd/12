@@ -165,13 +165,29 @@ export function App() {
           return fallback;
         }
       };
-      void safe(api<NewsResponse>("/api/news/latest?limit=8&compact=true&max_age_minutes=15", { retries: 0, timeoutMs: 8000 }), {
-        ok: false,
-        items: [],
-        timeline: [],
-        source_status: "refresh_failed",
-        warnings: ["新闻接口暂时未返回，已保留上一轮界面状态。"],
-      }).then(setNews);
+      void api<NewsResponse>("/api/news/latest?limit=8&compact=true&max_age_minutes=2", { retries: 0, timeoutMs: 10000 })
+        .then((payload) => {
+          const hasVisibleItems = visibleNewsItems(payload).length > 0;
+          setNews((current) => {
+            if (hasVisibleItems || !visibleNewsItems(current).length) return payload;
+            return {
+              ...current,
+              ok: false,
+              source_status: "refresh_failed",
+              stale: true,
+              warnings: ["新闻接口本轮刷新失败，已保留上一轮可用快讯。"],
+            };
+          });
+        })
+        .catch(() => {
+          setNews((current) => ({
+            ...current,
+            ok: current.ok ?? false,
+            source_status: "refresh_failed",
+            stale: true,
+            warnings: ["新闻接口暂时未返回，已保留上一轮可用快讯。"],
+          }));
+        });
       void refreshTicker();
       const candleBase = `/api/market/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${timeframe}&source=${source}`;
       const candleLimits = chartCandleLimits(timeframe);
