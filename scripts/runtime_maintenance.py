@@ -15,6 +15,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run local runtime maintenance without printing secrets.")
     parser.add_argument("--config", default="config/config.yaml", help="Path to config YAML.")
     parser.add_argument("--backup-dir", default="data/backups", help="Directory for compressed SQLite backups.")
+    parser.add_argument("--offsite-backup-dir", default="", help="Optional mounted offsite directory for backup copies.")
+    parser.add_argument("--restore-drill-dir", default="", help="Optional directory for SQLite restore drill output.")
     parser.add_argument("--max-log-mb", type=float, default=10.0, help="Rotate audit log above this size.")
     parser.add_argument("--keep", type=int, default=5, help="Number of rotated audit logs to keep.")
     parser.add_argument("--backup-keep", type=int, default=24, help="Number of compressed SQLite backups to retain.")
@@ -27,6 +29,8 @@ def main() -> None:
         database_path=config.runtime.database_path,
         audit_log_path=config.runtime.audit_log_path,
         backup_dir=Path(args.backup_dir),
+        offsite_backup_dir=Path(args.offsite_backup_dir) if args.offsite_backup_dir else None,
+        restore_drill_dir=Path(args.restore_drill_dir) if args.restore_drill_dir else None,
         max_log_bytes=max(int(args.max_log_mb * 1024 * 1024), 1),
         keep=args.keep,
         backup_keep=args.backup_keep,

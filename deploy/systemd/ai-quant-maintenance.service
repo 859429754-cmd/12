@@ -5,4 +5,4 @@ Description=AI Quant Runtime Maintenance
 Type=oneshot
 WorkingDirectory=/root/ai-quant-trader
 EnvironmentFile=-/root/ai-quant-trader/.env.runtime
-ExecStart=/root/ai-quant-trader/.venv/bin/python scripts/runtime_maintenance.py --backup-dir data/backups --max-log-mb 10 --keep 5 --backup-keep 24 --min-free-gb 1 --min-free-ratio 0.10
+ExecStart=/root/ai-quant-trader/.venv/bin/python scripts/runtime_maintenance.py --backup-dir data/backups --restore-drill-dir data/restore-drills --max-log-mb 10 --keep 5 --backup-keep 24 --min-free-gb 1 --min-free-ratio 0.10

@@ -16,6 +16,10 @@ class MaintenanceResult:
     sqlite_backup_path: str | None
     sqlite_backup_bytes: int
     sqlite_backup_integrity: str
+    offsite_backup_path: str | None
+    offsite_backup_bytes: int
+    restore_drill_status: str
+    restore_drill_path: str | None
     rotated_logs: list[str]
     retained_backups: list[str]
     pruned_backups: list[str]
@@ -70,6 +74,41 @@ def verify_sqlite_backup(backup_path: str | Path) -> str:
     finally:
         if restore_path.exists():
             restore_path.unlink()
+
+
+def copy_offsite_backup(backup_path: str | Path, offsite_backup_dir: str | Path) -> Path:
+    source = Path(backup_path)
+    if not source.exists():
+        raise FileNotFoundError(source)
+    target_dir = Path(offsite_backup_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / source.name
+    shutil.copy2(source, target)
+    return target
+
+
+def run_restore_drill(backup_path: str | Path, restore_dir: str | Path) -> tuple[str, Path | None]:
+    source = Path(backup_path)
+    if not source.exists():
+        return "missing", None
+    target_dir = Path(restore_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    restored_path = target_dir / f"{source.stem}.{stamp}.restore.sqlite3"
+    try:
+        with gzip.open(source, "rb") as src_fh, restored_path.open("wb") as dst_fh:
+            shutil.copyfileobj(src_fh, dst_fh)
+        conn = sqlite3.connect(restored_path)
+        try:
+            result = conn.execute("PRAGMA integrity_check").fetchone()
+        finally:
+            conn.close()
+        status = "ok" if result and result[0] == "ok" else "failed"
+        return status, restored_path if status == "ok" else None
+    except (OSError, sqlite3.DatabaseError, gzip.BadGzipFile):
+        if restored_path.exists():
+            restored_path.unlink()
+        return "failed", None
 
 
 def rotate_text_log(log_path: str | Path, *, max_bytes: int, keep: int = 5) -> list[Path]:
@@ -137,6 +176,8 @@ def run_runtime_maintenance(
     database_path: str | Path,
     audit_log_path: str | Path,
     backup_dir: str | Path = "data/backups",
+    offsite_backup_dir: str | Path | None = None,
+    restore_drill_dir: str | Path | None = None,
     log_paths: list[str | Path] | None = None,
     max_log_bytes: int = 10 * 1024 * 1024,
     keep: int = 5,
@@ -154,6 +195,9 @@ def run_runtime_maintenance(
         warnings.append("disk_space_low")
     backup_path = backup_sqlite(database_path, backup_dir)
     backup_integrity = "not_run"
+    offsite_backup_path: Path | None = None
+    restore_drill_status = "not_run"
+    restore_drill_path: Path | None = None
     if backup_path is None:
         warnings.append("sqlite_database_missing")
         backup_integrity = "missing"
@@ -161,6 +205,15 @@ def run_runtime_maintenance(
         backup_integrity = verify_sqlite_backup(backup_path)
         if backup_integrity != "ok":
             warnings.append(f"sqlite_backup_integrity:{backup_integrity}")
+        if offsite_backup_dir:
+            try:
+                offsite_backup_path = copy_offsite_backup(backup_path, offsite_backup_dir)
+            except OSError:
+                warnings.append("offsite_backup_copy_failed")
+        if restore_drill_dir:
+            restore_drill_status, restore_drill_path = run_restore_drill(backup_path, restore_drill_dir)
+            if restore_drill_status != "ok":
+                warnings.append(f"sqlite_restore_drill:{restore_drill_status}")
 
     rotated: list[str] = []
     for item in [audit_log_path, *(log_paths or [])]:
@@ -175,6 +228,10 @@ def run_runtime_maintenance(
         sqlite_backup_path=str(backup_path) if backup_path else None,
         sqlite_backup_bytes=backup_path.stat().st_size if backup_path else 0,
         sqlite_backup_integrity=backup_integrity,
+        offsite_backup_path=str(offsite_backup_path) if offsite_backup_path else None,
+        offsite_backup_bytes=offsite_backup_path.stat().st_size if offsite_backup_path else 0,
+        restore_drill_status=restore_drill_status,
+        restore_drill_path=str(restore_drill_path) if restore_drill_path else None,
         rotated_logs=rotated,
         retained_backups=[str(path) for path in retained],
         pruned_backups=[str(path) for path in pruned],

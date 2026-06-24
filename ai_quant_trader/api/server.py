@@ -1,8 +1,9 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import asyncio
 import base64
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -35,6 +36,7 @@ from ai_quant_trader.core.state import RuntimeState
 from ai_quant_trader.data.market import MarketDataClient
 from ai_quant_trader.execution.gateway import create_exchange_gateway, execution_mode_from_config
 from ai_quant_trader.execution.lifecycle import OrderLifecycleManager, OrderRejected, OrderSubmissionUncertain
+from ai_quant_trader.monitoring.alerts import alert_summary, build_runtime_alerts
 from ai_quant_trader.monitoring.metrics import collect_runtime_metrics, metrics_to_prometheus
 from ai_quant_trader.platform.profiles import build_strategy_profile
 from ai_quant_trader.storage.sqlite import SQLiteStore
@@ -257,6 +259,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
     app.state.backtest_jobs = {}
     app.state.news_refresh_lock = asyncio.Lock()
     app.state.console_sessions = {}
+    app.state.console_login_failures = {}
 
     app.add_middleware(
         CORSMiddleware,
@@ -265,6 +268,14 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.middleware("http")
+    async def console_ip_allowlist_guard(request: Request, call_next):
+        if _console_ip_allowlist_enabled() and not _console_client_ip_allowed(request):
+            response = JSONResponse({"detail": "ip_not_allowed"}, status_code=403)
+            _apply_security_headers(response)
+            return response
+        return await call_next(request)
 
     @app.middleware("http")
     async def console_account_auth_guard(request: Request, call_next):
@@ -289,6 +300,12 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         request.state.console_user = user
         return await call_next(request)
 
+    @app.middleware("http")
+    async def security_response_headers(request: Request, call_next):
+        response = await call_next(request)
+        _apply_security_headers(response)
+        return response
+
     assets_path = Path("console/dist/assets")
     if assets_path.exists():
         app.mount("/assets", StaticFiles(directory=assets_path), name="console-assets")
@@ -308,9 +325,17 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
     def auth_login(body: ConsoleLoginRequest, request: Request) -> Response:
         if _console_auth_enabled() and not _console_auth_configured():
             raise HTTPException(status_code=503, detail="console_auth_not_configured")
+        lockout = _login_lockout_status(request, body.username)
+        if lockout["locked"]:
+            _record_security_event(request, "login_locked", body.username, {"locked_until": lockout["locked_until"]})
+            raise HTTPException(status_code=429, detail=lockout)
         user = _authenticate_console_user(body.username, body.password)
         if not user:
-            raise HTTPException(status_code=401, detail="用户名或密码错误。")
+            failure = _record_login_failure(request, body.username)
+            _record_security_event(request, "login_failed", body.username, {"failure_count": failure["count"]})
+            raise HTTPException(status_code=401, detail="invalid_username_or_password")
+        _clear_login_failures(request, body.username)
+        _record_security_event(request, "login_success", body.username, {"role": user.get("role")})
         token = secrets.token_urlsafe(32)
         expires_at = datetime.now(UTC) + timedelta(hours=_console_session_hours())
         request.app.state.console_sessions[token] = {"user": user, "expires_at": expires_at}
@@ -324,7 +349,6 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
             secure=_console_cookie_secure(),
         )
         return response
-
     @app.post("/api/auth/logout")
     def auth_logout(request: Request) -> Response:
         token = request.cookies.get(_console_session_cookie_name(), "")
@@ -531,6 +555,31 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
             checks.append(
                 _readiness_check("live_ai_guard", "Live AI guard", "block", "Live mode requires a configured AI key for the current policy.")
             )
+        alert_input = {
+            "execution_mode": execution_mode,
+            "exchange_safety": latest_exchange,
+            "latest_reconciliation": latest_reconciliation,
+            "latest_order_lifecycle": latest_order_lifecycle,
+            "latest_data_health": latest_data_health,
+            "latest_ai_drift": latest_ai_drift,
+            "latest_ai_decision": latest_ai_decision,
+            "latest_news_risk_review": latest_news_risk,
+            "latest_ai_budget": latest_ai_budget,
+            "latest_worker_heartbeats": latest_worker_heartbeats,
+            "latest_maintenance": latest_maintenance,
+            "checks": checks,
+        }
+        runtime_alerts = build_runtime_alerts(alert_input)
+        runtime_alert_summary = alert_summary(runtime_alerts)
+        if runtime_alert_summary["status"] != "ok":
+            checks.append(
+                _readiness_check(
+                    "runtime_alerts",
+                    "Runtime alerts",
+                    runtime_alert_summary["status"],
+                    f"{runtime_alert_summary['critical']} critical and {runtime_alert_summary['warn']} warning alerts.",
+                )
+            )
         status_rank = {"ok": 0, "warn": 1, "block": 2}
         overall = max(checks, key=lambda item: status_rank.get(item["status"], 0))["status"] if checks else "block"
         return {
@@ -555,8 +604,16 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
             "latest_worker_heartbeats": latest_worker_heartbeats,
             "worker_heartbeat_details": worker_heartbeat_details,
             "latest_maintenance": latest_maintenance,
+            "runtime_alerts": runtime_alerts,
+            "runtime_alert_summary": runtime_alert_summary,
             "checks": checks,
         }
+
+    @app.get("/api/system/alerts")
+    def system_alerts() -> dict[str, Any]:
+        readiness = system_readiness()
+        alerts = readiness.get("runtime_alerts") or []
+        return {"summary": alert_summary(alerts), "alerts": alerts}
 
     @app.get("/api/system/metrics")
     def system_metrics() -> dict[str, Any]:
@@ -2565,6 +2622,8 @@ def _maintenance_status(row: dict[str, Any] | None) -> tuple[Literal["ok", "warn
         return "block", "Disk space is below the configured floor."
     if payload.get("sqlite_backup_integrity") not in {None, "ok"}:
         return "block", "Latest SQLite backup failed integrity verification."
+    if payload.get("restore_drill_status") not in {None, "not_run", "ok"}:
+        return "block", "Latest SQLite backup restore drill failed."
     warnings = payload.get("warnings") or []
     if warnings:
         return "warn", "Runtime maintenance warnings: " + ",".join(str(item) for item in warnings)
@@ -2748,6 +2807,123 @@ def _console_auth_enabled() -> bool:
 
 def _env_flag_enabled(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _apply_security_headers(response: Response) -> None:
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
+
+
+def _login_lockout_config() -> tuple[int, timedelta]:
+    max_failures = max(int(os.getenv("CONSOLE_LOGIN_MAX_FAILURES", "5") or "5"), 1)
+    lock_minutes = max(float(os.getenv("CONSOLE_LOGIN_LOCKOUT_MINUTES", "15") or "15"), 1.0)
+    return max_failures, timedelta(minutes=lock_minutes)
+
+
+def _login_client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        return forwarded.split(",", 1)[0].strip() or "unknown"
+    if request.client is not None:
+        return request.client.host or "unknown"
+    return "unknown"
+
+
+def _console_ip_allowlist_enabled() -> bool:
+    return bool(os.getenv("CONSOLE_ALLOWED_IPS", "").strip())
+
+
+def _console_client_ip_allowed(request: Request) -> bool:
+    client_ip = _login_client_ip(request)
+    try:
+        parsed_ip = ipaddress.ip_address(client_ip)
+    except ValueError:
+        return False
+    allowed_specs = [item.strip() for item in os.getenv("CONSOLE_ALLOWED_IPS", "").split(",") if item.strip()]
+    for spec in allowed_specs:
+        try:
+            if "/" in spec:
+                if parsed_ip in ipaddress.ip_network(spec, strict=False):
+                    return True
+            elif parsed_ip == ipaddress.ip_address(spec):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def _login_failure_key(request: Request, username: str) -> str:
+    return f"{username.strip().lower()}@{_login_client_ip(request)}"
+
+
+def _login_lockout_status(request: Request, username: str) -> dict[str, Any]:
+    max_failures, lockout_window = _login_lockout_config()
+    key = _login_failure_key(request, username)
+    failures = getattr(request.app.state, "console_login_failures", {})
+    item = failures.get(key) if isinstance(failures, dict) else None
+    now = datetime.now(UTC)
+    if not isinstance(item, dict):
+        return {"locked": False, "count": 0, "max_failures": max_failures, "locked_until": None}
+    locked_until = item.get("locked_until")
+    if isinstance(locked_until, datetime) and locked_until > now:
+        return {
+            "locked": True,
+            "count": int(item.get("count") or 0),
+            "max_failures": max_failures,
+            "locked_until": locked_until.isoformat(),
+        }
+    if isinstance(locked_until, datetime):
+        failures.pop(key, None)
+    return {
+        "locked": False,
+        "count": int(item.get("count") or 0),
+        "max_failures": max_failures,
+        "locked_until": None,
+    }
+
+
+def _record_login_failure(request: Request, username: str) -> dict[str, Any]:
+    max_failures, lockout_window = _login_lockout_config()
+    key = _login_failure_key(request, username)
+    failures = getattr(request.app.state, "console_login_failures", None)
+    if not isinstance(failures, dict):
+        request.app.state.console_login_failures = {}
+        failures = request.app.state.console_login_failures
+    now = datetime.now(UTC)
+    item = failures.get(key) if isinstance(failures.get(key), dict) else {}
+    count = int(item.get("count") or 0) + 1
+    locked_until = now + lockout_window if count >= max_failures else None
+    failures[key] = {
+        "count": count,
+        "last_failed_at": now,
+        "locked_until": locked_until,
+    }
+    return {"count": count, "max_failures": max_failures, "locked_until": locked_until.isoformat() if locked_until else None}
+
+
+def _clear_login_failures(request: Request, username: str) -> None:
+    failures = getattr(request.app.state, "console_login_failures", None)
+    if isinstance(failures, dict):
+        failures.pop(_login_failure_key(request, username), None)
+
+
+def _record_security_event(request: Request, event: str, username: str, payload: dict[str, Any] | None = None) -> None:
+    try:
+        ctx = _ctx(request.app)
+        ctx.store.insert(
+            "security_events",
+            {
+                "event": event,
+                "username": username.strip(),
+                "client_ip": _login_client_ip(request),
+                "created_at": datetime.now(UTC).isoformat(),
+                "payload": payload or {},
+            },
+        )
+    except Exception:
+        return
 
 
 def _console_auth_configured() -> bool:

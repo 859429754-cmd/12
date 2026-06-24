@@ -8,10 +8,12 @@ from ai_quant_trader.core.models import HealthStatus
 from ai_quant_trader.monitoring.heartbeat import WorkerHeartbeatRecorder
 from ai_quant_trader.ops.maintenance import (
     backup_sqlite,
+    copy_offsite_backup,
     disk_space_status,
     prune_backups,
     rotate_text_log,
     run_runtime_maintenance,
+    run_restore_drill,
     verify_sqlite_backup,
 )
 from ai_quant_trader.storage.sqlite import SQLiteStore
@@ -48,6 +50,24 @@ def test_sqlite_backup_uses_consistent_gzip_copy(tmp_path: Path) -> None:
     assert verify_sqlite_backup(backup) == "ok"
 
 
+def test_offsite_backup_copy_and_restore_drill(tmp_path: Path) -> None:
+    db_path = tmp_path / "runtime.sqlite3"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE sample (id INTEGER PRIMARY KEY, value TEXT)")
+        conn.execute("INSERT INTO sample (value) VALUES ('ok')")
+
+    backup = backup_sqlite(db_path, tmp_path / "backups")
+    assert backup is not None
+
+    offsite = copy_offsite_backup(backup, tmp_path / "offsite")
+    status, restored = run_restore_drill(offsite, tmp_path / "restore-drills")
+
+    assert offsite.exists()
+    assert offsite.stat().st_size == backup.stat().st_size
+    assert status == "ok"
+    assert restored is not None and restored.exists()
+
+
 def test_log_rotation_and_runtime_maintenance(tmp_path: Path) -> None:
     db_path = tmp_path / "runtime.sqlite3"
     audit_log = tmp_path / "audit.jsonl"
@@ -60,6 +80,8 @@ def test_log_rotation_and_runtime_maintenance(tmp_path: Path) -> None:
         database_path=db_path,
         audit_log_path=audit_log,
         backup_dir=tmp_path / "backups",
+        offsite_backup_dir=tmp_path / "offsite",
+        restore_drill_dir=tmp_path / "restore-drills",
         max_log_bytes=32,
         keep=2,
     )
@@ -69,6 +91,10 @@ def test_log_rotation_and_runtime_maintenance(tmp_path: Path) -> None:
     assert result.sqlite_backup_path is not None
     assert result.sqlite_backup_bytes > 0
     assert result.sqlite_backup_integrity == "ok"
+    assert result.offsite_backup_path is not None
+    assert result.offsite_backup_bytes > 0
+    assert result.restore_drill_status == "ok"
+    assert result.restore_drill_path is not None
     assert result.disk_status in {"ok", "block"}
     assert result.retained_backups
 

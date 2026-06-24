@@ -11,6 +11,7 @@ sudo systemctl enable --now ai-quant-console.service
 sudo systemctl enable --now ai-quant-trader.service
 sudo systemctl enable --now ai-quant-health-watchdog.timer
 sudo systemctl enable --now ai-quant-maintenance.timer
+sudo systemctl enable --now ai-quant-alerts.timer
 ```
 
 Operational notes:
@@ -22,3 +23,4 @@ Operational notes:
 - `ai-quant-order-status-worker.service` is retained only for decoupled-worker deployments. Do not enable it together with `ai-quant-trader.service` unless you intentionally want duplicate order-status polling.
 - The console stays behind an HTTP health watchdog timer because uvicorn is launched directly and readiness is protected by account login.
 - `ai-quant-maintenance.timer` runs SQLite backup, log rotation, backup retention, and disk-space checks.
+- `ai-quant-alerts.timer` polls runtime alerts every minute and forwards them when `AI_QUANT_ALERT_WEBHOOK_URL` is configured.

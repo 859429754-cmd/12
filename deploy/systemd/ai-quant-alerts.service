@@ -1,0 +1,9 @@
+[Unit]
+Description=AI Quant Runtime Alert Forwarder
+After=ai-quant-console.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/root/ai-quant-trader
+EnvironmentFile=-/root/ai-quant-trader/.env.runtime
+ExecStart=/root/ai-quant-trader/.venv/bin/python current/scripts/runtime_alerts.py --base-url http://127.0.0.1:8090 --timeout 5

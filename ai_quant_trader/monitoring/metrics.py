@@ -60,6 +60,7 @@ def collect_runtime_metrics(
             "latest": latest_maintenance,
             "age_seconds": _row_age_seconds(latest_maintenance),
         },
+        "alerts": (readiness or {}).get("runtime_alert_summary") or {"total": 0, "critical": 0, "warn": 0, "status": "ok"},
     }
     store.insert("runtime_metrics", metrics)
     return metrics
@@ -97,12 +98,18 @@ def metrics_to_prometheus(metrics: dict[str, Any]) -> str:
     maintenance_payload = latest_maintenance.get("payload") or {}
     integrity_ok = 1 if maintenance_payload.get("sqlite_backup_integrity") == "ok" else 0
     disk_ok = 1 if maintenance_payload.get("disk_status") == "ok" else 0
+    restore_ok = 1 if maintenance_payload.get("restore_drill_status") in {None, "not_run", "ok"} else 0
     lines.extend(
         [
             "# HELP ai_quant_maintenance_ok Maintenance sub-checks: 1=ok, 0=not ok.",
             "# TYPE ai_quant_maintenance_ok gauge",
             f'ai_quant_maintenance_ok{{check="sqlite_backup_integrity"}} {integrity_ok}',
             f'ai_quant_maintenance_ok{{check="disk_space"}} {disk_ok}',
+            f'ai_quant_maintenance_ok{{check="restore_drill"}} {restore_ok}',
+            "# HELP ai_quant_runtime_alerts Runtime alert counts by level.",
+            "# TYPE ai_quant_runtime_alerts gauge",
+            f'ai_quant_runtime_alerts{{level="critical"}} {(metrics.get("alerts") or {}).get("critical", 0)}',
+            f'ai_quant_runtime_alerts{{level="warn"}} {(metrics.get("alerts") or {}).get("warn", 0)}',
         ]
     )
     return "\n".join(lines) + "\n"

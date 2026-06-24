@@ -117,6 +117,12 @@ tar -xf /tmp/aiquant-src-current.tar -C "$stage"
 tar -xf /tmp/aiquant-console-dist.tar -C "$console_stage"
 mkdir -p "$remote_dir"
 rsync -a --delete {excludes} "$stage"/ "$remote_dir"/
+if [ -L "$remote_dir/current" ]; then
+  rm -f "$remote_dir/current"
+elif [ -e "$remote_dir/current" ]; then
+  mv "$remote_dir/current" "$remote_dir/current.pre-release-$(date +%Y%m%d%H%M%S)"
+fi
+ln -sfn "$remote_dir" "$remote_dir/current"
 rm -rf "$remote_dir/console/dist"
 mkdir -p "$remote_dir/console/dist"
 rsync -a --delete "$console_stage"/ "$remote_dir/console/dist"/

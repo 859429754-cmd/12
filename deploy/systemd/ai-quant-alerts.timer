@@ -1,0 +1,11 @@
+[Unit]
+Description=Run AI Quant Runtime Alert Forwarder
+
+[Timer]
+OnBootSec=90
+OnUnitActiveSec=60
+AccuracySec=10
+Unit=ai-quant-alerts.service
+
+[Install]
+WantedBy=timers.target

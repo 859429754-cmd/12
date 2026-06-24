@@ -2633,6 +2633,8 @@ function ReadinessPanel({ readiness }: { readiness: SystemReadiness | null }) {
   const newsRiskPayload = readiness?.latest_news_risk_review?.payload || {};
   const workerHeartbeats = readiness?.latest_worker_heartbeats || {};
   const workerHeartbeatDetails = readiness?.worker_heartbeat_details || [];
+  const alertSummary = readiness?.runtime_alert_summary || { total: 0, critical: 0, warn: 0, status: "ok" };
+  const runtimeAlerts = readiness?.runtime_alerts || [];
   const blockedReasons = (readiness?.checks || []).filter((check) => check.status === "block").map((check) => readinessCheckLabel(check.label));
   return (
     <Surface
@@ -2653,6 +2655,19 @@ function ReadinessPanel({ readiness }: { readiness: SystemReadiness | null }) {
         <Metric label="数据新鲜度" value={healthStatusLabel(dataHealthPayload.status)} tone={dataHealthPayload.status === "ok" ? "good" : dataHealthPayload.status === "block" ? "bad" : "warn"} />
         <Metric label="AI 漂移" value={healthStatusLabel(aiDriftPayload.status)} tone={aiDriftPayload.status === "ok" ? "good" : aiDriftPayload.status === "block" ? "bad" : "warn"} />
       </div>
+      {alertSummary.total ? (
+        <div className={`mt-3 rounded-xl border p-3 text-xs ${alertSummary.critical ? "border-red-500/50 bg-red-950/30" : "border-amber-500/50 bg-amber-950/30"}`}>
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-semibold text-[#e5eefb]">运行告警</span>
+            <span>{alertSummary.critical} 严重 / {alertSummary.warn} 警告</span>
+          </div>
+          <div className="mt-2 grid gap-1 text-[11px] text-[#cbd5e1]">
+            {runtimeAlerts.slice(0, 3).map((alert) => (
+              <BoundaryLine key={`${alert.event}-${alert.created_at || ""}`} label={runtimeAlertLabel(alert.event)} value={runtimeAlertMessage(alert.message)} />
+            ))}
+          </div>
+        </div>
+      ) : null}
       <div className="mt-3 grid grid-cols-3 gap-2 text-[11px] text-[#94a3b8]">
         <div className="rounded-xl border border-[#263246] bg-[#101a2d] p-3">
           <div className="font-semibold text-[#e5eefb]">交易所降级说明</div>
@@ -2879,6 +2894,7 @@ function readinessCheckLabel(label: string) {
     "Order lifecycle": "订单生命周期",
     "Worker heartbeat": "Worker 心跳",
     "Runtime maintenance": "运行维护",
+    "Runtime alerts": "运行告警",
     "Live AI guard": "实盘 AI 保护",
   };
   return labels[label] || label;
@@ -2907,6 +2923,7 @@ function readinessDetail(detail: string) {
     .replace("Runtime maintenance completed without warnings.", "运行维护无告警完成。")
     .replace("Runtime maintenance warnings:", "运行维护告警：")
     .replace("Disk space is below the configured floor.", "磁盘空间低于配置下限。")
+    .replace("Latest SQLite backup restore drill failed.", "最近一次 SQLite 备份恢复演练失败。")
     .replace("Live mode requires a configured AI key for the current policy.", "当前策略要求实盘模式必须配置 AI Key。")
     .replace("Latest news cache was updated", "新闻缓存更新于")
     .replace("Latest backtest run was updated", "最近回测更新于")
@@ -2917,6 +2934,35 @@ function readinessDetail(detail: string) {
     .replace("Latest order lifecycle event was updated", "订单生命周期更新于")
     .replace("less than 1 minute ago.", "1 分钟内。")
     .replace("minutes ago.", "分钟前。");
+}
+
+function runtimeAlertLabel(event: string) {
+  const labels: Record<string, string> = {
+    gate_position_read_failed: "Gate 读取异常",
+    exchange_reconciliation_failed: "交易所对账异常",
+    order_lifecycle_problem: "订单状态异常",
+    order_status_unknown: "订单状态未知",
+    native_stop_failure: "原生止损异常",
+    news_stale: "新闻过期",
+    deepseek_all_failed_or_blocked: "DeepSeek 异常",
+    balance_read_failed: "余额读取异常",
+    disk_space_low: "磁盘空间低",
+    backup_integrity_failed: "备份校验失败",
+    restore_drill_failed: "恢复演练失败",
+    runtime_maintenance_failed: "运行维护异常",
+    worker_heartbeat_failed: "Worker 心跳异常",
+  };
+  return labels[event] || event;
+}
+
+function runtimeAlertMessage(message: string) {
+  return message
+    .replace("Latest order lifecycle is unknown; new live entries must remain blocked until reconciliation.", "最新订单状态未知；完成对账前禁止新开仓。")
+    .replace("Native stop-loss lifecycle indicates failure or unknown state.", "原生止损失败或状态未知。")
+    .replace("AI provider fallback is not healthy enough for live entries.", "AI 主备状态不足以支持实盘新开仓。")
+    .replace("Disk free space is below the configured production floor.", "磁盘空间低于生产下限。")
+    .replace("Latest SQLite backup failed integrity verification.", "最近 SQLite 备份完整性校验失败。")
+    .replace("Latest SQLite restore drill failed.", "最近 SQLite 恢复演练失败。");
 }
 function RoadmapItem({ title, body, done = false }: { title: string; body: string; done?: boolean }) {
   return (

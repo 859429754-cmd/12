@@ -59,6 +59,75 @@ def test_major_news_budget_cap_is_readiness_warning_not_live_block() -> None:
     assert "Major news" in detail
 
 
+def test_auth_login_failure_lockout_and_security_headers(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("CONSOLE_AUTH_DISABLED", "0")
+    monkeypatch.setenv("CONSOLE_ADMIN_USER", "admin")
+    monkeypatch.setenv("CONSOLE_ADMIN_PASSWORD", "correct-password")
+    monkeypatch.setenv("CONSOLE_LOGIN_MAX_FAILURES", "2")
+    monkeypatch.setenv("CONSOLE_LOGIN_LOCKOUT_MINUTES", "15")
+    config_path = tmp_path / "config.yaml"
+    write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl", symbols=["ETH/USDT:USDT"])
+
+    client = TestClient(create_app(str(config_path)))
+
+    health = client.get("/api/health")
+    assert health.headers["x-content-type-options"] == "nosniff"
+    assert health.headers["x-frame-options"] == "DENY"
+    assert client.post("/api/auth/login", json={"username": "admin", "password": "bad"}).status_code == 401
+    assert client.post("/api/auth/login", json={"username": "admin", "password": "bad"}).status_code == 401
+    locked = client.post("/api/auth/login", json={"username": "admin", "password": "correct-password"})
+    assert locked.status_code == 429
+    assert locked.json()["detail"]["locked"] is True
+
+
+def test_console_ip_allowlist_blocks_untrusted_clients(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("CONSOLE_AUTH_DISABLED", "1")
+    monkeypatch.setenv("CONSOLE_ALLOWED_IPS", "203.0.113.10,198.51.100.0/24")
+    config_path = tmp_path / "config.yaml"
+    write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl", symbols=["ETH/USDT:USDT"])
+
+    client = TestClient(create_app(str(config_path)))
+
+    blocked = client.get("/api/health", headers={"x-forwarded-for": "192.0.2.9"})
+    allowed = client.get("/api/health", headers={"x-forwarded-for": "198.51.100.7"})
+
+    assert blocked.status_code == 403
+    assert blocked.json()["detail"] == "ip_not_allowed"
+    assert allowed.status_code == 200
+
+
+def test_readiness_exposes_runtime_alerts_for_unknown_order(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("CONSOLE_AUTH_DISABLED", "1")
+    config_path = tmp_path / "config.yaml"
+    db_path = tmp_path / "trader.sqlite3"
+    audit_path = tmp_path / "audit.jsonl"
+    write_config(config_path, db_path, audit_path, symbols=["ETH/USDT:USDT"])
+    store = SQLiteStore(str(db_path), str(audit_path))
+    try:
+        store.insert(
+            "order_lifecycle",
+            {
+                "status": "unknown",
+                "order_type": "market",
+                "client_order_id": "entry-unknown",
+                "symbol": "ETH/USDT:USDT",
+                "reason": "exchange_timeout",
+            },
+            "ETH/USDT:USDT",
+        )
+    finally:
+        store.close()
+
+    client = TestClient(create_app(str(config_path)))
+    body = client.get("/api/system/readiness").json()
+    events = {item["event"] for item in body["runtime_alerts"]}
+
+    assert "order_status_unknown" in events
+    assert body["runtime_alert_summary"]["total"] >= 1
+    alerts = client.get("/api/system/alerts").json()
+    assert alerts["summary"]["total"] == body["runtime_alert_summary"]["total"]
+
+
 def test_console_context_reload_does_not_close_inflight_store(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
     db_path = tmp_path / "trader.sqlite3"

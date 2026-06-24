@@ -114,7 +114,26 @@ export type SystemReadiness = {
   latest_worker_heartbeats?: Record<string, DbRow | null>;
   worker_heartbeat_details?: WorkerHeartbeatDetail[];
   latest_maintenance?: DbRow | null;
+  runtime_alerts?: RuntimeAlert[];
+  runtime_alert_summary?: RuntimeAlertSummary;
   checks: ReadinessCheck[];
+};
+
+export type RuntimeAlert = {
+  event: string;
+  level: "info" | "warn" | "critical";
+  source: string;
+  message: string;
+  execution_mode?: string;
+  created_at?: string;
+  payload?: Record<string, unknown>;
+};
+
+export type RuntimeAlertSummary = {
+  total: number;
+  critical: number;
+  warn: number;
+  status: "ok" | "warn" | "block";
 };
 
 export type WorkerHeartbeatDetail = {
