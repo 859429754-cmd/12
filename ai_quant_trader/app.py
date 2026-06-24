@@ -1080,7 +1080,14 @@ class TradingApp:
         if position.side == Side.FLAT or abs(position.qty) <= 0:
             return None
         candles_1m = await self.market.fetch_ohlcv(symbol, "1m", limit=5, source="auto", closed_only=False)
-        signal = self._fixed_atr_stop_signal(symbol, timeframe, candles_1m, position)
+        signal = self._fixed_atr_stop_signal(
+            symbol,
+            timeframe,
+            candles_1m,
+            position,
+            trigger_price=position.mark_price,
+            use_candle_extremes=False,
+        )
         if signal is None:
             return None
         order = await self.order_lifecycle.close_position(self.execution, symbol, reason="software_fixed_atr_stop")
@@ -1158,13 +1165,24 @@ class TradingApp:
         stop_signal = self._fixed_atr_stop_signal(symbol, timeframe, candles, position)
         return stop_signal or signal
 
-    def _fixed_atr_stop_signal(self, symbol: str, timeframe: str, candles, position: PositionSnapshot):
+    def _fixed_atr_stop_signal(
+        self,
+        symbol: str,
+        timeframe: str,
+        candles,
+        position: PositionSnapshot,
+        *,
+        trigger_price: float | None = None,
+        use_candle_extremes: bool = True,
+    ):
         state = self.trend_state.get(symbol)
         if state is None or position.side == Side.FLAT or abs(position.qty) <= 0 or len(candles) == 0:
             return None
         last = candles.iloc[-1]
-        current_price = float(last["close"])
-        if position.side == Side.LONG and state.side == Side.LONG and float(last["low"]) <= state.stop_loss_price:
+        current_price = float(trigger_price or position.mark_price or last["close"])
+        long_touched = float(last["low"]) <= state.stop_loss_price if use_candle_extremes else current_price <= state.stop_loss_price
+        short_touched = float(last["high"]) >= state.stop_loss_price if use_candle_extremes else current_price >= state.stop_loss_price
+        if position.side == Side.LONG and state.side == Side.LONG and long_touched:
             return self.trend_strategies[symbol].generate_exit_signal(
                 symbol,
                 timeframe,
@@ -1178,7 +1196,7 @@ class TradingApp:
                     "atr_stop_multiple": state.atr_stop_multiple,
                 },
             )
-        if position.side == Side.SHORT and state.side == Side.SHORT and float(last["high"]) >= state.stop_loss_price:
+        if position.side == Side.SHORT and state.side == Side.SHORT and short_touched:
             return self.trend_strategies[symbol].generate_exit_signal(
                 symbol,
                 timeframe,

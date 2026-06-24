@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -277,6 +278,62 @@ followers:
         follower_rows = app.store.fetch_payloads("follower_executions", symbol="ETH/USDT:USDT", limit=5)
         assert any(row["payload"].get("status") == "exit_mirrored" for row in follower_rows)
         assert any(row["payload"].get("reason") == "software_fixed_atr_stop" for row in follower_rows)
+    finally:
+        await app.close()
+
+
+@pytest.mark.asyncio
+async def test_software_atr_stop_uses_exchange_mark_not_external_1m_wick_for_short(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    db_path = tmp_path / "trader.sqlite3"
+    audit_path = tmp_path / "audit.jsonl"
+    _write_config(config_path, db_path, audit_path)
+
+    app = TradingApp(str(config_path))
+    mock_state = tmp_path / "mock_trend.json"
+    app.execution = MockExchangeGateway(str(mock_state))
+    app.order_lifecycle.gateway_mode = "mock"
+
+    async def wick_candles(*args, **kwargs):  # noqa: ANN002, ANN003
+        return pd.DataFrame(
+            {
+                "timestamp": pd.date_range("2026-06-24 16:00:00", periods=5, freq="1min", tz="UTC"),
+                "open": [1620.0] * 5,
+                "high": [1650.0] * 5,
+                "low": [1619.0] * 5,
+                "close": [1620.28] * 5,
+                "volume": [1000.0] * 5,
+            }
+        )
+
+    monkeypatch.setattr(app.market, "fetch_ohlcv", wick_candles)
+
+    try:
+        await app.execution.create_market_order(
+            OrderRequest(
+                symbol="ETH/USDT:USDT",
+                side="sell",
+                amount=0.25,
+                reduce_only=False,
+                client_order_id="seed_short",
+                reason="test_seed_short",
+            )
+        )
+        state = json.loads(mock_state.read_text(encoding="utf-8"))
+        state["positions"]["ETH/USDT:USDT"]["entry_price"] = 1620.2
+        state["positions"]["ETH/USDT:USDT"]["mark_price"] = 1620.28
+        mock_state.write_text(json.dumps(state), encoding="utf-8")
+        app.trend_state.record_entry("ETH/USDT:USDT", Side.SHORT, 1620.2, atr_value=15.683218100864998, atr_stop_multiple=1.5)
+
+        order = await app._enforce_fixed_atr_stop_once("ETH/USDT:USDT", "1h")
+
+        assert order is None
+        position = (await app.execution.fetch_positions(["ETH/USDT:USDT"]))[0]
+        assert position.side == Side.SHORT
+        assert position.qty == pytest.approx(0.25)
     finally:
         await app.close()
 
