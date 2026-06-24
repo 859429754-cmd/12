@@ -20,6 +20,8 @@ class MaintenanceResult:
     offsite_backup_bytes: int
     restore_drill_status: str
     restore_drill_path: str | None
+    retained_restore_drills: list[str]
+    pruned_restore_drills: list[str]
     rotated_logs: list[str]
     retained_backups: list[str]
     pruned_backups: list[str]
@@ -182,6 +184,7 @@ def run_runtime_maintenance(
     max_log_bytes: int = 10 * 1024 * 1024,
     keep: int = 5,
     backup_keep: int = 24,
+    restore_drill_keep: int = 3,
     min_free_bytes: int = 1_000_000_000,
     min_free_ratio: float = 0.10,
 ) -> MaintenanceResult:
@@ -214,6 +217,14 @@ def run_runtime_maintenance(
             restore_drill_status, restore_drill_path = run_restore_drill(backup_path, restore_drill_dir)
             if restore_drill_status != "ok":
                 warnings.append(f"sqlite_restore_drill:{restore_drill_status}")
+    retained_restore_drills: list[Path] = []
+    pruned_restore_drills: list[Path] = []
+    if restore_drill_dir:
+        retained_restore_drills, pruned_restore_drills = prune_backups(
+            restore_drill_dir,
+            keep=restore_drill_keep,
+            pattern="*.restore.sqlite3",
+        )
 
     rotated: list[str] = []
     for item in [audit_log_path, *(log_paths or [])]:
@@ -232,6 +243,8 @@ def run_runtime_maintenance(
         offsite_backup_bytes=offsite_backup_path.stat().st_size if offsite_backup_path else 0,
         restore_drill_status=restore_drill_status,
         restore_drill_path=str(restore_drill_path) if restore_drill_path else None,
+        retained_restore_drills=[str(path) for path in retained_restore_drills],
+        pruned_restore_drills=[str(path) for path in pruned_restore_drills],
         rotated_logs=rotated,
         retained_backups=[str(path) for path in retained],
         pruned_backups=[str(path) for path in pruned],

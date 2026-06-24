@@ -29,9 +29,10 @@ def test_systemd_units_use_restart_and_watchdogs() -> None:
     assert "scripts/http_readiness_check.py" in watchdog
     assert "--mode health" in watchdog
     assert "--mode readiness" not in watchdog
-    assert "scripts/runtime_maintenance.py" in maintenance
+    assert "current/scripts/runtime_maintenance.py" in maintenance
     assert "--backup-keep" in maintenance
     assert "--restore-drill-dir" in maintenance
+    assert "--restore-drill-keep 3" in maintenance
     assert "current/scripts/runtime_alerts.py" in alerts
     assert "OnUnitActiveSec=60" in alerts_timer
 

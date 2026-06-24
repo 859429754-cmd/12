@@ -95,6 +95,7 @@ def test_log_rotation_and_runtime_maintenance(tmp_path: Path) -> None:
     assert result.offsite_backup_bytes > 0
     assert result.restore_drill_status == "ok"
     assert result.restore_drill_path is not None
+    assert result.retained_restore_drills
     assert result.disk_status in {"ok", "block"}
     assert result.retained_backups
 
@@ -118,6 +119,26 @@ def test_backup_retention_prunes_oldest_files(tmp_path: Path) -> None:
     assert len(retained) == 2
     assert len(pruned) == 2
     assert all(not path.exists() for path in pruned)
+
+
+def test_runtime_maintenance_prunes_restore_drills(tmp_path: Path) -> None:
+    db_path = tmp_path / "runtime.sqlite3"
+    audit_log = tmp_path / "audit.jsonl"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE sample (id INTEGER PRIMARY KEY)")
+    audit_log.write_text("ok", encoding="utf-8")
+
+    for _ in range(4):
+        run_runtime_maintenance(
+            database_path=db_path,
+            audit_log_path=audit_log,
+            backup_dir=tmp_path / "backups",
+            restore_drill_dir=tmp_path / "restore-drills",
+            restore_drill_keep=2,
+        )
+
+    drills = list((tmp_path / "restore-drills").glob("*.restore.sqlite3"))
+    assert len(drills) <= 2
 
 
 def test_disk_space_status_blocks_unrealistic_floor(tmp_path: Path) -> None:

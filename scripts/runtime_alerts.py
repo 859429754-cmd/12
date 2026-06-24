@@ -10,8 +10,10 @@ import urllib.request
 
 
 def _auth_header() -> dict[str, str]:
-    user = os.getenv("CONSOLE_ALERT_USER") or os.getenv("CONSOLE_BASIC_USER") or os.getenv("CONSOLE_ADMIN_USER")
-    password = os.getenv("CONSOLE_ALERT_PASSWORD") or os.getenv("CONSOLE_BASIC_PASSWORD") or os.getenv("CONSOLE_ADMIN_PASSWORD")
+    user = _clean_env_secret(os.getenv("CONSOLE_ALERT_USER") or os.getenv("CONSOLE_BASIC_USER") or os.getenv("CONSOLE_ADMIN_USER"))
+    password = _clean_env_secret(
+        os.getenv("CONSOLE_ALERT_PASSWORD") or os.getenv("CONSOLE_BASIC_PASSWORD") or os.getenv("CONSOLE_ADMIN_PASSWORD")
+    )
     if not user or not password:
         user, password = _auth_from_console_users_json()
     if not user or not password:
@@ -34,11 +36,18 @@ def _auth_from_console_users_json() -> tuple[str | None, str | None]:
     candidates = [item for item in users if isinstance(item, dict)]
     candidates.sort(key=lambda item: 0 if str(item.get("role") or "").lower() == "admin" else 1)
     for item in candidates:
-        username = str(item.get("username") or "").strip()
-        password = str(item.get("password") or "").strip()
+        username = _clean_env_secret(str(item.get("username") or ""))
+        password = _clean_env_secret(str(item.get("password") or ""))
         if username and password:
             return username, password
     return None, None
+
+
+def _clean_env_secret(value: str | None) -> str:
+    cleaned = str(value or "").strip()
+    if len(cleaned) >= 2 and cleaned[0] == cleaned[-1] and cleaned[0] in {"'", '"'}:
+        cleaned = cleaned[1:-1].strip()
+    return cleaned
 
 
 def _http_json(url: str, *, timeout: float, payload: dict | None = None) -> dict:

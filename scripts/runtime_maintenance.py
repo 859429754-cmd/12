@@ -20,6 +20,7 @@ def main() -> None:
     parser.add_argument("--max-log-mb", type=float, default=10.0, help="Rotate audit log above this size.")
     parser.add_argument("--keep", type=int, default=5, help="Number of rotated audit logs to keep.")
     parser.add_argument("--backup-keep", type=int, default=24, help="Number of compressed SQLite backups to retain.")
+    parser.add_argument("--restore-drill-keep", type=int, default=3, help="Number of restored SQLite drill files to retain.")
     parser.add_argument("--min-free-gb", type=float, default=1.0, help="Warn when free disk space is below this value.")
     parser.add_argument("--min-free-ratio", type=float, default=0.10, help="Warn when free disk ratio is below this value.")
     args = parser.parse_args()
@@ -34,6 +35,7 @@ def main() -> None:
         max_log_bytes=max(int(args.max_log_mb * 1024 * 1024), 1),
         keep=args.keep,
         backup_keep=args.backup_keep,
+        restore_drill_keep=args.restore_drill_keep,
         min_free_bytes=max(int(args.min_free_gb * 1024 * 1024 * 1024), 1),
         min_free_ratio=args.min_free_ratio,
     )
