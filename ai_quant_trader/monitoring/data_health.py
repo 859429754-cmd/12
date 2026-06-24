@@ -42,6 +42,10 @@ class DataHealthMonitor:
     def _ohlcv_check(self, timeframe: str, candles: Any) -> DataHealthCheck:
         if candles is None or len(candles) == 0:
             return DataHealthCheck(name="ohlcv", status=HealthStatus.BLOCK, reason="ohlcv_empty")
+        attrs = getattr(candles, "attrs", {}) or {}
+        data_source = str(attrs.get("data_source") or "").strip().lower()
+        if data_source == "synthetic":
+            return DataHealthCheck(name="ohlcv", status=HealthStatus.BLOCK, reason="ohlcv_synthetic_source")
         try:
             timestamp = candles.iloc[-1].get("timestamp")
             last_ts = self._parse_timestamp(timestamp)

@@ -68,6 +68,36 @@ def test_data_health_uses_candle_close_time_for_freshness() -> None:
     assert 25 * 60 <= ohlcv_check.age_seconds <= 31 * 60
 
 
+def test_data_health_blocks_synthetic_ohlcv_source() -> None:
+    candles = pd.DataFrame(
+        [
+            {
+                "timestamp": datetime.now(UTC) - timedelta(hours=1),
+                "open": 1.0,
+                "high": 1.0,
+                "low": 1.0,
+                "close": 1.0,
+                "volume": 1.0,
+            }
+        ]
+    )
+    candles.attrs["data_source"] = "synthetic"
+    candles.attrs["data_warning"] = "real exchanges unavailable"
+    monitor = DataHealthMonitor(stale_data_seconds=300, news_max_age_hours=6)
+
+    report = monitor.evaluate_symbol(
+        symbol="ETH/USDT:USDT",
+        timeframe="1h",
+        candles=candles,
+        news=NewsDigest(),
+        orderflow=AggregatedOrderflow(symbol="ETH/USDT:USDT", data_quality=0.9, source_count=2),
+    )
+
+    assert report.status == HealthStatus.BLOCK
+    assert report.can_open_new_entries is False
+    assert "ohlcv_synthetic_source" in report.reason
+
+
 def test_data_health_distinguishes_month_from_minute_timeframe() -> None:
     monitor = DataHealthMonitor(stale_data_seconds=300, news_max_age_hours=6)
 

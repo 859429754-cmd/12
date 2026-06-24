@@ -247,6 +247,7 @@ class TradingApp:
                     self.trend_state.clear(symbol_cfg.symbol)
                     self.store.insert("orders", order, symbol_cfg.symbol)
                     await self._mirror_exit_to_followers(symbol_cfg.symbol, signal, ai, risk.reason)
+                    positions = await self._fetch_positions(risk_symbols)
 
             if risk.allowed and signal.action in {SignalAction.LONG, SignalAction.SHORT}:
                 if not data_health.can_open_new_entries:
@@ -308,6 +309,7 @@ class TradingApp:
                     await self._cancel_native_stop_order(symbol_cfg.symbol)
                     self.trend_state.clear(symbol_cfg.symbol)
                     self.store.insert("orders", close_order, symbol_cfg.symbol)
+                    positions = await self._fetch_positions(risk_symbols)
                 entry_request = OrderRequest(
                     symbol=symbol_cfg.symbol,
                     side="buy" if signal.action == SignalAction.LONG else "sell",
@@ -338,6 +340,7 @@ class TradingApp:
                 if entry_state is not None:
                     await self._place_native_stop_loss(symbol_cfg.symbol, signal, entry_state, risk.clipped_qty)
                     await self._mirror_entry_to_followers(symbol_cfg.symbol, signal, ai, risk, order)
+                    positions = await self._fetch_positions(risk_symbols)
 
             rows.append((signal, ai, aggregated, zone, risk))
 
@@ -1393,6 +1396,7 @@ class TradingApp:
             "strategy_action": signal.action.value,
             "strategy_symbol": signal.symbol,
             "strategy_timeframe": signal.timeframe,
+            "signal_current_price": float(signal.current_price),
             "risk_position_tier": risk.position_tier,
             "risk_position_scale": float(risk.position_scale),
             "risk_decision_score": float(risk.decision_score),

@@ -108,6 +108,18 @@ class MockExchangeGateway:
     async def contract_size(self, symbol: str) -> float:
         return 1.0
 
+    def _reference_price_from_request(self, request: OrderRequest) -> float:
+        metadata = request.metadata or {}
+        for key in ("signal_current_price", "reference_price", "current_price"):
+            value = metadata.get(key)
+            try:
+                price = float(value)
+            except (TypeError, ValueError):
+                continue
+            if price > 0:
+                return price
+        return 0.0
+
     async def create_market_order(self, request: OrderRequest) -> OrderResult:
         state = self._load_state()
         for existing in state.setdefault("orders", []):
@@ -115,13 +127,13 @@ class MockExchangeGateway:
                 return OrderResult.model_validate(existing)
         order_id = f"mock_{uuid.uuid4().hex[:12]}"
         amount = float(request.amount)
-        price = 0.0
+        price = self._reference_price_from_request(request)
         self._apply_position_update(state, request, amount, price)
         result = OrderResult(
             symbol=request.symbol,
             side=request.side,
             amount=amount,
-            price=None,
+            price=price if price > 0 else None,
             status="mock_created",
             dry_run=True,
             exchange_order_id=order_id,

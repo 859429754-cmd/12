@@ -23,6 +23,7 @@ from ai_quant_trader.core.models import (
     OrderLifecycleStatus,
 )
 from ai_quant_trader.execution.gateway.mock import MockExchangeGateway
+from ai_quant_trader.strategy.trend_state import TrendStateStore
 
 
 def _write_config(path: Path, db_path: Path, audit_path: Path) -> None:
@@ -55,6 +56,48 @@ strategy:
 ai:
   ai_enabled_symbols:
     - "ETH/USDT:USDT"
+news:
+  jin10_enabled: false
+  refresh_interval_minutes: 10
+""",
+        encoding="utf-8",
+    )
+
+
+def _write_two_symbol_config(path: Path, db_path: Path, audit_path: Path) -> None:
+    path.write_text(
+        f"""
+runtime:
+  execution_mode: "mock"
+  dry_run: true
+  database_path: "{db_path.as_posix()}"
+  audit_log_path: "{audit_path.as_posix()}"
+risk:
+  max_total_leverage: 1.0
+  ai_full_size_confidence: 0.75
+  min_confidence_to_trade: 0.55
+  ai_dynamic_position_sizing: true
+symbols:
+  - symbol: "ETH/USDT:USDT"
+    timeframe: "1h"
+  - symbol: "BTC/USDT:USDT"
+    timeframe: "1h"
+strategy:
+  trend:
+    variant: "with_volume"
+    kc_length: 20
+    kc_scalar: 2.8
+    atr_length: 14
+    atr_stop_multiple: 1.5
+    volume_multiple: 2.5
+    position_fraction: 1.0
+    use_ema_filter: false
+    use_volume_filter: true
+    momentum_filter: "kdj"
+ai:
+  ai_enabled_symbols:
+    - "ETH/USDT:USDT"
+    - "BTC/USDT:USDT"
 news:
   jin10_enabled: false
   refresh_interval_minutes: 10
@@ -99,6 +142,12 @@ def _ai(action: SignalAction) -> AiDecision:
     )
 
 
+def _ai_for_symbol(symbol: str, action: SignalAction) -> AiDecision:
+    decision = _ai(action)
+    decision.symbol = symbol
+    return decision
+
+
 @pytest.mark.asyncio
 async def test_trading_cycle_opens_places_stop_then_exits_and_cancels_stop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = tmp_path / "config.yaml"
@@ -108,6 +157,7 @@ async def test_trading_cycle_opens_places_stop_then_exits_and_cancels_stop(tmp_p
 
     app = TradingApp(str(config_path))
     app.execution = MockExchangeGateway(str(tmp_path / "mock_exchange.json"))
+    app.trend_state = TrendStateStore(str(tmp_path / "state_trend.json"))
     app.order_lifecycle.gateway_mode = "mock"
     app.control.authorize_opening(app.state, ["ETH/USDT:USDT"], operator_id="test", dry_run=True)
     app.control.enable_symbol_report(app.state, ["ETH/USDT:USDT"], operator_id="test")
@@ -194,6 +244,94 @@ async def test_trading_cycle_opens_places_stop_then_exits_and_cancels_stop(tmp_p
         latest_lifecycle = app.store.fetch_payloads("order_lifecycle", symbol="ETH/USDT:USDT", limit=20)
         assert any(row["payload"].get("order_type") == "cancel" for row in latest_lifecycle)
         assert app.trend_state.get("ETH/USDT:USDT") is None
+    finally:
+        await app.close()
+
+
+@pytest.mark.asyncio
+async def test_run_once_refreshes_positions_after_entry_before_next_symbol_risk(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    db_path = tmp_path / "trader.sqlite3"
+    audit_path = tmp_path / "audit.jsonl"
+    _write_two_symbol_config(config_path, db_path, audit_path)
+
+    app = TradingApp(str(config_path))
+    app.execution = MockExchangeGateway(str(tmp_path / "mock_exchange.json"))
+    app.trend_state = TrendStateStore(str(tmp_path / "state_trend.json"))
+    app.order_lifecycle.gateway_mode = "mock"
+    app.control.authorize_opening(app.state, ["ETH/USDT:USDT", "BTC/USDT:USDT"], operator_id="test", dry_run=True)
+    app.control.enable_symbol_report(app.state, ["ETH/USDT:USDT", "BTC/USDT:USDT"], operator_id="test")
+
+    async def fake_news(live_news: bool):  # noqa: ANN001
+        from ai_quant_trader.core.models import NewsDigest
+
+        return NewsDigest(summary="mock neutral news", crypto_sentiment=Alignment.ALIGNED)
+
+    async def fake_fetch_ohlcv(*args, **kwargs):  # noqa: ANN002, ANN003
+        return _candles()
+
+    async def fake_fetch_summaries(*args, **kwargs):  # noqa: ANN002, ANN003
+        return []
+
+    async def fake_market_leader_context(*args, **kwargs):  # noqa: ANN002, ANN003
+        return None
+
+    async def fake_analyze(call_type, signal, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        return _ai_for_symbol(signal.symbol, signal.action)
+
+    def fake_regime(symbol, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        return RegimePattern(
+            symbol=symbol,
+            regime_candidate="trend",
+            strategy_allowed="trend",
+            trend_score=0.9,
+            range_score=0.1,
+            reason_codes=["mock_trend_allowed"],
+        )
+
+    def fake_signal(symbol, timeframe, candles, position, equity):  # noqa: ANN001
+        return StrategySignal(
+            symbol=symbol,
+            timeframe=timeframe,
+            action=SignalAction.LONG,
+            current_price=2000.0,
+            suggested_qty=0.5,
+            signal_strength=0.95,
+            technical_evidence={
+                "strategy_allowed": "trend",
+                "entry_stop_atr": 20.0,
+                "atr": 20.0,
+                "atr_stop_multiple": 1.5,
+            },
+        )
+
+    monkeypatch.setattr(app, "_news_for_trading_cycle", fake_news)
+    monkeypatch.setattr(app.market, "fetch_ohlcv", fake_fetch_ohlcv)
+    monkeypatch.setattr(app.orderflow_client, "fetch_summaries", fake_fetch_summaries)
+    monkeypatch.setattr(app, "_market_leader_context", fake_market_leader_context)
+    monkeypatch.setattr(app, "_analyze_with_deepseek_budget", fake_analyze)
+    monkeypatch.setattr(app.regime_patterns, "analyze", fake_regime)
+    monkeypatch.setattr(app, "_generate_local_signal", fake_signal)
+    monkeypatch.setattr(
+        app.data_health,
+        "evaluate_symbol",
+        lambda symbol, **kwargs: DataHealthReport(symbol=symbol, status=HealthStatus.OK, can_open_new_entries=True),
+    )
+
+    try:
+        await app.run_once(equity=1000.0, live_news=False)
+
+        eth_orders = app.store.fetch_payloads("orders", symbol="ETH/USDT:USDT", limit=10)
+        btc_orders = app.store.fetch_payloads("orders", symbol="BTC/USDT:USDT", limit=10)
+        btc_lifecycle = app.store.fetch_payloads("order_lifecycle", symbol="BTC/USDT:USDT", limit=10)
+
+        assert any(row["payload"].get("status") == "mock_created" for row in eth_orders)
+        assert not any(row["payload"].get("status") == "mock_created" for row in btc_orders)
+        assert any(row["payload"].get("state") == "blocked_before_submit" for row in btc_lifecycle)
+        assert any(row["payload"].get("reason") == "max_total_leverage_reached" for row in btc_lifecycle)
     finally:
         await app.close()
 
