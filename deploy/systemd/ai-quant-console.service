@@ -11,7 +11,7 @@ Environment=MALLOC_ARENA_MAX=2
 Environment=PYTHONMALLOC=malloc
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONPATH=/root/ai-quant-trader/current
-ExecStart=/root/ai-quant-trader/.venv/bin/uvicorn ai_quant_trader.api.server:app --host 127.0.0.1 --port 8090
+ExecStart=/root/ai-quant-trader/.venv/bin/python -m uvicorn --app-dir /root/ai-quant-trader/current ai_quant_trader.api.server:app --host 127.0.0.1 --port 8090
 Restart=always
 RestartSec=5
 TimeoutStopSec=30

@@ -11,7 +11,7 @@ Environment=MALLOC_ARENA_MAX=2
 Environment=PYTHONMALLOC=malloc
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONPATH=/root/ai-quant-trader/current
-ExecStart=/root/ai-quant-trader/.venv/bin/python -m ai_quant_trader.app
+ExecStart=/root/ai-quant-trader/.venv/bin/python current/main.py
 Restart=always
 RestartSec=10
 WatchdogSec=60

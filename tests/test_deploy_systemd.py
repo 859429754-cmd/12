@@ -23,10 +23,12 @@ def test_systemd_units_use_restart_and_watchdogs() -> None:
     assert "MALLOC_ARENA_MAX=2" in trader
     assert "PYTHONPATH=/root/ai-quant-trader/current" in console
     assert "PYTHONPATH=/root/ai-quant-trader/current" in trader
+    assert "current/main.py" in trader
+    assert "--app-dir /root/ai-quant-trader/current" in console
     assert "Restart=always" in order_status
     assert "main.py --order-status-worker" in order_status
     assert "PYTHONPATH=/root/ai-quant-trader/current" in order_status
-    assert "scripts/http_readiness_check.py" in watchdog
+    assert "current/scripts/http_readiness_check.py" in watchdog
     assert "--mode health" in watchdog
     assert "--mode readiness" not in watchdog
     assert "current/scripts/runtime_maintenance.py" in maintenance
