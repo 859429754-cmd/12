@@ -13,9 +13,32 @@ def _auth_header() -> dict[str, str]:
     user = os.getenv("CONSOLE_ALERT_USER") or os.getenv("CONSOLE_BASIC_USER") or os.getenv("CONSOLE_ADMIN_USER")
     password = os.getenv("CONSOLE_ALERT_PASSWORD") or os.getenv("CONSOLE_BASIC_PASSWORD") or os.getenv("CONSOLE_ADMIN_PASSWORD")
     if not user or not password:
+        user, password = _auth_from_console_users_json()
+    if not user or not password:
         return {}
     token = base64.b64encode(f"{user}:{password}".encode("utf-8")).decode("ascii")
     return {"Authorization": f"Basic {token}"}
+
+
+def _auth_from_console_users_json() -> tuple[str | None, str | None]:
+    raw = os.getenv("CONSOLE_USERS_JSON", "").strip()
+    if not raw:
+        return None, None
+    try:
+        loaded = json.loads(raw)
+    except json.JSONDecodeError:
+        return None, None
+    users = loaded.get("users") if isinstance(loaded, dict) else loaded
+    if not isinstance(users, list):
+        return None, None
+    candidates = [item for item in users if isinstance(item, dict)]
+    candidates.sort(key=lambda item: 0 if str(item.get("role") or "").lower() == "admin" else 1)
+    for item in candidates:
+        username = str(item.get("username") or "").strip()
+        password = str(item.get("password") or "").strip()
+        if username and password:
+            return username, password
+    return None, None
 
 
 def _http_json(url: str, *, timeout: float, payload: dict | None = None) -> dict:
