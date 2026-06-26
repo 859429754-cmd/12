@@ -21,6 +21,7 @@ import type { ReactNode } from "react";
 import { api } from "./lib/api";
 import type {
   ApiList,
+  AiPositionTierAudit,
   BacktestJob,
   BacktestResult,
   BacktestTrade,
@@ -121,6 +122,7 @@ export function App() {
   const [decisions, setDecisions] = useState<Array<DbRow>>([]);
   const [riskSummary, setRiskSummary] = useState<Record<string, unknown> | null>(null);
   const [readiness, setReadiness] = useState<SystemReadiness | null>(null);
+  const [aiTierAudit, setAiTierAudit] = useState<AiPositionTierAudit | null>(null);
   const [accountSlots, setAccountSlots] = useState<ExecutionAccountSlot[]>([]);
   const [denseZone, setDenseZone] = useState<DbRow<DenseZonePayload> | null>(null);
   const [news, setNews] = useState<NewsResponse>({ items: [] });
@@ -249,6 +251,7 @@ export function App() {
         nextOrders,
         nextOrderLifecycle,
         nextDecisions,
+        nextAiTierAudit,
         nextDenseZone,
       ] =
         await Promise.all([
@@ -262,6 +265,15 @@ export function App() {
           api<ApiList>(`/api/orders?limit=80&symbol=${encodeURIComponent(symbol)}`, { retries: 1 }),
           api<ApiList>(`/api/order-lifecycle?limit=120&symbol=${encodeURIComponent(symbol)}&account_slot=${encodeURIComponent(primaryAccountSlot)}`, { retries: 1 }),
           api<ApiList>(`/api/decisions?limit=80&symbol=${encodeURIComponent(symbol)}`, { retries: 1 }),
+          safe(api<AiPositionTierAudit>(`/api/audits/ai-position-tiers?symbol=${encodeURIComponent(symbol)}&account_slot=${encodeURIComponent(primaryAccountSlot)}&min_sample_warning=30`, { retries: 1 }), {
+            ok: false,
+            symbol,
+            account_slot: primaryAccountSlot,
+            overall: {},
+            by_tier: {},
+            shadow_by_tier: {},
+            trades: [],
+          }),
           safe(api<{ item: DbRow<DenseZonePayload> | null }>(`/api/dense-zones/latest?symbol=${encodeURIComponent(symbol)}`, { retries: 1 }), { item: null }),
         ]);
       setStatus(nextStatus);
@@ -274,6 +286,7 @@ export function App() {
       setOrders(nextOrders.items || []);
       setOrderLifecycle(nextOrderLifecycle.items || []);
       setDecisions(nextDecisions.items || []);
+      setAiTierAudit(nextAiTierAudit);
       setDenseZone(nextDenseZone.item || null);
     } catch (error) {
       setWarning(errText(error));
@@ -418,6 +431,7 @@ export function App() {
         positions={positions}
         orders={orders}
         orderLifecycle={orderLifecycle}
+        aiTierAudit={aiTierAudit}
         accountSlots={accountSlots}
         denseZone={denseZone}
         riskSummary={riskSummary}
@@ -986,6 +1000,7 @@ function WorkspaceBody({
   positions,
   orders,
   orderLifecycle,
+  aiTierAudit,
   accountSlots,
   denseZone,
   riskSummary,
@@ -1016,6 +1031,7 @@ function WorkspaceBody({
   positions: Array<DbRow>;
   orders: Array<DbRow>;
   orderLifecycle: Array<DbRow>;
+  aiTierAudit: AiPositionTierAudit | null;
   accountSlots: ExecutionAccountSlot[];
   denseZone: DbRow<DenseZonePayload> | null;
   riskSummary: Record<string, unknown> | null;
@@ -1052,6 +1068,7 @@ function WorkspaceBody({
         positions={positions}
         orders={orders}
         orderLifecycle={orderLifecycle}
+        aiTierAudit={aiTierAudit}
         decisions={decisions}
         denseZone={denseZone}
         news={news}
@@ -1679,6 +1696,7 @@ function DashboardWorkspace({
   positions,
   orders,
   orderLifecycle,
+  aiTierAudit,
   decisions,
   denseZone,
   news,
@@ -1696,6 +1714,7 @@ function DashboardWorkspace({
   positions: Array<DbRow>;
   orders: Array<DbRow>;
   orderLifecycle: Array<DbRow>;
+  aiTierAudit: AiPositionTierAudit | null;
   decisions: Array<DbRow>;
   denseZone: DbRow<DenseZonePayload> | null;
   news: NewsResponse;
@@ -1821,6 +1840,7 @@ function DashboardWorkspace({
           <DashboardPanel title={<><BrainCircuit size={14} /> AI 决策与仓位</>} action={<span className="rounded-full border border-[#1d4ed8] bg-[#102a5c] px-3 py-1 text-[11px] text-[#bfdbfe]">只缩放 / 否决</span>}>
             <DecisionSummary data={latestDecision} position={position} sizingContext={sizingContext} />
             <DecisionNarrative data={latestDecision} position={position} sizingContext={sizingContext} />
+            <AiTierAuditPanel audit={aiTierAudit} />
           </DashboardPanel>
 
           <DashboardPanel title={<><ShieldCheck size={14} /> 实盘安全闸</>} action={<span className={`rounded-full px-3 py-1 text-[11px] ${readinessToneClass(readinessOverall)}`}>{readinessLabel(readinessOverall)}</span>}>
@@ -2588,6 +2608,19 @@ function pnlTone(value: unknown): "default" | "good" | "bad" | "warn" {
   const number = Number(value);
   if (!Number.isFinite(number)) return "default";
   return number >= 0 ? "good" : "bad";
+}
+
+function pnlClass(value: unknown): string {
+  const tone = pnlTone(value);
+  if (tone === "good") return "text-[#22c55e]";
+  if (tone === "bad") return "text-[#fb7185]";
+  return "text-[#e5eefb]";
+}
+
+function signedMoney(value: unknown): string {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "--";
+  return `${number > 0 ? "+" : ""}${money(number)}`;
 }
 
 function positionSideLabel(value: unknown) {
@@ -4802,6 +4835,61 @@ function AiSizingTierStrip({
                 <div className={`h-full rounded-full ${active ? "bg-[#60a5fa]" : "bg-[#334155]"}`} style={{ width: tier.scale }} />
               </div>
               <div className="mt-2 min-h-8 text-[11px] leading-4 text-[#94a3b8]">{tier.body}</div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function AiTierAuditPanel({ audit }: { audit: AiPositionTierAudit | null }) {
+  const overall = audit?.overall || {};
+  const shadow = audit?.shadow_by_tier || {};
+  const closed = Number(overall.closed || 0);
+  const minClosed = Number(audit?.min_closed_trades_for_reliable_read || 30);
+  const aiDelta = Number(overall.total_ai_delta_pnl_usdt || 0);
+  const tiers = [
+    { key: "weak", label: "弱仓 25%" },
+    { key: "normal", label: "标准仓 50%" },
+    { key: "strong", label: "强仓 75%" },
+    { key: "full", label: "满仓 100%" },
+  ];
+  return (
+    <div className="mt-3 rounded-xl border border-[#263246] bg-[#0b1220] p-3 text-xs">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <div className="font-semibold text-[#e5eefb]">AI 仓位分档效果审计</div>
+          <div className="mt-1 text-[11px] text-[#94a3b8]">
+            用真实入场/出场价格反推 25/50/75/100% 影子仓位结果，只做审计，不影响下单。
+          </div>
+        </div>
+        <span className={`rounded-full px-3 py-1 text-[11px] ${audit?.sample_warning ? "bg-[#241806] text-[#facc15]" : "bg-[#052e1a] text-[#22c55e]"}`}>
+          {closed}/{minClosed} 闭合样本
+        </span>
+      </div>
+      <div className="grid gap-2 md:grid-cols-4">
+        <Metric label="AI 相对基准" value={signedMoney(aiDelta)} tone={pnlTone(aiDelta)} />
+        <Metric label="实际 PnL" value={signedMoney(overall.total_actual_pnl_usdt)} tone={pnlTone(overall.total_actual_pnl_usdt)} />
+        <Metric label="少亏金额" value={money(overall.loser_loss_saved_usdt)} tone="good" />
+        <Metric label="少赚金额" value={money(overall.winner_upside_missed_usdt)} tone={Number(overall.winner_upside_missed_usdt || 0) > 0 ? "warn" : "default"} />
+      </div>
+      {audit?.sample_warning ? (
+        <div className="mt-3 rounded-xl border border-[#854d0e] bg-[#241806] p-3 text-[11px] leading-5 text-[#facc15]">
+          闭合样本不足，当前只能诊断“偏保守/偏激进”的倾向，不能证明 AI 分档长期有效。最低建议 30 笔，最好 100 笔以上。
+        </div>
+      ) : null}
+      <div className="mt-3 grid gap-2 md:grid-cols-4">
+        {tiers.map((tier) => {
+          const item = shadow[tier.key] || {};
+          return (
+            <div key={tier.key} className="rounded-xl border border-[#263246] bg-[#101a2d] p-3">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-semibold text-[#e5eefb]">{tier.label}</span>
+                <span className={`${mono} text-[11px] text-[#94a3b8]`}>{num(item.closed || 0, 0)} 笔</span>
+              </div>
+              <div className={`${mono} mt-2 text-base font-semibold ${pnlClass(item.total_pnl_usdt)}`}>{signedMoney(item.total_pnl_usdt)}</div>
+              <div className="mt-1 text-[11px] text-[#94a3b8]">胜率 {confidencePct(item.win_rate)}</div>
             </div>
           );
         })}

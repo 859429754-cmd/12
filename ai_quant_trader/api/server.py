@@ -56,6 +56,7 @@ from ai_quant_trader.strategy.lab import (
     save_strategy_code,
     validate_strategy_code,
 )
+from scripts.ai_position_tier_audit import run_audit as run_ai_position_tier_audit
 
 
 class ConsoleAction(BaseModel):
@@ -1280,6 +1281,32 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
                 if str((row.get("payload") or {}).get("account_slot") or "default") == account_slot
             ]
         return {"items": rows}
+
+    @app.get("/api/audits/ai-position-tiers")
+    def ai_position_tier_audit(
+        symbol: str = Query(default="ETH/USDT:USDT"),
+        account_slot: str | None = None,
+        min_sample_warning: int = Query(default=30, ge=1, le=500),
+    ) -> dict[str, Any]:
+        ctx = _ctx(app)
+        ctx.reload()
+        if symbol:
+            _validate_symbols([symbol], ctx.configured_symbols(), require_any=True)
+        try:
+            summary = run_ai_position_tier_audit(
+                Path(ctx.config.runtime.database_path),
+                symbol=symbol or None,
+                account_slot=account_slot or None,
+                min_sample_warning=min_sample_warning,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"ai_position_tier_audit_failed:{type(exc).__name__}") from exc
+        return {
+            "ok": True,
+            "symbol": symbol or None,
+            "account_slot": account_slot or None,
+            **summary,
+        }
 
     @app.get("/api/decisions")
     def decisions(limit: int = Query(default=50, ge=1, le=200), symbol: str | None = None) -> dict[str, Any]:

@@ -92,6 +92,10 @@ def test_ai_position_tier_audit_detects_saved_loss_and_missed_upside(tmp_path: P
     assert summary["by_tier"]["weak"]["winner_upside_missed_usdt"] == pytest.approx(75.0)
     assert summary["by_tier"]["weak"]["total_ai_delta_pnl_usdt"] == pytest.approx(0.0)
     assert summary["by_tier"]["full"]["total_ai_delta_pnl_usdt"] == pytest.approx(0.0)
+    assert summary["shadow_by_tier"]["weak"]["total_pnl_usdt"] == pytest.approx(25.0)
+    assert summary["shadow_by_tier"]["normal"]["total_pnl_usdt"] == pytest.approx(50.0)
+    assert summary["shadow_by_tier"]["strong"]["total_pnl_usdt"] == pytest.approx(75.0)
+    assert summary["shadow_by_tier"]["full"]["total_pnl_usdt"] == pytest.approx(100.0)
 
 
 def test_ai_position_tier_audit_keeps_open_trades_separate() -> None:
@@ -145,3 +149,5 @@ def test_ai_position_tier_audit_recovers_legacy_tier_from_reason() -> None:
 
     assert summary["by_tier"]["weak"]["closed"] == 1
     assert summary["by_tier"]["weak"]["avg_position_scale"] == pytest.approx(0.25)
+    assert summary["trades"][0]["warnings"] == ["strategy_baseline_notional_estimated_from_actual_qty_and_tier"]
+    assert summary["shadow_by_tier"]["full"]["total_pnl_usdt"] == pytest.approx(40.0)

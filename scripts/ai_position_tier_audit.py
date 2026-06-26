@@ -40,6 +40,7 @@ class TradeAudit:
     ai_confidence: float | None = None
     reason: str = ""
     warnings: list[str] = field(default_factory=list)
+    shadow_tiers: dict[str, dict[str, float]] = field(default_factory=dict)
 
     @property
     def closed(self) -> bool:
@@ -202,8 +203,10 @@ def build_trade_audit(rows: list[dict[str, Any]], account_slot: str | None = Non
         actual_pnl = pnl_per_unit * qty
         baseline_pnl = None
         ai_delta = None
-        if trade.strategy_baseline_notional and trade.strategy_baseline_notional > 0 and trade.entry_price > 0:
-            baseline_qty = trade.strategy_baseline_notional / trade.entry_price
+        baseline_notional = _baseline_notional_for_shadow(trade)
+        if baseline_notional and baseline_notional > 0 and trade.entry_price > 0:
+            baseline_qty = baseline_notional / trade.entry_price
+            trade.shadow_tiers = _shadow_tiers(pnl_per_unit, baseline_qty)
             baseline_pnl = pnl_per_unit * baseline_qty
             ai_delta = actual_pnl - baseline_pnl
             if actual_pnl > 0 and baseline_pnl > actual_pnl:
@@ -223,6 +226,28 @@ def build_trade_audit(rows: list[dict[str, Any]], account_slot: str | None = Non
         trade.ai_delta_pnl_usdt = ai_delta
         open_by_key.pop(key, None)
     return trades
+
+
+def _baseline_notional_for_shadow(trade: TradeAudit) -> float | None:
+    if trade.strategy_baseline_notional and trade.strategy_baseline_notional > 0:
+        return trade.strategy_baseline_notional
+    if trade.scale > 0 and trade.entry_price > 0 and trade.entry_qty > 0:
+        trade.warnings.append("strategy_baseline_notional_estimated_from_actual_qty_and_tier")
+        return trade.entry_price * trade.entry_qty / trade.scale
+    return None
+
+
+def _shadow_tiers(pnl_per_unit: float, baseline_qty: float) -> dict[str, dict[str, float]]:
+    output: dict[str, dict[str, float]] = {}
+    for tier in ("weak", "normal", "strong", "full"):
+        scale = TIER_SCALE[tier]
+        qty = baseline_qty * scale
+        output[tier] = {
+            "scale": scale,
+            "qty": qty,
+            "pnl_usdt": pnl_per_unit * qty,
+        }
+    return output
 
 
 def _empty_tier_stats() -> dict[str, Any]:
@@ -256,6 +281,8 @@ def summarize_trades(trades: list[TradeAudit], min_sample_warning: int = 30) -> 
     overall_scores: list[float] = []
     overall_confidences: list[float] = []
 
+    shadow_summary = _empty_shadow_summary()
+
     for trade in trades:
         tier = trade.tier if trade.tier in by_tier else "unknown"
         stats = by_tier[tier]
@@ -273,6 +300,7 @@ def summarize_trades(trades: list[TradeAudit], min_sample_warning: int = 30) -> 
 
         if not trade.closed or trade.actual_pnl_usdt is None:
             continue
+        _accumulate_shadow_summary(shadow_summary, trade)
         for target in (stats, overall):
             target["closed"] += 1
             if trade.actual_pnl_usdt > 0:
@@ -290,13 +318,55 @@ def summarize_trades(trades: list[TradeAudit], min_sample_warning: int = 30) -> 
     for tier, stats in by_tier.items():
         _finish_stats(stats, scale_values[tier], score_values[tier], confidence_values[tier])
     _finish_stats(overall, overall_scales, overall_scores, overall_confidences)
+    _finish_shadow_summary(shadow_summary)
     return {
         "sample_warning": overall["closed"] < min_sample_warning,
         "min_closed_trades_for_reliable_read": min_sample_warning,
         "overall": overall,
         "by_tier": by_tier,
+        "shadow_by_tier": shadow_summary,
         "trades": [trade.__dict__ for trade in trades],
     }
+
+
+def _empty_shadow_summary() -> dict[str, Any]:
+    return {
+        tier: {
+            "closed": 0,
+            "wins": 0,
+            "losses": 0,
+            "win_rate": None,
+            "total_pnl_usdt": 0.0,
+            "avg_pnl_usdt": None,
+            "scale": TIER_SCALE[tier],
+        }
+        for tier in ("weak", "normal", "strong", "full")
+    }
+
+
+def _accumulate_shadow_summary(summary: dict[str, Any], trade: TradeAudit) -> None:
+    for tier, payload in (trade.shadow_tiers or {}).items():
+        if tier not in summary:
+            continue
+        pnl = float(payload.get("pnl_usdt") or 0.0)
+        item = summary[tier]
+        item["closed"] += 1
+        item["total_pnl_usdt"] += pnl
+        if pnl > 0:
+            item["wins"] += 1
+        elif pnl < 0:
+            item["losses"] += 1
+
+
+def _finish_shadow_summary(summary: dict[str, Any]) -> None:
+    for item in summary.values():
+        closed = int(item["closed"])
+        if closed:
+            item["win_rate"] = item["wins"] / closed
+            item["avg_pnl_usdt"] = item["total_pnl_usdt"] / closed
+        for key, value in list(item.items()):
+            if isinstance(value, float):
+                item[key] = round(value, 8)
 
 
 def _finish_stats(
@@ -370,6 +440,30 @@ def render_markdown(summary: dict[str, Any]) -> str:
                     _money(stats["winner_upside_missed_usdt"]),
                     _money(stats["loser_loss_saved_usdt"]),
                     _pct(stats["avg_position_scale"]),
+                ]
+            )
+            + " |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Shadow Ledger By Tier",
+            "",
+            "| Shadow tier | Closed | Win rate | Total PnL | Avg PnL |",
+            "|---|---:|---:|---:|---:|",
+        ]
+    )
+    for tier in ("weak", "normal", "strong", "full"):
+        stats = summary["shadow_by_tier"][tier]
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    tier,
+                    str(stats["closed"]),
+                    _pct(stats["win_rate"]),
+                    _money(stats["total_pnl_usdt"]),
+                    _money(stats["avg_pnl_usdt"]),
                 ]
             )
             + " |"

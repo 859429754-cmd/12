@@ -221,6 +221,47 @@ export type NewsResponse = ApiList & {
   summary?: string;
 };
 
+export type AiPositionTierStats = {
+  entries?: number;
+  closed?: number;
+  open?: number;
+  wins?: number;
+  losses?: number;
+  win_rate?: number | null;
+  total_actual_pnl_usdt?: number;
+  total_baseline_pnl_usdt?: number;
+  total_ai_delta_pnl_usdt?: number;
+  winner_upside_missed_usdt?: number;
+  loser_loss_saved_usdt?: number;
+  winner_extra_profit_usdt?: number;
+  loser_extra_loss_usdt?: number;
+  avg_position_scale?: number | null;
+  avg_decision_score?: number | null;
+  avg_ai_confidence?: number | null;
+};
+
+export type AiPositionShadowTierStats = {
+  closed?: number;
+  wins?: number;
+  losses?: number;
+  win_rate?: number | null;
+  total_pnl_usdt?: number;
+  avg_pnl_usdt?: number | null;
+  scale?: number;
+};
+
+export type AiPositionTierAudit = {
+  ok?: boolean;
+  symbol?: string | null;
+  account_slot?: string | null;
+  sample_warning?: boolean;
+  min_closed_trades_for_reliable_read?: number;
+  overall?: AiPositionTierStats;
+  by_tier?: Record<string, AiPositionTierStats>;
+  shadow_by_tier?: Record<string, AiPositionShadowTierStats>;
+  trades?: Array<Record<string, unknown>>;
+};
+
 export type DenseZonePayload = {
   symbol?: string;
   poc?: number;

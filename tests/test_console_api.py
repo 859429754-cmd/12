@@ -221,6 +221,69 @@ def test_order_lifecycle_endpoint_filters_account_slot(tmp_path: Path) -> None:
     assert items[0]["payload"]["metadata"]["risk_position_tier"] == "weak"
 
 
+def test_ai_position_tier_audit_endpoint_returns_shadow_ledger(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    db_path = tmp_path / "trader.sqlite3"
+    audit_path = tmp_path / "audit.jsonl"
+    write_config(config_path, db_path, audit_path, symbols=["ETH/USDT:USDT"])
+    store = SQLiteStore(str(db_path), str(audit_path))
+    try:
+        store.insert(
+            "order_lifecycle",
+            {
+                "client_order_id": "entry_1",
+                "symbol": "ETH/USDT:USDT",
+                "status": "filled",
+                "account_slot": "trend",
+                "order_type": "market",
+                "side": "buy",
+                "amount": 2.5,
+                "reduce_only": False,
+                "gateway_mode": "mock",
+                "reason": "weak_size_by_partial_consensus",
+                "order": {"price": 100, "status": "closed"},
+                "metadata": {
+                    "risk_position_tier": "weak",
+                    "risk_position_scale": 0.25,
+                    "strategy_baseline_notional": 1000,
+                    "ai_desired_notional": 250,
+                },
+            },
+            "ETH/USDT:USDT",
+        )
+        store.insert(
+            "order_lifecycle",
+            {
+                "client_order_id": "exit_1",
+                "symbol": "ETH/USDT:USDT",
+                "status": "filled",
+                "account_slot": "trend",
+                "order_type": "market",
+                "side": "sell",
+                "amount": 2.5,
+                "reduce_only": True,
+                "gateway_mode": "mock",
+                "reason": "pytest_exit",
+                "order": {"price": 110, "status": "closed"},
+                "metadata": {},
+            },
+            "ETH/USDT:USDT",
+        )
+    finally:
+        store.close()
+
+    client = TestClient(create_app(str(config_path)))
+    response = client.get("/api/audits/ai-position-tiers?symbol=ETH%2FUSDT%3AUSDT&account_slot=trend&min_sample_warning=1")
+    body = response.json()
+
+    assert response.status_code == 200
+    assert body["ok"] is True
+    assert body["overall"]["closed"] == 1
+    assert body["by_tier"]["weak"]["winner_upside_missed_usdt"] == 75
+    assert body["shadow_by_tier"]["weak"]["total_pnl_usdt"] == 25
+    assert body["shadow_by_tier"]["full"]["total_pnl_usdt"] == 100
+
+
 def test_walk_forward_proposal_is_needs_review_without_auto_apply(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
     db_path = tmp_path / "trader.sqlite3"
