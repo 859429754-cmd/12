@@ -26,13 +26,14 @@ POSITION_TIER_ORDER = ("block", "weak", "normal", "strong", "full")
 FACTOR_RANKED_SCORE_WEIGHTS = {
     "technical_signal_score": 0.18,
     "orderflow_confirmation_score": 0.20,
-    "pattern_confirmation_score": 0.13,
-    "dense_zone_breakout_score": 0.10,
-    "range_safety_score": 0.12,
-    "trend_confirmation_score": 0.12,
-    "news_safety_score": 0.07,
-    "btc_leader_score": 0.04,
-    "eth_btc_rotation_score": 0.04,
+    "news_direction_alignment_score": 0.14,
+    "pattern_confirmation_score": 0.12,
+    "range_safety_score": 0.11,
+    "trend_confirmation_score": 0.10,
+    "dense_zone_breakout_score": 0.08,
+    "news_safety_score": 0.04,
+    "btc_leader_score": 0.02,
+    "eth_btc_rotation_score": 0.01,
 }
 
 
@@ -146,11 +147,12 @@ class RiskManager:
         if (
             major_news_context
             and ai.news_alignment == Alignment.ALIGNED
-            and tier == "full"
             and (ai.orderflow_confirmation_score < 0.75 or ai.dense_zone_breakout_score < 0.65)
         ):
-            tier = "strong"
-            score_warnings.append("major_news_full_requires_orderflow_and_dense_zone_confirmation")
+            if tier == "full":
+                tier = "strong"
+            if tier in {"strong", "full"}:
+                score_warnings.append("major_news_full_requires_orderflow_and_dense_zone_confirmation")
         if ai.veto_action == VetoAction.REDUCE:
             tier = self._reduce_tier_cap(tier)
         if tier == "block":
@@ -249,6 +251,8 @@ class RiskManager:
         trend = min(max(ai.trend_confirmation_score, 0.0), 1.0)
         range_safety = 1.0 - min(max(ai.range_risk_score, 0.0), 1.0)
         news_safety = 1.0 - min(max(ai.news_risk_score, 0.0), 1.0)
+        news_direction_raw = min(max(ai.news_direction_alignment_score, 0.0), 1.0)
+        news_direction = news_direction_raw if ai.news_alignment == Alignment.ALIGNED else 0.0
         pattern = min(max(ai.pattern_confirmation_score, 0.0), 1.0)
         orderflow = min(max(ai.orderflow_confirmation_score, 0.0), 1.0)
         dense_zone = min(max(ai.dense_zone_breakout_score, 0.0), 1.0)
@@ -257,6 +261,7 @@ class RiskManager:
         score_inputs = {
             "technical_signal_score": technical,
             "orderflow_confirmation_score": orderflow,
+            "news_direction_alignment_score": news_direction,
             "pattern_confirmation_score": pattern,
             "dense_zone_breakout_score": dense_zone,
             "range_safety_score": range_safety,

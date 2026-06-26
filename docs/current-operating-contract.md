@@ -53,25 +53,28 @@ AI 不能发明方向；在本地策略已经触发后，AI 可以确认、升�
 
 以后以本节为准，忽略之前把订单流同向直接等同于强方向确认、或把所有 AI 五分项近似等权处理的方案。
 
-当前五档分数按 2022-2026 ETH 1h 纯策略与历史订单流 proxy 研究结果重排权重：
+当前五档分数按 2022-2026 ETH 1h 纯策略、历史订单流 proxy 研究和实时消息面执行约束重排权重：
 
 ```text
 orderflow_confirmation_score  20%
 technical_signal_score        18%
-pattern_confirmation_score    13%
-range_safety_score            12%
-trend_confirmation_score      12%
-dense_zone_breakout_score     10%
-news_safety_score              7%
-btc_leader_score               4%
-eth_btc_rotation_score         4%
+news_direction_alignment_score 14%
+pattern_confirmation_score    12%
+range_safety_score            11%
+trend_confirmation_score      10%
+dense_zone_breakout_score      8%
+news_safety_score              4%
+btc_leader_score               2%
+eth_btc_rotation_score         1%
 ```
 
 解释：
 
 - 订单流得分表示市场参与度、流动性、冲击质量和大单活跃度，不是简单 CVD 方向。
 - 订单流同向不能单独触发满仓；满仓仍必须同时满足形态确认、密集区突破质量、低震荡风险、足够置信度和 RiskManager 硬风控。
-- 新闻当前缺完整 2022-2026 可审计历史归档，因此仍主要作为方向一致性和执行风险 cap，不作为强统计加分因子。
+- `news_direction_alignment_score` 是新闻/市场背景相对本地策略方向的确认分：做空+利空、做多+利多可以加分；中性、未知或冲突不得加分。
+- `news_safety_score = 1 - news_risk_score` 只代表执行风险安全度，权重较低，但 `news_risk_score` 仍保留强 cap：高波动、滑点、流动性、监管或交易所风险可以降仓或阻断。
+- 新闻当前缺完整 2022-2026 可审计历史归档，因此新闻方向确认采用实时上下文权重，但不得绕过本地策略信号、订单流、密集区和硬风控。
 - 高周期/BTC 风向标只参与限仓、缩放和解释，不得生成方向。
 - 当前研究是全样本结果，仍需 walk-forward / 样本外验证后才能进一步放松档位。
 

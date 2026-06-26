@@ -654,6 +654,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
                     "trend_confirmation_score",
                     "range_risk_score",
                     "news_risk_score",
+                    "news_direction_alignment_score",
                     "orderflow_confirmation_score",
                     "dense_zone_breakout_score",
                 ],

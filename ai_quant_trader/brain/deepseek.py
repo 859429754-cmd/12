@@ -234,6 +234,7 @@ class DeepSeekBrain:
                 "trend_confirmation_score",
                 "range_risk_score",
                 "news_risk_score",
+                "news_direction_alignment_score",
                 "crypto_market_impact_score",
                 "btc_leader_impact_score",
                 "eth_btc_rotation_score",
@@ -251,6 +252,7 @@ class DeepSeekBrain:
             },
             "score_semantics": {
                 "news_alignment": "strategy-relative direction agreement: short+bearish or long+bullish is aligned; opposite is conflict.",
+                "news_direction_alignment_score": "strategy-relative directional confirmation from news/background; high only when news direction clearly supports local strategy direction.",
                 "news_risk_score": "event execution/volatility/liquidity risk, not absolute direction.",
                 "crypto_market_impact_score": "broad crypto market impact from current and background news.",
                 "btc_leader_alignment": "BTC leader context relative to local strategy direction.",
@@ -338,11 +340,12 @@ class DeepSeekBrain:
             "news_alignment、orderflow_alignment、dense_zone_position、entry_zone_estimate、"
             "tp_estimate、sl_estimate、action_suggestion、brief_reason、reason_codes、"
             "trend_confirmation_score、range_risk_score、news_risk_score、"
-            "orderflow_confirmation_score、dense_zone_breakout_score。"
-            "五个分数字段必须是 0 到 1 之间的小数："
+            "news_direction_alignment_score、orderflow_confirmation_score、dense_zone_breakout_score。"
+            "六个核心分数字段必须是 0 到 1 之间的小数："
             "trend_confirmation_score 越高代表趋势信号越可靠；"
             "range_risk_score 越高代表震荡/假突破风险越高；"
-            "news_risk_score 越高代表事件和消息面风险越高；"
+            "news_risk_score 越高代表事件执行、波动、滑点、流动性风险越高；"
+            "news_direction_alignment_score 越高代表新闻/背景方向越明确支持本地策略方向；中性、未知或冲突时必须接近 0；"
             "orderflow_confirmation_score 越高代表市场参与度、流动性深度、冲击质量和大单活跃度越支持本地突破质量，不能简单等同 CVD 方向；"
             "dense_zone_breakout_score 越高代表密集区突破或迁移质量越好。"
             "枚举只能使用：regime=trend/range/uncertain；direction=long/short/flat；"
@@ -397,6 +400,9 @@ class DeepSeekBrain:
         item["trend_confirmation_score"] = self._clip_float(item.get("trend_confirmation_score"), 0.0, 1.0, 0.35)
         item["range_risk_score"] = self._clip_float(item.get("range_risk_score"), 0.0, 1.0, 0.65)
         item["news_risk_score"] = self._clip_float(item.get("news_risk_score"), 0.0, 1.0, 0.65)
+        item["news_direction_alignment_score"] = self._clip_float(item.get("news_direction_alignment_score"), 0.0, 1.0, 0.0)
+        if item["news_alignment"] != "aligned":
+            item["news_direction_alignment_score"] = 0.0
         item["crypto_market_impact_score"] = self._clip_float(item.get("crypto_market_impact_score"), 0.0, 1.0, 0.0)
         item["btc_leader_impact_score"] = self._clip_float(item.get("btc_leader_impact_score"), 0.0, 1.0, 0.0)
         item["eth_btc_rotation_score"] = self._clip_float(item.get("eth_btc_rotation_score"), 0.0, 1.0, 0.0)
@@ -524,7 +530,8 @@ class DeepSeekBrain:
                 "action_suggestion": "open_long|open_short|reduce|close|hold|block",
                 "trend_confirmation_score": "0..1, 趋势确认分，越高越支持本地趋势信号",
                 "range_risk_score": "0..1, 震荡/假突破风险分，越高越危险",
-                "news_risk_score": "0..1, 重大新闻/事件风险分，越高越危险",
+                "news_risk_score": "0..1, 重大新闻/事件执行风险分，越高越危险",
+                "news_direction_alignment_score": "0..1, 消息面方向确认分；仅当新闻/背景方向明确支持本地策略方向时较高",
                 "orderflow_confirmation_score": "0..1, 订单流确认分，越高代表市场参与度、流动性、冲击质量、大单活跃度越支持突破质量；不是简单 CVD 方向分",
                 "dense_zone_breakout_score": "0..1, 密集区突破质量分，越高越支持趋势迁移",
             },
@@ -553,6 +560,7 @@ class DeepSeekBrain:
                 "ai_role": "只确认、缩仓或否决本地趋势策略信号，不生成自动开仓方向。",
                 "risk_scores_that_reduce_or_block": [
                     "news_alignment 是方向一致性：做空+利空、做多+利多为 aligned；做空+利多、做多+利空为 conflict。",
+                    "news_direction_alignment_score 是方向确认加分，只能在 news_alignment=aligned 且新闻/背景影响明确时提高；中性或未知新闻不得加分。",
                     "range_risk_score 高代表震荡/假突破风险高，应缩仓或阻断。",
                     "news_risk_score 高代表重大新闻/事件执行风险高；若 news_alignment=aligned，优先缩仓，只有流动性/监管/交易所/订单流/密集区风险同时恶化时才阻断。",
                     "orderflow_confirmation_score 低代表市场参与度、流动性或冲击质量不足，应缩仓或阻断；订单流方向同向本身不得单独满仓。",
@@ -650,6 +658,17 @@ class DeepSeekBrain:
         if signal.action == SignalAction.SHORT:
             return Alignment.ALIGNED if news.news_direction == NewsDirection.BEARISH else Alignment.CONFLICT
         return Alignment.UNKNOWN
+
+    def _news_direction_alignment_score(self, news: NewsDigest, signal: StrategySignal) -> float:
+        if self._news_alignment_for_signal(news, signal) != Alignment.ALIGNED:
+            return 0.0
+        impact = max(
+            self._background_impact_score(news),
+            self._symbol_news_impact_score(news, signal.symbol),
+        )
+        if impact <= 0 and news.news_direction not in {NewsDirection.UNKNOWN, NewsDirection.NEUTRAL}:
+            impact = 0.25
+        return round(min(1.0, 0.45 + impact * 0.45), 4)
 
     def _background_impact_score(self, news: NewsDigest) -> float:
         events = list(news.active_news_events)
@@ -775,6 +794,7 @@ class DeepSeekBrain:
             trend_confirmation_score=trend_confirmation_score,
             range_risk_score=range_risk_score,
             news_risk_score=news_risk_score,
+            news_direction_alignment_score=self._news_direction_alignment_score(news, signal),
             crypto_market_impact_score=self._background_impact_score(news),
             btc_leader_impact_score=market_leader_context.impact_score if market_leader_context else 0.0,
             eth_btc_rotation_score=market_leader_context.eth_btc_rotation_score if market_leader_context else 0.0,

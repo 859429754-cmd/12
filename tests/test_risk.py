@@ -312,6 +312,79 @@ def test_orderflow_direction_alignment_alone_does_not_create_full_size() -> None
     assert "pattern_confirmation_weak_caps_normal" in decision.warnings
 
 
+def test_news_direction_confirmation_adds_score_but_neutral_low_risk_news_does_not() -> None:
+    state = RuntimeState(opening_paused=False, enabled_symbols={"ETH/USDT:USDT"})
+    manager = RiskManager(RiskConfig(max_total_leverage=4), state)
+    signal = _signal().model_copy(update={"signal_strength": 0.75})
+    base_ai = {
+        "confidence": 0.82,
+        "trend_confirmation_score": 0.70,
+        "range_risk_score": 0.25,
+        "news_risk_score": 0.15,
+        "crypto_market_impact_score": 0.25,
+        "symbol_news_impact_score": 0.25,
+        "pattern_confirmation_score": 0.65,
+        "orderflow_confirmation_score": 0.70,
+        "dense_zone_breakout_score": 0.65,
+        "btc_leader_impact_score": 0.35,
+    }
+
+    neutral = manager.evaluate(
+        signal,
+        _ai(
+            **base_ai,
+            news_alignment=Alignment.NEUTRAL,
+            news_direction_alignment_score=0.0,
+        ),
+        1000,
+        [],
+    )
+    aligned = manager.evaluate(
+        signal,
+        _ai(
+            **base_ai,
+            news_alignment=Alignment.ALIGNED,
+            news_direction_alignment_score=0.85,
+        ),
+        1000,
+        [],
+    )
+
+    assert neutral.allowed
+    assert aligned.allowed
+    assert neutral.score_breakdown["news_direction_alignment_score"] == 0.0
+    assert aligned.score_breakdown["news_direction_alignment_score"] == 0.85
+    assert aligned.decision_score - neutral.decision_score >= 0.10
+    assert neutral.position_tier == "weak"
+    assert aligned.position_tier == "strong"
+    assert aligned.score_breakdown["weight_news_direction_alignment_score"] > aligned.score_breakdown["weight_pattern_confirmation_score"]
+
+
+def test_news_direction_score_cannot_override_conflict_hard_block() -> None:
+    state = RuntimeState(opening_paused=False, enabled_symbols={"ETH/USDT:USDT"})
+    manager = RiskManager(RiskConfig(max_total_leverage=4), state)
+
+    decision = manager.evaluate(
+        _signal(),
+        _ai(
+            news_alignment=Alignment.CONFLICT,
+            news_direction_alignment_score=1.0,
+            confidence=0.95,
+            trend_confirmation_score=0.95,
+            range_risk_score=0.05,
+            news_risk_score=0.05,
+            orderflow_confirmation_score=0.95,
+            dense_zone_breakout_score=0.95,
+            pattern_confirmation_score=0.95,
+        ),
+        1000,
+        [],
+    )
+
+    assert not decision.allowed
+    assert decision.reason == "news_major_conflict"
+
+
 def test_major_news_without_strategy_signal_blocks_explicitly() -> None:
     state = RuntimeState(opening_paused=False, enabled_symbols={"ETH/USDT:USDT"})
     manager = RiskManager(RiskConfig(max_total_leverage=4), state)

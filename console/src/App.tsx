@@ -4649,6 +4649,7 @@ function DecisionSummary({
   const scoreRows: Array<[string, unknown]> = [
     ["趋势确认", decisionValue(parts, ["trend_confirmation_score", "regime_trend_score"])],
     ["震荡风险", decisionValue(parts, ["range_risk_score", "regime_range_score"])],
+    ["新闻方向", decisionValue(parts, ["news_direction_alignment_score"])],
     ["新闻风险", decisionValue(parts, ["news_risk_score"])],
     ["订单流确认", decisionValue(parts, ["orderflow_confirmation_score"])],
     ["密集区突破", decisionValue(parts, ["dense_zone_breakout_score"])],

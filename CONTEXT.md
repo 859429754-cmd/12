@@ -617,21 +617,29 @@ This layer does not change the ETH 1h KC + VOL + KDJ production strategy and doe
 
 ## 2026-06-26 因子排序五档仓位口径
 
-以后以本节为准：五档仓位的正向加分顺序按当前 ETH 1h 纯策略与历史订单流 proxy 研究重排，忽略旧版近似等权或把订单流方向同向直接视为强方向确认的方案。
+以后以本节为准：五档仓位的正向加分顺序按当前 ETH 1h 纯策略、历史订单流 proxy 研究和实时消息面执行约束重排，忽略旧版近似等权、把订单流方向同向直接视为强方向确认、或把低新闻风险误当成利多/利空确认的方案。
 
 当前权重：
 
 - `orderflow_confirmation_score`: 20%
 - `technical_signal_score`: 18%
-- `pattern_confirmation_score`: 13%
-- `range_safety_score`: 12%
-- `trend_confirmation_score`: 12%
-- `dense_zone_breakout_score`: 10%
-- `news_safety_score`: 7%
-- `btc_leader_score`: 4%
-- `eth_btc_rotation_score`: 4%
+- `news_direction_alignment_score`: 14%
+- `pattern_confirmation_score`: 12%
+- `range_safety_score`: 11%
+- `trend_confirmation_score`: 10%
+- `dense_zone_breakout_score`: 8%
+- `news_safety_score`: 4%
+- `btc_leader_score`: 2%
+- `eth_btc_rotation_score`: 1%
 
-订单流确认分的语义是市场参与度、流动性深度、冲击质量和大单活跃度，不是简单 CVD 方向。强订单流可以提高档位，但不能单独满仓；满仓必须同时通过形态、密集区、低震荡风险、置信度和 RiskManager 硬风控。新闻因缺完整历史归档，仍以方向一致性和执行风险 cap 为主，不作为强统计加分因子。
+订单流确认分的语义是市场参与度、流动性深度、冲击质量和大单活跃度，不是简单 CVD 方向。强订单流可以提高档位，但不能单独满仓；满仓必须同时通过形态、密集区、低震荡风险、置信度和 RiskManager 硬风控。
+
+新闻必须拆成两项：
+
+- `news_direction_alignment_score`：新闻/背景方向相对本地策略方向的确认分，做空+利空或做多+利多才可加分。
+- `news_safety_score = 1 - news_risk_score`：执行风险安全度，低权重参与分数，但高 `news_risk_score` 仍通过 cap 降仓或阻断。
+
+新闻缺完整历史归档，因此不能单独作为强统计 alpha；它的生产角色是实时方向确认与事件执行风险约束。
 
 ## 2026-06-18 Walk-forward Proposal Boundary
 

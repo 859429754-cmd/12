@@ -147,8 +147,10 @@ def test_deepseek_request_messages_keep_stable_contract_before_dynamic_context()
     assert payload["stable_contract"]["ai_role"] == "confirm_reduce_or_block_only"
     assert "btc_leader_impact_score" in payload["stable_contract"]["required_scores"]
     assert "eth_btc_rotation_score" in payload["stable_contract"]["required_scores"]
+    assert "news_direction_alignment_score" in payload["stable_contract"]["required_scores"]
     assert payload["stable_contract"]["score_semantics"]["btc_leader_alignment"].startswith("BTC")
     assert "relative-strength" in payload["stable_contract"]["score_semantics"]["eth_btc_rotation_score"]
+    assert "directional confirmation" in payload["stable_contract"]["score_semantics"]["news_direction_alignment_score"]
     assert "participation" in payload["stable_contract"]["score_semantics"]["orderflow_confirmation_score"]
     assert "not simple CVD direction" in payload["stable_contract"]["score_semantics"]["orderflow_confirmation_score"]
     assert payload["dynamic_context"]["technical_signal"]["action"] == "long"
@@ -397,6 +399,25 @@ def test_news_direction_field_keeps_absolute_direction_separate_from_strategy_al
     assert brain._news_direction_hint(bearish_news) == "bearish"
     assert brain._news_alignment_for_signal(bearish_news, short_signal) == Alignment.ALIGNED
     assert brain._news_alignment_for_signal(bearish_news, long_signal) == Alignment.CONFLICT
+
+
+def test_news_direction_alignment_score_is_zeroed_when_alignment_is_not_aligned() -> None:
+    brain = DeepSeekBrain(api_key="test-key", model="deepseek-v4-pro")
+
+    parsed = brain._normalize_decision_json(
+        {
+            "regime": "trend",
+            "direction": "long",
+            "confidence": 0.8,
+            "multiplier": 1.0,
+            "veto_action": "allow",
+            "news_alignment": "neutral",
+            "news_direction_alignment_score": 0.95,
+        }
+    )
+
+    assert parsed["news_alignment"] == "neutral"
+    assert parsed["news_direction_alignment_score"] == 0.0
 
 
 def test_legacy_crypto_sentiment_still_normalizes_to_news_direction() -> None:

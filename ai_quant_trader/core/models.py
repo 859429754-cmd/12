@@ -515,6 +515,7 @@ class AiDecision(BaseModel):
     trend_confirmation_score: float = Field(default=0.0, ge=0, le=1)
     range_risk_score: float = Field(default=0.0, ge=0, le=1)
     news_risk_score: float = Field(default=0.0, ge=0, le=1)
+    news_direction_alignment_score: float = Field(default=0.0, ge=0, le=1)
     crypto_market_impact_score: float = Field(default=0.0, ge=0, le=1)
     btc_leader_impact_score: float = Field(default=0.0, ge=0, le=1)
     eth_btc_rotation_score: float = Field(default=0.0, ge=0, le=1)
@@ -538,6 +539,17 @@ class AiDecision(BaseModel):
         value = value.strip().lower()
         allowed = {"open_long", "open_short", "reduce", "close", "hold", "block"}
         return value if value in allowed else "hold"
+
+    @model_validator(mode="after")
+    def normalize_news_direction_alignment_score(self) -> "AiDecision":
+        if self.news_alignment != Alignment.ALIGNED:
+            self.news_direction_alignment_score = 0.0
+            return self
+        if self.news_direction_alignment_score <= 0:
+            impact = max(self.crypto_market_impact_score, self.symbol_news_impact_score)
+            if impact > 0:
+                self.news_direction_alignment_score = round(min(1.0, 0.45 + impact * 0.45), 4)
+        return self
 
 
 class AiCandidateTradePlan(BaseModel):
