@@ -173,7 +173,6 @@ class BacktestRequest(BaseModel):
 
 
 class BacktestOptimizeRequest(BacktestRequest):
-    ema_lengths: list[int] = Field(default_factory=lambda: [55, 89, 100, 144], min_length=1, max_length=8)
     kc_lengths: list[int] = Field(default_factory=lambda: [20], min_length=1, max_length=8)
     kc_scalars: list[float] = Field(default_factory=lambda: [2.0, 2.4, 2.8, 3.2], min_length=1, max_length=8)
     atr_lengths: list[int] = Field(default_factory=lambda: [14], min_length=1, max_length=8)
@@ -181,7 +180,6 @@ class BacktestOptimizeRequest(BacktestRequest):
     volume_multiples: list[float] = Field(default_factory=lambda: [2.0, 2.2, 2.5, 2.8, 3.0], min_length=1, max_length=8)
     atr_stop_multiples: list[float] = Field(default_factory=lambda: [1.2, 1.5, 1.8, 2.0], min_length=1, max_length=8)
     position_fractions: list[float] = Field(default_factory=lambda: [0.5], min_length=1, max_length=8)
-    use_ema_filters: list[bool] = Field(default_factory=lambda: [False], min_length=1, max_length=2)
     use_volume_filters: list[bool] = Field(default_factory=lambda: [True], min_length=1, max_length=2)
     momentum_filters: list[Literal["none", "kdj"]] = Field(
         default_factory=lambda: ["kdj"],
@@ -2368,7 +2366,6 @@ async def _run_trend_parameter_optimization_job(app: FastAPI, job_id: str, body:
             fee_rate=body.fee_rate,
             slippage_bps=body.slippage_bps,
             leverage=body.leverage,
-            ema_lengths=body.ema_lengths,
             kc_lengths=body.kc_lengths,
             kc_scalars=body.kc_scalars,
             atr_lengths=body.atr_lengths,
@@ -2376,7 +2373,6 @@ async def _run_trend_parameter_optimization_job(app: FastAPI, job_id: str, body:
             volume_multiples=body.volume_multiples,
             atr_stop_multiples=body.atr_stop_multiples,
             position_fractions=body.position_fractions,
-            use_ema_filters=body.use_ema_filters,
             use_volume_filters=body.use_volume_filters,
             momentum_filters=body.momentum_filters,
             kdj_lengths=body.kdj_lengths,

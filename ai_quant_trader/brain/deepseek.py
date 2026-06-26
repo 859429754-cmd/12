@@ -259,12 +259,16 @@ class DeepSeekBrain:
                 "eth_btc_rotation_score": "ETH relative-strength or lagged catch-up quality versus BTC; supports ETH long only when local strategy already fired.",
                 "symbol_news_impact_score": "direct impact on current trading symbol.",
                 "pattern_confirmation_score": "chart pattern support for local strategy direction.",
+                "orderflow_confirmation_score": "market participation, liquidity depth, impulse quality, and large-trade activity supporting breakout quality; not simple CVD direction.",
+                "dense_zone_breakout_score": "dense-zone breakout or migration quality supporting local strategy direction.",
             },
             "hard_rules": [
                 "no_local_entry_signal_no_auto_entry",
                 "ai_cannot_invent_direction",
                 "aligned_major_news_can_reduce_but_not_auto_block_without_execution_risk",
                 "conflicting_news_or_orderflow_can_block",
+                "orderflow_alignment_alone_cannot_create_full_size",
+                "high_orderflow_confirmation_requires_pattern_dense_and_range_safety_for_full_size",
                 "btc_leader_context_can_scale_or_cap_but_cannot_create_direction",
                 "btc_pullback_with_eth_relative_strength_is_rotation_not_automatic_conflict",
                 "pattern_confirmation_scales_position_but_cannot_create_direction",
@@ -339,7 +343,7 @@ class DeepSeekBrain:
             "trend_confirmation_score 越高代表趋势信号越可靠；"
             "range_risk_score 越高代表震荡/假突破风险越高；"
             "news_risk_score 越高代表事件和消息面风险越高；"
-            "orderflow_confirmation_score 越高代表订单流越支持本地技术方向；"
+            "orderflow_confirmation_score 越高代表市场参与度、流动性深度、冲击质量和大单活跃度越支持本地突破质量，不能简单等同 CVD 方向；"
             "dense_zone_breakout_score 越高代表密集区突破或迁移质量越好。"
             "枚举只能使用：regime=trend/range/uncertain；direction=long/short/flat；"
             "news_alignment 和 orderflow_alignment=aligned/conflict/neutral/unknown；"
@@ -355,7 +359,8 @@ class DeepSeekBrain:
             "价格突破旧密集区上沿后回踩不破，旧阻力转为支撑，可提高多头确认度；"
             "价格跌破旧密集区下沿后反抽不过，旧支撑转为阻力，可提高空头确认度；"
             "zone_mid 是密集区内部强弱分界线，站上偏强，跌破偏弱。"
-            "如果技术信号与 AI 综合判断同向，且消息面、订单流、密集区至少两项印证，可以 allow 或提高 multiplier。"
+            "如果技术信号与 AI 综合判断同向，且消息面、订单流活跃度、密集区、形态至少两项印证，可以 allow 或提高 multiplier。"
+            "订单流同向只能作为质量确认之一，不能单独触发满仓；满仓必须同时具备形态确认、密集区突破质量、低震荡风险和足够置信度。"
             "重大新闻必须拆分为方向一致性和执行风险：做空信号遇到明确利空、做多信号遇到明确利多，应判定 news_alignment=aligned，"
             "不能仅因为它是重大新闻就标记为 conflict 或直接 block；同向重大新闻仍可提高 news_risk_score 并降仓，"
             "但只有流动性抽干、交易所/监管系统性风险、订单流明显反向或密集区突破质量极差等执行风险同时出现时，才允许 veto_action=block。"
@@ -520,7 +525,7 @@ class DeepSeekBrain:
                 "trend_confirmation_score": "0..1, 趋势确认分，越高越支持本地趋势信号",
                 "range_risk_score": "0..1, 震荡/假突破风险分，越高越危险",
                 "news_risk_score": "0..1, 重大新闻/事件风险分，越高越危险",
-                "orderflow_confirmation_score": "0..1, 订单流确认分，越高越支持本地技术方向",
+                "orderflow_confirmation_score": "0..1, 订单流确认分，越高代表市场参与度、流动性、冲击质量、大单活跃度越支持突破质量；不是简单 CVD 方向分",
                 "dense_zone_breakout_score": "0..1, 密集区突破质量分，越高越支持趋势迁移",
             },
             "technical_signal": signal.model_dump(mode="json"),
@@ -550,7 +555,7 @@ class DeepSeekBrain:
                     "news_alignment 是方向一致性：做空+利空、做多+利多为 aligned；做空+利多、做多+利空为 conflict。",
                     "range_risk_score 高代表震荡/假突破风险高，应缩仓或阻断。",
                     "news_risk_score 高代表重大新闻/事件执行风险高；若 news_alignment=aligned，优先缩仓，只有流动性/监管/交易所/订单流/密集区风险同时恶化时才阻断。",
-                    "orderflow_confirmation_score 低代表订单流不支持本地技术方向，应缩仓或阻断。",
+                    "orderflow_confirmation_score 低代表市场参与度、流动性或冲击质量不足，应缩仓或阻断；订单流方向同向本身不得单独满仓。",
                     "dense_zone_breakout_score 低代表密集区突破质量差，应缩仓或阻断。",
                 ],
             },

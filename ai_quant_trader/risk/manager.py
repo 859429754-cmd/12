@@ -23,6 +23,17 @@ POSITION_TIER_SCALE = {
     "full": 1.0,
 }
 POSITION_TIER_ORDER = ("block", "weak", "normal", "strong", "full")
+FACTOR_RANKED_SCORE_WEIGHTS = {
+    "technical_signal_score": 0.18,
+    "orderflow_confirmation_score": 0.20,
+    "pattern_confirmation_score": 0.13,
+    "dense_zone_breakout_score": 0.10,
+    "range_safety_score": 0.12,
+    "trend_confirmation_score": 0.12,
+    "news_safety_score": 0.07,
+    "btc_leader_score": 0.04,
+    "eth_btc_rotation_score": 0.04,
+}
 
 
 class RiskManager:
@@ -243,17 +254,20 @@ class RiskManager:
         dense_zone = min(max(ai.dense_zone_breakout_score, 0.0), 1.0)
         btc_leader = self._btc_leader_score(ai)
         eth_btc_rotation = min(max(ai.eth_btc_rotation_score, 0.0), 1.0)
+        score_inputs = {
+            "technical_signal_score": technical,
+            "orderflow_confirmation_score": orderflow,
+            "pattern_confirmation_score": pattern,
+            "dense_zone_breakout_score": dense_zone,
+            "range_safety_score": range_safety,
+            "trend_confirmation_score": trend,
+            "news_safety_score": news_safety,
+            "btc_leader_score": btc_leader,
+            "eth_btc_rotation_score": eth_btc_rotation,
+        }
         raw_score = min(
             max(
-                technical * 0.25
-                + trend * 0.22
-                + range_safety * 0.13
-                + news_safety * 0.13
-                + pattern * 0.06
-                + orderflow * 0.10
-                + dense_zone * 0.08
-                + btc_leader * 0.02
-                + eth_btc_rotation * 0.01,
+                sum(score_inputs[key] * weight for key, weight in FACTOR_RANKED_SCORE_WEIGHTS.items()),
                 0.0,
             ),
             1.0,
@@ -317,18 +331,11 @@ class RiskManager:
         if ai.orderflow_alignment == Alignment.NEUTRAL:
             warnings.append("orderflow_neutral_size_not_full")
         return raw_score, tier, {
-            "technical_signal_score": technical,
-            "trend_confirmation_score": trend,
-            "range_safety_score": range_safety,
-            "news_safety_score": news_safety,
+            **score_inputs,
             "crypto_market_impact_score": min(max(ai.crypto_market_impact_score, 0.0), 1.0),
-            "btc_leader_score": btc_leader,
             "btc_leader_impact_score": min(max(ai.btc_leader_impact_score, 0.0), 1.0),
-            "eth_btc_rotation_score": eth_btc_rotation,
             "symbol_news_impact_score": min(max(ai.symbol_news_impact_score, 0.0), 1.0),
-            "pattern_confirmation_score": pattern,
-            "orderflow_confirmation_score": orderflow,
-            "dense_zone_breakout_score": dense_zone,
+            **{f"weight_{key}": weight for key, weight in FACTOR_RANKED_SCORE_WEIGHTS.items()},
             "combined_decision_score": raw_score,
         }, warnings
 
@@ -404,11 +411,11 @@ class RiskManager:
         return tier
 
     def _score_to_tier(self, score: float) -> str:
-        if score >= 0.85:
+        if score >= 0.81:
             return "full"
-        if score >= 0.75:
+        if score >= 0.70:
             return "strong"
-        if score >= 0.65:
+        if score >= 0.62:
             return "normal"
         if score >= self.config.min_confidence_to_trade:
             return "weak"

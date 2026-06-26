@@ -11,7 +11,7 @@ def test_symbol_specific_parameter_proposal(tmp_path) -> None:
     config_path.write_text(
         yaml.safe_dump(
             {
-                "strategy": {"trend": {"ema_length": 89, "kc_length": 20, "kc_scalar": 2.8, "vma_length": 20, "atr_length": 14, "volume_multiple": 1.5}},
+                "strategy": {"trend": {"kc_length": 20, "kc_scalar": 2.8, "vma_length": 20, "atr_length": 14, "volume_multiple": 1.5}},
                 "risk": {"min_confidence_to_trade": 0.55, "ai_full_size_confidence": 0.75},
                 "runtime": {"dry_run": True},
             },
@@ -37,7 +37,7 @@ def test_atr_stop_multiple_defaults_and_can_be_proposed(tmp_path) -> None:
     config_path.write_text(
         yaml.safe_dump(
             {
-                "strategy": {"trend": {"ema_length": 89, "kc_length": 20, "kc_scalar": 2.8, "vma_length": 20, "atr_length": 14, "volume_multiple": 1.5}},
+                "strategy": {"trend": {"kc_length": 20, "kc_scalar": 2.8, "vma_length": 20, "atr_length": 14, "volume_multiple": 1.5}},
                 "risk": {"min_confidence_to_trade": 0.55, "ai_full_size_confidence": 0.75},
                 "runtime": {"dry_run": True},
             },

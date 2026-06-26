@@ -12,7 +12,7 @@ from ai_quant_trader.core.models import (
 )
 from ai_quant_trader.core.models import TrendStrategyConfig
 from ai_quant_trader.strategy.base import BaseStrategy
-from ai_quant_trader.strategy.indicators import atr, ema, kdj, keltner_channel, sma
+from ai_quant_trader.strategy.indicators import atr, kdj, keltner_channel, sma
 
 
 def normalize_trend_config(config: TrendStrategyConfig) -> TrendStrategyConfig:
@@ -22,7 +22,7 @@ def normalize_trend_config(config: TrendStrategyConfig) -> TrendStrategyConfig:
 
 
 class TrendStrategy(BaseStrategy):
-    """趋势策略：89 EMA + KC(20, 2.8) + 20 VMA。
+    """趋势策略：KC(20, 2.8) + 20 VMA + KDJ。
 
     该策略只负责提出技术面候选信号，不直接决定下单。
     """
@@ -33,7 +33,6 @@ class TrendStrategy(BaseStrategy):
     def add_indicators(self, candles: pd.DataFrame) -> pd.DataFrame:
         df = candles.copy()
         cfg = self.config
-        df["ema_89"] = ema(df["close"], cfg.ema_length)
         kc = keltner_channel(df, cfg.kc_length, cfg.kc_scalar, cfg.atr_length)
         df = pd.concat([df, kc], axis=1)
         df["vma_20"] = sma(df["volume"], cfg.vma_length)
@@ -53,8 +52,6 @@ class TrendStrategy(BaseStrategy):
     def warmup_candles(self) -> int:
         cfg = self.config
         lengths = [cfg.kc_length, cfg.atr_length]
-        if cfg.use_ema_filter:
-            lengths.append(cfg.ema_length)
         if cfg.use_volume_filter:
             lengths.append(cfg.vma_length)
         if cfg.momentum_filter == "kdj":
@@ -76,8 +73,6 @@ class TrendStrategy(BaseStrategy):
         prev = df.iloc[idx - 1]
         kcu, kcm, kcl = self.keltner_columns()
         required_last = [kcu, kcm, kcl]
-        if cfg.use_ema_filter:
-            required_last.append("ema_89")
         if cfg.use_volume_filter:
             required_last.append("vma_20")
         required_last.extend(self._momentum_required_columns())
@@ -93,22 +88,18 @@ class TrendStrategy(BaseStrategy):
         vma = float(last["vma_20"])
         if cfg.use_volume_filter and vma <= 0:
             return SignalAction.HOLD
-        ema_long_ok = close > float(last["ema_89"]) if cfg.use_ema_filter else True
-        ema_short_ok = close < float(last["ema_89"]) if cfg.use_ema_filter else True
         volume_ok = volume > vma * cfg.volume_multiple if cfg.use_volume_filter else True
         momentum_long_ok, momentum_short_ok = self._momentum_filter_ok(last)
 
         long_condition = (
             prev_close <= float(prev[kcu])
             and close > float(last[kcu])
-            and ema_long_ok
             and volume_ok
             and momentum_long_ok
         )
         short_condition = (
             prev_close >= float(prev[kcl])
             and close < float(last[kcl])
-            and ema_short_ok
             and volume_ok
             and momentum_short_ok
         )
@@ -184,8 +175,6 @@ class TrendStrategy(BaseStrategy):
         volume = float(last["volume"])
         vma = float(last["vma_20"])
         atr_value = float(last["atr"]) if not math.isnan(float(last["atr"])) else 0.0
-        ema_long_ok = close > float(last["ema_89"]) if cfg.use_ema_filter else True
-        ema_short_ok = close < float(last["ema_89"]) if cfg.use_ema_filter else True
         volume_ok = volume > vma * cfg.volume_multiple if cfg.use_volume_filter else True
         momentum_long_ok, momentum_short_ok = self._momentum_filter_ok(last)
 
@@ -196,14 +185,12 @@ class TrendStrategy(BaseStrategy):
         long_condition = (
             prev_close <= float(prev[kcu])
             and close > float(last[kcu])
-            and ema_long_ok
             and volume_ok
             and momentum_long_ok
         )
         short_condition = (
             prev_close >= float(prev[kcl])
             and close < float(last[kcl])
-            and ema_short_ok
             and volume_ok
             and momentum_short_ok
         )
@@ -243,7 +230,6 @@ class TrendStrategy(BaseStrategy):
                 ),
                 "close": close,
                 "prev_close": prev_close,
-                "ema_89": float(last["ema_89"]),
                 "kc_upper": float(last[kcu]),
                 "prev_kc_upper": float(prev[kcu]),
                 "kc_mid": float(last[kcm]),
@@ -253,7 +239,6 @@ class TrendStrategy(BaseStrategy):
                 "volume": volume,
                 "vma_20": vma,
                 "volume_multiple": volume_multiple,
-                "use_ema_filter": cfg.use_ema_filter,
                 "use_volume_filter": cfg.use_volume_filter,
                 "momentum_filter": cfg.momentum_filter,
                 "momentum_long_ok": momentum_long_ok,

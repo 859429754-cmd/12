@@ -24,7 +24,6 @@ SYMBOL_ALIASES = {
 }
 
 PARAM_RULES: dict[str, dict[str, Any]] = {
-    "strategy.trend.ema_length": {"type": int, "min": 20, "max": 300, "label": "趋势EMA周期"},
     "strategy.trend.kc_length": {"type": int, "min": 5, "max": 100, "label": "肯特纳通道周期"},
     "strategy.trend.kc_scalar": {"type": float, "min": 0.5, "max": 8.0, "label": "肯特纳通道ATR倍数"},
     "strategy.trend.vma_length": {"type": int, "min": 5, "max": 100, "label": "成交量均线周期"},
@@ -38,10 +37,6 @@ PARAM_RULES: dict[str, dict[str, Any]] = {
 }
 
 PARAM_ALIASES: dict[str, str] = {
-    "ema": "strategy.trend.ema_length",
-    "ema周期": "strategy.trend.ema_length",
-    "趋势ema": "strategy.trend.ema_length",
-    "89ema": "strategy.trend.ema_length",
     "kc周期": "strategy.trend.kc_length",
     "肯特纳周期": "strategy.trend.kc_length",
     "kc长度": "strategy.trend.kc_length",
@@ -72,7 +67,6 @@ PARAM_ALIASES: dict[str, str] = {
 }
 
 SYMBOL_PARAM_TO_GLOBAL = {
-    "ema_length": "strategy.trend.ema_length",
     "kc_length": "strategy.trend.kc_length",
     "kc_scalar": "strategy.trend.kc_scalar",
     "vma_length": "strategy.trend.vma_length",
@@ -218,7 +212,6 @@ class RuntimeControlManager:
         return "\n".join(
             [
                 title,
-                f"- 趋势EMA周期：{params['ema_length']}",
                 f"- 肯特纳通道：周期 {params['kc_length']}，ATR倍数 {params['kc_scalar']}",
                 f"- 成交量均线周期：{params['vma_length']}",
                 f"- ATR周期：{params['atr_length']}",
@@ -269,7 +262,7 @@ class RuntimeControlManager:
             ("小仓", "开启小仓模式测试20U", "生成小仓实盘模式提案，需要审批"),
             ("小仓", "开仓小仓测试ETH做多", "按交易所最低数量生成手动小仓开仓提案"),
             ("检查", "最小仓位测试检查", "只读检查当前开启标的的最低下单数量"),
-            ("参数热更", "把BTC的KC倍数调到2.5", "支持EMA、KC、VMA、ATR、放量倍数等"),
+            ("参数热更", "把BTC的KC倍数调到2.5", "支持KC、VMA、ATR、放量倍数等"),
             ("复盘", "优化策略15天 / 优化策略30天", "AI读取交易记录生成优化提案"),
             ("审批", "待审批 / 同意修改 12 / 拒绝 12", "查看、批准或拒绝提案"),
             ("API", "查询API状态 / 更新DeepSeek API为sk-xxx", "管理员可热更新API，回复会脱敏"),
@@ -296,14 +289,12 @@ class RuntimeControlManager:
         base = deepcopy(config.get("strategy", {}).get("trend", {}))
         base.setdefault("enabled", True)
         base.setdefault("profile_name", "default")
-        base.setdefault("ema_length", 89)
         base.setdefault("kc_length", 20)
         base.setdefault("kc_scalar", 2.8)
         base.setdefault("vma_length", 20)
         base.setdefault("atr_length", 14)
         base.setdefault("atr_stop_multiple", 1.5)
         base.setdefault("volume_multiple", 2.0)
-        base.setdefault("use_ema_filter", False)
         base.setdefault("use_volume_filter", True)
         base.setdefault("momentum_filter", "kdj")
         base.setdefault("kdj_length", 9)

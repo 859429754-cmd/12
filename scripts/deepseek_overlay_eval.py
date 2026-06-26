@@ -122,7 +122,6 @@ def build_config(base: TrendStrategyConfig, position_fraction: float) -> TrendSt
             "vma_length": 20,
             "volume_multiple": 2.5,
             "position_fraction": position_fraction,
-            "use_ema_filter": False,
             "use_volume_filter": True,
             "momentum_filter": "kdj",
             "kdj_length": 9,
@@ -503,27 +502,26 @@ def higher_timeframe_context(window: pd.DataFrame, side: str) -> dict[str, Any]:
     close = htf["close"].astype(float)
     high = htf["high"].astype(float)
     low = htf["low"].astype(float)
-    ema20 = close.ewm(span=20, adjust=False, min_periods=20).mean()
-    ema89 = close.ewm(span=89, adjust=False, min_periods=min(89, max(30, len(close) // 2))).mean()
+    kc_mid = close.ewm(span=20, adjust=False, min_periods=20).mean()
     prev_close = close.shift(1)
     tr = pd.concat([(high - low), (high - prev_close).abs(), (low - prev_close).abs()], axis=1).max(axis=1)
     atr14 = tr.ewm(alpha=1 / 14, adjust=False, min_periods=14).mean()
     last_close = float(close.iloc[-1])
-    last_ema20 = float(ema20.iloc[-1]) if not math.isnan(float(ema20.iloc[-1])) else last_close
-    last_ema89 = float(ema89.iloc[-1]) if not math.isnan(float(ema89.iloc[-1])) else last_ema20
+    last_kc_mid = float(kc_mid.iloc[-1]) if not math.isnan(float(kc_mid.iloc[-1])) else last_close
     last_atr = float(atr14.iloc[-1]) if not math.isnan(float(atr14.iloc[-1])) else max(last_close * 0.01, 1e-9)
-    slope_lookback = min(6, max(len(ema20.dropna()) - 1, 1))
-    ema20_slope = (last_ema20 - float(ema20.dropna().iloc[-1 - slope_lookback])) / max(last_close, 1e-9)
-    distance_atr = (last_close - last_ema89) / max(last_atr, 1e-9)
+    clean_mid = kc_mid.dropna()
+    slope_lookback = min(6, max(len(clean_mid) - 1, 1))
+    kc_mid_slope = (last_kc_mid - float(clean_mid.iloc[-1 - slope_lookback])) / max(last_close, 1e-9)
+    distance_atr = (last_close - last_kc_mid) / max(last_atr, 1e-9)
 
-    if last_close > last_ema20 > last_ema89 and ema20_slope > 0:
+    if last_close > last_kc_mid and kc_mid_slope > 0:
         direction = "long"
-    elif last_close < last_ema20 < last_ema89 and ema20_slope < 0:
+    elif last_close < last_kc_mid and kc_mid_slope < 0:
         direction = "short"
     else:
         direction = "mixed"
 
-    strength = min(1.0, abs(distance_atr) / 3.0 * 0.65 + min(abs(ema20_slope) / 0.025, 1.0) * 0.35)
+    strength = min(1.0, abs(distance_atr) / 3.0 * 0.65 + min(abs(kc_mid_slope) / 0.025, 1.0) * 0.35)
     if direction == side:
         alignment = "aligned"
         alignment_score = 0.65 + strength * 0.35
@@ -542,11 +540,10 @@ def higher_timeframe_context(window: pd.DataFrame, side: str) -> dict[str, Any]:
         "alignment_score": round(max(0.0, min(1.0, alignment_score)), 6),
         "closed_candles": int(len(htf)),
         "last_close": round(last_close, 6),
-        "ema20": round(last_ema20, 6),
-        "ema89": round(last_ema89, 6),
+        "kc_mid_20": round(last_kc_mid, 6),
         "atr14": round(last_atr, 6),
-        "ema20_slope_6x4h": round(ema20_slope, 8),
-        "distance_from_ema89_atr": round(distance_atr, 6),
+        "kc_mid_slope_6x4h": round(kc_mid_slope, 8),
+        "distance_from_kc_mid_atr": round(distance_atr, 6),
     }
 
 

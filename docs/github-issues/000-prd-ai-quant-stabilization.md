@@ -24,7 +24,7 @@ The system has a working FastAPI/React/SQLite/Gateway architecture, but several 
 ## Current Strategy Contract
 
 - Timeframe: 1h
-- EMA89 is calculated for evidence/charting, but disabled as a production entry gate by default.
+- EMA89 has been removed from strategy code, optimizer inputs, chart layers, and AI evidence; reintroducing it requires a separate research path and ADR.
 - Volume MA: SMA(volume, 20)
 - Volume multiple: 2.5
 - Momentum filter: KDJ(9, 3, 3)

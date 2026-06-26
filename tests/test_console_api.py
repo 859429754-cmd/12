@@ -28,7 +28,6 @@ symbols:
 {symbol_yaml}
 strategy:
   trend:
-    ema_length: 89
     kc_length: 20
     kc_scalar: 2.8
     vma_length: 20
@@ -293,9 +292,9 @@ def test_walk_forward_proposal_is_needs_review_without_auto_apply(tmp_path: Path
     body = server.BacktestOptimizeRequest(symbol="ETH/USDT:USDT", min_trades=2)
     result = {
         "baseline": {"total_return_pct": 8.0, "max_drawdown_pct": -12.0, "profit_factor": 1.25, "trade_count": 12},
-        "baseline_params": {"kc_scalar": 2.8, "volume_multiple": 2.5, "use_ema_filter": False},
+        "baseline_params": {"kc_scalar": 2.8, "volume_multiple": 2.5},
         "best": {
-            "params": {"kc_scalar": 3.0, "volume_multiple": 2.8, "use_ema_filter": False},
+            "params": {"kc_scalar": 3.0, "volume_multiple": 2.8},
             "validation": {"total_return_pct": 13.0, "max_drawdown_pct": -12.5, "profit_factor": 1.42, "trade_count": 8},
             "train": {"total_return_pct": 10.0, "max_drawdown_pct": -11.0, "profit_factor": 1.35, "trade_count": 18},
             "warnings": [],

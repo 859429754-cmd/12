@@ -1005,7 +1005,6 @@ def optimize_trend_parameters(
     fee_rate: float = 0.0006,
     slippage_bps: float = 2.0,
     leverage: float = 4.0,
-    ema_lengths: list[int] | None = None,
     kc_lengths: list[int] | None = None,
     kc_scalars: list[float] | None = None,
     atr_lengths: list[int] | None = None,
@@ -1013,7 +1012,6 @@ def optimize_trend_parameters(
     volume_multiples: list[float] | None = None,
     atr_stop_multiples: list[float] | None = None,
     position_fractions: list[float] | None = None,
-    use_ema_filters: list[bool] | None = None,
     use_volume_filters: list[bool] | None = None,
     momentum_filters: list[str] | None = None,
     kdj_lengths: list[int] | None = None,
@@ -1024,7 +1022,6 @@ def optimize_trend_parameters(
 ) -> dict[str, Any]:
     if len(candles) < 300:
         raise StrategyCodeError("K线数量不足，参数寻优至少需要 300 根K线")
-    ema_lengths = ema_lengths or [55, 89, 100, 144]
     kc_lengths = kc_lengths or [20]
     kc_scalars = kc_scalars or [2.0, 2.4, 2.8, 3.2]
     atr_lengths = atr_lengths or [14]
@@ -1032,7 +1029,6 @@ def optimize_trend_parameters(
     volume_multiples = volume_multiples or [2.0, 2.2, 2.5, 2.8, 3.0]
     atr_stop_multiples = atr_stop_multiples or [1.5, 2.0, 2.5, 3.0]
     position_fractions = position_fractions or [base_config.position_fraction]
-    use_ema_filters = use_ema_filters or [base_config.use_ema_filter]
     use_volume_filters = use_volume_filters or [base_config.use_volume_filter]
     momentum_filters = momentum_filters or [base_config.momentum_filter]
     momentum_filters = [item for item in momentum_filters if item in {"none", "kdj"}]
@@ -1040,7 +1036,7 @@ def optimize_trend_parameters(
         momentum_filters = [base_config.momentum_filter]
     kdj_lengths = kdj_lengths or [base_config.kdj_length]
     validation_ratio = min(max(float(validation_ratio), 0.15), 0.5)
-    warmup = max(base_config.ema_length, base_config.kc_length, base_config.vma_length, base_config.atr_length) + 10
+    warmup = max(base_config.kc_length, base_config.vma_length, base_config.atr_length) + 10
     split_idx = max(int(len(candles) * (1 - validation_ratio)), warmup + 50)
     if split_idx >= len(candles) - 80:
         split_idx = len(candles) - 80
@@ -1059,7 +1055,6 @@ def optimize_trend_parameters(
 
     raw_candidates = [
         (
-            ema_len,
             kc_len,
             kc_scalar,
             atr_len,
@@ -1067,13 +1062,11 @@ def optimize_trend_parameters(
             volume_multiple,
             atr_stop_multiple,
             position_fraction,
-            use_ema,
             use_volume,
             momentum_filter,
             kdj_len if momentum_filter == "kdj" else base_config.kdj_length,
         )
         for (
-            ema_len,
             kc_len,
             kc_scalar,
             atr_len,
@@ -1081,10 +1074,8 @@ def optimize_trend_parameters(
             volume_multiple,
             atr_stop_multiple,
             position_fraction,
-            use_ema,
             use_volume,
         ) in itertools.product(
-            ema_lengths,
             kc_lengths,
             kc_scalars,
             atr_lengths,
@@ -1092,14 +1083,12 @@ def optimize_trend_parameters(
             volume_multiples,
             atr_stop_multiples,
             position_fractions,
-            use_ema_filters,
             use_volume_filters,
         )
         for momentum_filter in momentum_filters
         for kdj_len in (kdj_lengths if momentum_filter == "kdj" else [base_config.kdj_length])
     ]
     base_tuple = (
-        base_config.ema_length,
         base_config.kc_length,
         base_config.kc_scalar,
         base_config.atr_length,
@@ -1107,15 +1096,13 @@ def optimize_trend_parameters(
         base_config.volume_multiple,
         base_config.atr_stop_multiple,
         base_config.position_fraction,
-        base_config.use_ema_filter,
         base_config.use_volume_filter,
         base_config.momentum_filter,
         base_config.kdj_length,
     )
 
-    def distance(candidate: tuple[int, int, float, int, int, float, float, float, bool, bool, str, int]) -> float:
+    def distance(candidate: tuple[int, float, int, int, float, float, float, bool, str, int]) -> float:
         (
-            ema_len,
             kc_len,
             kc_scalar,
             atr_len,
@@ -1123,21 +1110,18 @@ def optimize_trend_parameters(
             volume_multiple,
             atr_stop_multiple,
             position_fraction,
-            use_ema,
             use_volume,
             momentum_filter,
             kdj_len,
         ) = candidate
         return (
-            abs(ema_len - base_config.ema_length) / max(base_config.ema_length, 1)
-            + abs(kc_len - base_config.kc_length) / max(base_config.kc_length, 1)
+            abs(kc_len - base_config.kc_length) / max(base_config.kc_length, 1)
             + abs(kc_scalar - base_config.kc_scalar)
             + abs(atr_len - base_config.atr_length) / max(base_config.atr_length, 1)
             + abs(vma_len - base_config.vma_length) / max(base_config.vma_length, 1)
             + abs(volume_multiple - base_config.volume_multiple)
             + abs(atr_stop_multiple - base_config.atr_stop_multiple)
             + abs(position_fraction - base_config.position_fraction)
-            + (0 if use_ema == base_config.use_ema_filter else 1)
             + (0 if use_volume == base_config.use_volume_filter else 1)
             + (0 if momentum_filter == base_config.momentum_filter else 1)
             + abs(kdj_len - base_config.kdj_length) / max(base_config.kdj_length, 1)
@@ -1146,7 +1130,6 @@ def optimize_trend_parameters(
     raw_candidates = sorted(set(raw_candidates) | {base_tuple}, key=distance)[: max(1, max_candidates)]
     candidates: list[dict[str, Any]] = []
     for (
-        ema_len,
         kc_len,
         kc_scalar,
         atr_len,
@@ -1154,14 +1137,12 @@ def optimize_trend_parameters(
         volume_multiple,
         atr_stop_multiple,
         position_fraction,
-        use_ema,
         use_volume,
         momentum_filter,
         kdj_len,
     ) in raw_candidates:
         config = base_config.model_copy(
             update={
-                "ema_length": int(ema_len),
                 "kc_length": int(kc_len),
                 "kc_scalar": float(kc_scalar),
                 "atr_length": int(atr_len),
@@ -1170,7 +1151,6 @@ def optimize_trend_parameters(
                 "atr_stop_multiple": float(atr_stop_multiple),
                 "position_fraction": float(position_fraction),
                 "variant": "with_volume" if use_volume else "no_volume",
-                "use_ema_filter": bool(use_ema),
                 "use_volume_filter": bool(use_volume),
                 "momentum_filter": str(momentum_filter),
                 "kdj_length": int(kdj_len),
@@ -1200,7 +1180,6 @@ def optimize_trend_parameters(
         candidates.append(
             {
                 "params": {
-                    "ema_length": config.ema_length,
                     "kc_length": config.kc_length,
                     "kc_scalar": config.kc_scalar,
                     "vma_length": config.vma_length,
@@ -1209,7 +1188,6 @@ def optimize_trend_parameters(
                     "atr_stop_multiple": config.atr_stop_multiple,
                     "position_fraction": config.position_fraction,
                     "variant": config.variant,
-                    "use_ema_filter": config.use_ema_filter,
                     "use_volume_filter": config.use_volume_filter,
                     "momentum_filter": config.momentum_filter,
                     "kdj_length": config.kdj_length,

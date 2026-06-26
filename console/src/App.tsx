@@ -1247,7 +1247,6 @@ function MarketWorkspace({
         <div className="mt-3 flex flex-wrap gap-3 pb-1 text-[11px] text-[#94a3b8]">
           <span><span className="text-[#22c55e]">■</span> 阳线 / 成交量</span>
           <span><span className="text-[#fb7185]">■</span> 阴线 / 成交量</span>
-          <span><span className="text-[#e5e7eb]">━</span> EMA 过滤线</span>
           <span><span className="text-[#2454ff]">━</span> 肯特纳上下轨</span>
           <span><span className="text-[#64748b]">━</span> 肯特纳中轨</span>
         </div>
@@ -1682,7 +1681,6 @@ function paramPathLabel(path: string) {
     atr_stop_multiple: "ATR止损倍数",
     vma_length: "成交量均线周期",
     volume_multiple: "成交量放大倍数",
-    ema_length: "EMA过滤周期",
     max_total_leverage: "全局杠杆硬上限",
   };
   return labels[shortKey] || shortKey;
@@ -3157,7 +3155,6 @@ function BacktestPanel({
           min_trades: Number(opt.min_trades) || 20,
           max_candidates: Number(opt.max_candidates) || 512,
           top_n: Number(opt.top_n) || 10,
-          ema_lengths: arrayValue<number>(opt.ema_lengths, [89]),
           kc_lengths: arrayValue<number>(opt.kc_lengths, [20]),
           kc_scalars: arrayValue<number>(opt.kc_scalars, [2.4, 2.6, 2.8, 3.0, 3.2]),
           atr_lengths: arrayValue<number>(opt.atr_lengths, [14]),
@@ -3165,7 +3162,6 @@ function BacktestPanel({
           volume_multiples: arrayValue<number>(opt.volume_multiples, [2.0, 2.2, 2.5, 2.8, 3.0]),
           atr_stop_multiples: arrayValue<number>(opt.atr_stop_multiples, [1.2, 1.5, 1.8, 2.0]),
           position_fractions: arrayValue<number>(opt.position_fractions, [Number(profile?.params?.position_fraction) || 0.5]),
-          use_ema_filters: arrayValue<boolean>(opt.use_ema_filters, [false]),
           use_volume_filters: arrayValue<boolean>(opt.use_volume_filters, [true]),
           momentum_filters: arrayValue<string>(opt.momentum_filters, ["kdj"]),
           kdj_lengths: arrayValue<number>(opt.kdj_lengths, [7, 9, 14]),

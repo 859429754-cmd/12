@@ -136,7 +136,6 @@ class TrendStrategyConfig(BaseModel):
     enabled: bool = True
     profile_name: str = "default"
     variant: Literal["with_volume", "no_volume"] = "with_volume"
-    ema_length: int = 89
     kc_length: int = 20
     kc_scalar: float = 2.8
     vma_length: int = 20
@@ -144,7 +143,6 @@ class TrendStrategyConfig(BaseModel):
     atr_stop_multiple: float = Field(default=1.5, gt=0, le=20)
     volume_multiple: float = 2.0
     position_fraction: float = Field(default=0.5, gt=0, le=1)
-    use_ema_filter: bool = False
     use_volume_filter: bool = True
     momentum_filter: Literal["none", "kdj"] = "kdj"
     kdj_length: int = Field(default=9, gt=1, le=100)

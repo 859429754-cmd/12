@@ -39,7 +39,7 @@ test("控制台加载动态标的、图表和基础控制请求", async ({ page 
   await expect(page.getByText(/区间高/)).toBeVisible();
   await expect(page.getByText(/区间低/)).toBeVisible();
   await expect(page.getByRole("button", { name: "TradingView" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "EMA89" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "KC" })).toBeVisible();
   await expect(page.getByRole("button", { name: "KC(20,2.8)" })).toBeVisible();
   await expect(page.getByRole("button", { name: "成交量" })).toBeVisible();
   await expect(page.getByRole("button", { name: "策略信号" })).toBeVisible();

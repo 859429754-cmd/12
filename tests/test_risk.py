@@ -241,6 +241,77 @@ def test_five_score_model_maps_to_clear_position_tiers() -> None:
     assert "trend_confirmation_score" in strong.score_breakdown
 
 
+def test_factor_ranked_policy_promotes_high_orderflow_participation_quality() -> None:
+    state = RuntimeState(opening_paused=False, enabled_symbols={"ETH/USDT:USDT"})
+    manager = RiskManager(RiskConfig(max_total_leverage=4), state)
+    signal = _signal().model_copy(
+        update={
+            "signal_strength": 0.82,
+            "technical_evidence": {"volume_multiple": 3.4, "breakout_atr": 0.45},
+        }
+    )
+    base_ai = {
+        "confidence": 0.82,
+        "trend_confirmation_score": 0.65,
+        "range_risk_score": 0.28,
+        "news_risk_score": 0.25,
+        "pattern_confirmation_score": 0.60,
+        "dense_zone_breakout_score": 0.60,
+        "btc_leader_impact_score": 0.35,
+    }
+
+    low_flow = manager.evaluate(
+        signal,
+        _ai(**base_ai, orderflow_confirmation_score=0.35, orderflow_alignment=Alignment.NEUTRAL),
+        1000,
+        [],
+    )
+    high_flow = manager.evaluate(
+        signal,
+        _ai(**base_ai, orderflow_confirmation_score=0.95, orderflow_alignment=Alignment.NEUTRAL),
+        1000,
+        [],
+    )
+
+    assert low_flow.allowed
+    assert high_flow.allowed
+    assert low_flow.position_tier in {"weak", "normal"}
+    assert high_flow.position_tier == "strong"
+    assert high_flow.decision_score - low_flow.decision_score >= 0.10
+    assert high_flow.score_breakdown["weight_orderflow_confirmation_score"] > high_flow.score_breakdown["weight_trend_confirmation_score"]
+
+
+def test_orderflow_direction_alignment_alone_does_not_create_full_size() -> None:
+    state = RuntimeState(opening_paused=False, enabled_symbols={"ETH/USDT:USDT"})
+    manager = RiskManager(RiskConfig(max_total_leverage=4), state)
+    signal = _signal().model_copy(
+        update={
+            "signal_strength": 0.92,
+            "technical_evidence": {"volume_multiple": 4.0, "breakout_atr": 0.7},
+        }
+    )
+
+    decision = manager.evaluate(
+        signal,
+        _ai(
+            confidence=0.92,
+            trend_confirmation_score=0.82,
+            range_risk_score=0.52,
+            news_risk_score=0.20,
+            pattern_confirmation_score=0.35,
+            orderflow_alignment=Alignment.ALIGNED,
+            orderflow_confirmation_score=0.98,
+            dense_zone_breakout_score=0.82,
+        ),
+        1000,
+        [],
+    )
+
+    assert decision.allowed
+    assert decision.position_tier == "normal"
+    assert "pattern_confirmation_weak_caps_normal" in decision.warnings
+
+
 def test_major_news_without_strategy_signal_blocks_explicitly() -> None:
     state = RuntimeState(opening_paused=False, enabled_symbols={"ETH/USDT:USDT"})
     manager = RiskManager(RiskConfig(max_total_leverage=4), state)

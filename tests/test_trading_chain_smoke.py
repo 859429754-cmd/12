@@ -50,7 +50,6 @@ strategy:
     atr_stop_multiple: 1.5
     volume_multiple: 2.5
     position_fraction: 1.0
-    use_ema_filter: false
     use_volume_filter: true
     momentum_filter: "kdj"
 ai:
@@ -91,7 +90,6 @@ strategy:
     atr_stop_multiple: 1.5
     volume_multiple: 2.5
     position_fraction: 1.0
-    use_ema_filter: false
     use_volume_filter: true
     momentum_filter: "kdj"
 ai:

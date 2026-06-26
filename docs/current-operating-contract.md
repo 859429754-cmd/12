@@ -14,7 +14,7 @@
 - KDJ：9,3,3
 - KDJ 多头过滤：K > D 且 J >= 50
 - KDJ 空头过滤：K < D 且 J <= 50
-- EMA89：不作为当前实盘开仓过滤器
+- EMA89：已从策略代码、优化参数、图表层和 AI 证据中删除
 - ATR 固定止损：1.5 * ATR14
 - 出场：反向穿越 Keltner 中轨
 - 同向已有仓位：禁止重复加仓
@@ -48,6 +48,32 @@ full   = 100%
 ```
 
 AI 不能发明方向；在本地策略已经触发后，AI 可以确认、升档、维持、降仓或阻断。AI 输出无效、超时、预算耗尽或 JSON 校验失败时，实盘新开仓必须保守降级或阻断。
+
+## 2026-06-26 因子排序五档仓位合同
+
+以后以本节为准，忽略之前把订单流同向直接等同于强方向确认、或把所有 AI 五分项近似等权处理的方案。
+
+当前五档分数按 2022-2026 ETH 1h 纯策略与历史订单流 proxy 研究结果重排权重：
+
+```text
+orderflow_confirmation_score  20%
+technical_signal_score        18%
+pattern_confirmation_score    13%
+range_safety_score            12%
+trend_confirmation_score      12%
+dense_zone_breakout_score     10%
+news_safety_score              7%
+btc_leader_score               4%
+eth_btc_rotation_score         4%
+```
+
+解释：
+
+- 订单流得分表示市场参与度、流动性、冲击质量和大单活跃度，不是简单 CVD 方向。
+- 订单流同向不能单独触发满仓；满仓仍必须同时满足形态确认、密集区突破质量、低震荡风险、足够置信度和 RiskManager 硬风控。
+- 新闻当前缺完整 2022-2026 可审计历史归档，因此仍主要作为方向一致性和执行风险 cap，不作为强统计加分因子。
+- 高周期/BTC 风向标只参与限仓、缩放和解释，不得生成方向。
+- 当前研究是全样本结果，仍需 walk-forward / 样本外验证后才能进一步放松档位。
 
 以后以本版本为准，忽略之前“AI 只能降仓或否决，不能升档”的方案。AI 不能发明交易方向，但在本地策略已经触发 `LONG/SHORT` 后，可以在 RiskManager 硬风控、账户杠杆上限、readiness、订单流、密集区、形态、新闻和 BTC/ETH 风向标约束内，把仓位档位动态上调、维持、下调或阻断。
 

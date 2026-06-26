@@ -73,7 +73,7 @@ The current production strategy is ETH-first 1h trend breakout:
 - Keltner Channel: middle EMA20, width ATR14 * 2.8
 - Volume filter: SMA(volume, 20) * 2.5
 - Momentum filter: KDJ(9, 3, 3)
-- EMA89: calculated for evidence/charting, but disabled as an entry gate by default
+- EMA89: removed from strategy code, optimizer surface, chart layers, and AI evidence; do not reintroduce without a separate research path and ADR
 - ATR stop multiple: 1.5 fixed from entry, not trailing
 - Long: previous close <= previous KC upper, current closed close > current KC upper, volume > VMA20 * 2.5, KDJ K > D and J >= 50
 - Short: previous close >= previous KC lower, current closed close < current KC lower, volume > VMA20 * 2.5, KDJ K < D and J <= 50
@@ -614,6 +614,24 @@ This layer does not change the ETH 1h KC + VOL + KDJ production strategy and doe
 - `leader_downtrend` / `distribution_risk` 表示 BTC 明确破位或分配风险，仍必须限制 ETH 多头仓位。ETH 补涨假设不能覆盖系统性风险。
 - 形态确认只用于缩放仓位和解释，不得绕过本地策略信号。
 - 高影响同向新闻优先缩仓，不应因为“重大新闻”四个字自动 block；只有方向冲突、订单流冲突、密集区突破质量极差、流动性/监管/交易所风险等执行风险同时恶化时，才允许 block。
+
+## 2026-06-26 因子排序五档仓位口径
+
+以后以本节为准：五档仓位的正向加分顺序按当前 ETH 1h 纯策略与历史订单流 proxy 研究重排，忽略旧版近似等权或把订单流方向同向直接视为强方向确认的方案。
+
+当前权重：
+
+- `orderflow_confirmation_score`: 20%
+- `technical_signal_score`: 18%
+- `pattern_confirmation_score`: 13%
+- `range_safety_score`: 12%
+- `trend_confirmation_score`: 12%
+- `dense_zone_breakout_score`: 10%
+- `news_safety_score`: 7%
+- `btc_leader_score`: 4%
+- `eth_btc_rotation_score`: 4%
+
+订单流确认分的语义是市场参与度、流动性深度、冲击质量和大单活跃度，不是简单 CVD 方向。强订单流可以提高档位，但不能单独满仓；满仓必须同时通过形态、密集区、低震荡风险、置信度和 RiskManager 硬风控。新闻因缺完整历史归档，仍以方向一致性和执行风险 cap 为主，不作为强统计加分因子。
 
 ## 2026-06-18 Walk-forward Proposal Boundary
 

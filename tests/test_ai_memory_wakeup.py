@@ -40,7 +40,6 @@ symbols:
     timeframe: "1h"
 strategy:
   trend:
-    ema_length: 20
     kc_length: 10
     kc_scalar: 2.0
     vma_length: 10

@@ -67,7 +67,6 @@ symbols:
 strategy:
   trend:
     variant: with_volume
-    ema_length: 89
     kc_length: 20
     kc_scalar: 2.8
     vma_length: 20
@@ -75,7 +74,6 @@ strategy:
     atr_stop_multiple: 1.5
     volume_multiple: 2.5
     position_fraction: 1.0
-    use_ema_filter: false
     use_volume_filter: true
     momentum_filter: kdj
     kdj_length: 9

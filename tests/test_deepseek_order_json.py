@@ -149,6 +149,8 @@ def test_deepseek_request_messages_keep_stable_contract_before_dynamic_context()
     assert "eth_btc_rotation_score" in payload["stable_contract"]["required_scores"]
     assert payload["stable_contract"]["score_semantics"]["btc_leader_alignment"].startswith("BTC")
     assert "relative-strength" in payload["stable_contract"]["score_semantics"]["eth_btc_rotation_score"]
+    assert "participation" in payload["stable_contract"]["score_semantics"]["orderflow_confirmation_score"]
+    assert "not simple CVD direction" in payload["stable_contract"]["score_semantics"]["orderflow_confirmation_score"]
     assert payload["dynamic_context"]["technical_signal"]["action"] == "long"
 
 

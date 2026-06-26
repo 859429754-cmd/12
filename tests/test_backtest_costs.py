@@ -36,7 +36,7 @@ def test_backtest_reports_zero_costs_when_user_passes_zero() -> None:
         candles,
         symbol="ETH/USDT:USDT",
         timeframe="1h",
-        config=TrendStrategyConfig(ema_length=20, kc_length=10, vma_length=10, atr_length=10, volume_multiple=1.2),
+        config=TrendStrategyConfig(kc_length=10, vma_length=10, atr_length=10, volume_multiple=1.2),
         fee_rate=0.0,
         slippage_bps=0.0,
     )

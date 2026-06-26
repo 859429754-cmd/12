@@ -20,7 +20,6 @@ def strategy_execution_contract(config: TrendStrategyConfig) -> dict[str, Any]:
         "reversal": "close_opposite_then_open_new_signal",
         "max_leverage": 4.0,
         "active_filters": {
-            "ema": config.use_ema_filter,
             "volume": config.use_volume_filter,
             "momentum": config.momentum_filter,
         },
@@ -49,7 +48,6 @@ def optimization_defaults(config: TrendStrategyConfig) -> dict[str, Any]:
         "min_trades": 20,
         "max_candidates": 512,
         "top_n": 10,
-        "ema_lengths": [config.ema_length],
         "kc_lengths": [config.kc_length],
         "kc_scalars": sorted({2.4, 2.6, config.kc_scalar, 3.0, 3.2}),
         "atr_lengths": [config.atr_length],
@@ -57,7 +55,6 @@ def optimization_defaults(config: TrendStrategyConfig) -> dict[str, Any]:
         "volume_multiples": sorted({2.0, 2.2, config.volume_multiple, 2.8, 3.0}),
         "atr_stop_multiples": sorted({1.2, config.atr_stop_multiple, 1.8, 2.0}),
         "position_fractions": [config.position_fraction],
-        "use_ema_filters": [config.use_ema_filter],
         "use_volume_filters": [config.use_volume_filter],
         "momentum_filters": [config.momentum_filter],
         "kdj_lengths": sorted({7, config.kdj_length, 14}),

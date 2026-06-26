@@ -11,7 +11,7 @@ import {
 import type { Candle, DbRow, DenseZonePayload, StrategyProfile } from "./types";
 
 type ChartRange = "1d" | "7d" | "30d" | "90d" | "all";
-type ChartLayer = "kc" | "ema" | "volume" | "orders" | "ai" | "dense" | "levels";
+type ChartLayer = "kc" | "volume" | "orders" | "ai" | "dense" | "levels";
 
 const RANGE_OPTIONS: ChartRange[] = ["1d", "7d", "30d", "90d", "all"];
 
@@ -40,7 +40,6 @@ export function MarketChart({
   const chartRef = useRef<IChartApi | null>(null);
   const candleRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeRef = useRef<ISeriesApi<"Histogram"> | null>(null);
-  const emaRef = useRef<ISeriesApi<"Line"> | null>(null);
   const kcMidRef = useRef<ISeriesApi<"Line"> | null>(null);
   const kcUpperRef = useRef<ISeriesApi<"Line"> | null>(null);
   const kcLowerRef = useRef<ISeriesApi<"Line"> | null>(null);
@@ -54,7 +53,6 @@ export function MarketChart({
   const [expanded, setExpanded] = useState(false);
   const [layers, setLayers] = useState<Record<ChartLayer, boolean>>({
     kc: true,
-    ema: false,
     volume: true,
     orders: true,
     ai: false,
@@ -159,7 +157,6 @@ export function MarketChart({
       color: "#64748b",
     });
     volumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
-    const emaSeries = chart.addLineSeries({ color: "#e5e7eb", lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
     const kcMidSeries = chart.addLineSeries({ color: "#7c8ca3", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
     const kcUpperSeries = chart.addLineSeries({ color: "#3b82f6", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
     const kcLowerSeries = chart.addLineSeries({ color: "#3b82f6", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
@@ -172,7 +169,6 @@ export function MarketChart({
     chartRef.current = chart;
     candleRef.current = candlesSeries;
     volumeRef.current = volumeSeries;
-    emaRef.current = emaSeries;
     kcMidRef.current = kcMidSeries;
     kcUpperRef.current = kcUpperSeries;
     kcLowerRef.current = kcLowerSeries;
@@ -188,7 +184,6 @@ export function MarketChart({
       chartRef.current = null;
       candleRef.current = null;
       volumeRef.current = null;
-      emaRef.current = null;
       kcMidRef.current = null;
       kcUpperRef.current = null;
       kcLowerRef.current = null;
@@ -214,19 +209,16 @@ export function MarketChart({
 
   useEffect(() => {
     const params = profile?.params || {};
-    const emaLen = readNumericParam(params, ["ema_length", "ema_len"], 89);
     const kcLen = readNumericParam(params, ["kc_length", "kc_len"], 20);
     const atrLen = readNumericParam(params, ["atr_length", "kc_atr_len", "atr_len"], 14);
     const kcMult = readNumericParam(params, ["kc_scalar", "kc_mult"], 2.8);
     const closes = chartCandles.map((item) => item.close);
-    const emaValues = ema(closes, emaLen);
     const kcMid = ema(closes, kcLen);
     const atrValues = atr(chartCandles, atrLen);
-    emaRef.current?.setData(layers.ema ? lineData(chartCandles, emaValues) : []);
     kcMidRef.current?.setData(layers.kc ? lineData(chartCandles, kcMid) : []);
     kcUpperRef.current?.setData(layers.kc ? lineData(chartCandles, kcMid.map((value, idx) => value + atrValues[idx] * kcMult)) : []);
     kcLowerRef.current?.setData(layers.kc ? lineData(chartCandles, kcMid.map((value, idx) => value - atrValues[idx] * kcMult)) : []);
-  }, [chartCandles, layers.ema, layers.kc, profile]);
+  }, [chartCandles, layers.kc, profile]);
 
   useEffect(() => {
     const candleSeries = candleRef.current;
@@ -316,7 +308,6 @@ export function MarketChart({
         <LayerButton active={layers.ai} onClick={() => toggleLayer("ai")}>AI 决策</LayerButton>
         <LayerButton active={layers.dense} onClick={() => toggleLayer("dense")}>密集区</LayerButton>
         <LayerButton active={layers.levels} onClick={() => toggleLayer("levels")}>区间高低</LayerButton>
-        <LayerButton active={layers.ema} onClick={() => toggleLayer("ema")}>EMA 参考</LayerButton>
         <LayerButton active={markerDensity === "full"} onClick={() => setMarkerDensity((value) => value === "compact" ? "full" : "compact")}>
           {markerDensity === "compact" ? "精简标记" : "全部标记"}
         </LayerButton>
