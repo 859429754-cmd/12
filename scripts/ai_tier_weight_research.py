@@ -837,6 +837,124 @@ def feature_effects(rows: list[ResearchRow]) -> dict[str, Any]:
     return output
 
 
+FACTOR_CHANNEL_WEIGHTS: dict[str, dict[str, float]] = {
+    "profit_expansion": {
+        "orderflow_confirmation_score": 0.24,
+        "pattern_confirmation_score": 0.18,
+        "dense_zone_breakout_score": 0.15,
+        "trend_confirmation_score": 0.12,
+        "htf_alignment_score": 0.10,
+        "technical_signal_score": 0.09,
+        "volume_score": 0.07,
+        "breakout_score": 0.05,
+    },
+    "execution_quality": {
+        "orderflow_confirmation_score": 0.32,
+        "volume_score": 0.18,
+        "dense_zone_breakout_score": 0.16,
+        "range_safety_score": 0.14,
+        "pattern_confirmation_score": 0.12,
+        "breakout_quality_score": 0.08,
+    },
+    "loss_suppression_risk": {
+        "range_risk_score": 0.22,
+        "orderflow_weakness_score": 0.20,
+        "pattern_weakness_score": 0.14,
+        "dense_weakness_score": 0.12,
+        "trend_weakness_score": 0.10,
+        "regime_risk_score": 0.10,
+        "overextension_risk_score": 0.08,
+        "htf_conflict_risk_score": 0.04,
+    },
+    "context_quality": {
+        "htf_alignment_score": 0.22,
+        "trend_confirmation_score": 0.18,
+        "range_safety_score": 0.16,
+        "btc_leader_score": 0.14,
+        "eth_btc_rotation_score": 0.12,
+        "news_direction_alignment_score": 0.10,
+        "news_safety_score": 0.08,
+    },
+}
+
+
+def _weighted_channel(values: dict[str, float], weights: dict[str, float]) -> float:
+    total = sum(weights.values())
+    return clip(sum(clip(values.get(key, 0.0)) * weight for key, weight in weights.items()) / max(total, 1e-9))
+
+
+def factor_channel_scores(row: ResearchRow) -> dict[str, float]:
+    """Pre-entry factor channels for sizing research.
+
+    The channel scores intentionally use only signal-time inputs already present
+    in `ResearchRow.scores` and `ResearchRow.raw`. Outcome fields such as PnL,
+    MAE, and MFE are reserved for evaluation and must not enter this function.
+    """
+
+    scores = row.scores
+    raw = row.raw
+    breakout = scores.get("breakout_score", 0.0)
+    orderflow = scores.get("orderflow_confirmation_score", 0.0)
+    pattern = scores.get("pattern_confirmation_score", 0.0)
+    dense = scores.get("dense_zone_breakout_score", 0.0)
+    trend = scores.get("trend_confirmation_score", 0.0)
+    htf_alignment = scores.get("htf_alignment_score", 0.0)
+    regime_range = clip(float(raw.get("regime_range_score") or (1.0 - scores.get("range_safety_score", 0.0))))
+    regime_risk = clip(float(raw.get("regime_risk_score") or (1.0 - scores.get("regime_risk_safety_score", 0.0))))
+    overextension_risk = clip(max(0.0, breakout - 0.72) * (0.45 + max(0.0, 0.58 - orderflow) + max(0.0, 0.55 - pattern)))
+    htf_conflict_risk = 1.0 if str(raw.get("htf_signal_alignment") or "") == "conflict" else clip(1.0 - htf_alignment)
+    breakout_quality_score = clip(1.0 - overextension_risk)
+    channel_inputs = {
+        **scores,
+        "breakout_quality_score": breakout_quality_score,
+        "range_risk_score": regime_range,
+        "orderflow_weakness_score": clip(1.0 - orderflow),
+        "pattern_weakness_score": clip(1.0 - pattern),
+        "dense_weakness_score": clip(1.0 - dense),
+        "trend_weakness_score": clip(1.0 - trend),
+        "regime_risk_score": regime_risk,
+        "overextension_risk_score": overextension_risk,
+        "htf_conflict_risk_score": htf_conflict_risk,
+    }
+    return {
+        channel: _weighted_channel(channel_inputs, weights)
+        for channel, weights in FACTOR_CHANNEL_WEIGHTS.items()
+    }
+
+
+def factor_channel_effects(rows: list[ResearchRow]) -> dict[str, Any]:
+    winners = [row for row in rows if row.pnl > 0]
+    losers = [row for row in rows if row.pnl <= 0]
+    output: dict[str, Any] = {}
+    channels = sorted(FACTOR_CHANNEL_WEIGHTS)
+    for channel in channels:
+        win_values = [factor_channel_scores(row)[channel] for row in winners]
+        loss_values = [factor_channel_scores(row)[channel] for row in losers]
+        all_values = win_values + loss_values
+        variance = 0.0
+        if len(all_values) > 1:
+            avg = sum(all_values) / len(all_values)
+            variance = sum((item - avg) ** 2 for item in all_values) / len(all_values)
+        raw_effect = (
+            ((sum(win_values) / len(win_values)) - (sum(loss_values) / len(loss_values))) / math.sqrt(variance)
+            if win_values and loss_values and variance > 1e-12
+            else 0.0
+        )
+        desired_direction = "loser_higher_is_good" if channel == "loss_suppression_risk" else "winner_higher_is_good"
+        desired_effect = -raw_effect if channel == "loss_suppression_risk" else raw_effect
+        output[channel] = {
+            "winner_median": median(win_values) if win_values else None,
+            "loser_median": median(loss_values) if loss_values else None,
+            "winner_mean": sum(win_values) / len(win_values) if win_values else None,
+            "loser_mean": sum(loss_values) / len(loss_values) if loss_values else None,
+            "raw_effect_size": raw_effect,
+            "desired_effect_size": desired_effect,
+            "desired_direction": desired_direction,
+            "weights": FACTOR_CHANNEL_WEIGHTS[channel],
+        }
+    return output
+
+
 def build_markdown(summary: dict[str, Any]) -> str:
     lines = [
         "# AI 五档仓位权重回测研究",
@@ -986,6 +1104,18 @@ def build_markdown_v2(summary: dict[str, Any]) -> str:
             f"- `{key}`: win_median `{stats['winner_median']}`, loss_median `{stats['loser_median']}`, effect `{stats['effect_size']:.3f}`"
         )
 
+    lines.extend(["", "## Factor channel effects"])
+    for key, stats in sorted(
+        summary.get("factor_channel_effects", {}).items(),
+        key=lambda item: abs(item[1]["desired_effect_size"]),
+        reverse=True,
+    ):
+        lines.append(
+            f"- `{key}`: desired `{stats['desired_direction']}`, "
+            f"win_median `{stats['winner_median']:.3f}`, loss_median `{stats['loser_median']:.3f}`, "
+            f"raw_effect `{stats['raw_effect_size']:.3f}`, desired_effect `{stats['desired_effect_size']:.3f}`"
+        )
+
     lines.extend(["", "## Conclusions"])
     lines.extend(f"- {item}" for item in summary["conclusions"])
     return "\n".join(lines) + "\n"
@@ -1108,6 +1238,7 @@ def main() -> None:
         "optimized_candidates": candidates,
         "walk_forward_candidates": walk_forward_candidates,
         "feature_effects": feature_effects(rows),
+        "factor_channel_effects": factor_channel_effects(rows),
         "conclusions": conclusions,
     }
     output = Path(args.output)

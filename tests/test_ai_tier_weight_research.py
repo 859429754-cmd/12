@@ -11,6 +11,8 @@ from scripts.ai_tier_weight_research import (
     current_factor_policy,
     evaluate_walk_forward,
     evaluate_policy,
+    factor_channel_effects,
+    factor_channel_scores,
     policy_transition_effects,
     parse_walk_forward_periods,
     rows_before,
@@ -290,3 +292,62 @@ def test_evaluate_walk_forward_scores_validation_window_without_future_training_
     assert result["total_validation_trades"] > 0
     assert result["min_validation_objective"] > -9000
     assert "walk_forward_score" in result
+
+
+def test_factor_channel_scores_split_profit_and_loss_roles_without_outcome_leakage() -> None:
+    clean_trend = _row(
+        pnl=-9999,
+        scores={
+            "orderflow_confirmation_score": 0.92,
+            "pattern_confirmation_score": 0.86,
+            "dense_zone_breakout_score": 0.80,
+            "trend_confirmation_score": 0.78,
+            "range_safety_score": 0.84,
+        },
+        raw={"regime_range_score": 0.16, "regime_risk_score": 0.12},
+    )
+    noisy_breakout = _row(
+        pnl=9999,
+        scores={
+            "orderflow_confirmation_score": 0.25,
+            "pattern_confirmation_score": 0.24,
+            "dense_zone_breakout_score": 0.30,
+            "trend_confirmation_score": 0.42,
+            "range_safety_score": 0.25,
+            "breakout_score": 0.95,
+        },
+        raw={"regime_range_score": 0.75, "regime_risk_score": 0.62},
+    )
+
+    clean_scores = factor_channel_scores(clean_trend)
+    noisy_scores = factor_channel_scores(noisy_breakout)
+
+    assert clean_scores["profit_expansion"] > noisy_scores["profit_expansion"]
+    assert clean_scores["execution_quality"] > noisy_scores["execution_quality"]
+    assert noisy_scores["loss_suppression_risk"] > clean_scores["loss_suppression_risk"]
+
+
+def test_factor_channel_effects_reports_desired_direction() -> None:
+    rows = [
+        _row(signal_idx=1, pnl=120, scores={"orderflow_confirmation_score": 0.9, "pattern_confirmation_score": 0.86, "range_safety_score": 0.82}),
+        _row(signal_idx=2, pnl=80, scores={"orderflow_confirmation_score": 0.82, "pattern_confirmation_score": 0.78, "range_safety_score": 0.76}),
+        _row(
+            signal_idx=3,
+            pnl=-50,
+            scores={"orderflow_confirmation_score": 0.24, "pattern_confirmation_score": 0.22, "range_safety_score": 0.20},
+            raw={"regime_range_score": 0.80, "regime_risk_score": 0.70},
+        ),
+        _row(
+            signal_idx=4,
+            pnl=-20,
+            scores={"orderflow_confirmation_score": 0.35, "pattern_confirmation_score": 0.28, "range_safety_score": 0.32},
+            raw={"regime_range_score": 0.68, "regime_risk_score": 0.58},
+        ),
+    ]
+
+    effects = factor_channel_effects(rows)
+
+    assert effects["profit_expansion"]["desired_direction"] == "winner_higher_is_good"
+    assert effects["loss_suppression_risk"]["desired_direction"] == "loser_higher_is_good"
+    assert effects["profit_expansion"]["desired_effect_size"] > 0
+    assert effects["loss_suppression_risk"]["desired_effect_size"] > 0
