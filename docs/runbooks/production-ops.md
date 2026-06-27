@@ -33,6 +33,27 @@ python scripts/cloud_release_deploy_v2.py --restart
 - 不删除 `/root/ai-quant-trader/data`
 - 不删除 `/root/ai-quant-trader/logs`
 
+因此，代码发布不等于云端运行配置已切换。涉及 `risk.ai_sizing_policy` 这类实盘运行参数时，必须在发布后显式修改云端根配置：
+
+```bash
+cd /root/ai-quant-trader
+.venv/bin/python current/scripts/ai_sizing_policy_control.py \
+  --config config/config.yaml \
+  --policy calibrated_v1_controlled \
+  --max-tier-lift 1
+systemctl restart ai-quant-trader.service ai-quant-console.service
+```
+
+回滚旧五档：
+
+```bash
+cd /root/ai-quant-trader
+.venv/bin/python current/scripts/ai_sizing_policy_control.py \
+  --config config/config.yaml \
+  --policy legacy_factor_ranked
+systemctl restart ai-quant-trader.service ai-quant-console.service
+```
+
 ## 异地备份与恢复演练
 
 本地维护定时器必须至少执行：

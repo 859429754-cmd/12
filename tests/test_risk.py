@@ -360,6 +360,75 @@ def test_news_direction_confirmation_adds_score_but_neutral_low_risk_news_does_n
     assert aligned.score_breakdown["weight_news_direction_alignment_score"] > aligned.score_breakdown["weight_pattern_confirmation_score"]
 
 
+def test_calibrated_sizing_policy_can_promote_but_only_one_tier_above_legacy() -> None:
+    state = RuntimeState(opening_paused=False, enabled_symbols={"ETH/USDT:USDT"})
+    manager = RiskManager(
+        RiskConfig(
+            max_total_leverage=4,
+            ai_sizing_policy="calibrated_v1_controlled",
+            calibrated_max_tier_lift=1,
+        ),
+        state,
+    )
+    signal = _signal().model_copy(update={"signal_strength": 0.20})
+
+    decision = manager.evaluate(
+        signal,
+        _ai(
+            confidence=0.88,
+            trend_confirmation_score=0.20,
+            range_risk_score=0.10,
+            news_risk_score=0.10,
+            orderflow_confirmation_score=0.95,
+            dense_zone_breakout_score=0.90,
+            pattern_confirmation_score=0.90,
+        ),
+        1000,
+        [],
+    )
+
+    assert decision.allowed
+    assert decision.sizing_policy == "calibrated_v1_controlled"
+    assert decision.legacy_position_tier == "normal"
+    assert decision.calibrated_position_tier == "full"
+    assert decision.position_tier == "strong"
+    assert decision.position_scale == 0.75
+    assert decision.calibrated_edge_score is not None
+    assert "calibrated_tier_lift_limited:full->strong:legacy=normal" in decision.warnings
+
+
+def test_calibrated_sizing_policy_falls_back_to_legacy_when_factor_coverage_is_low() -> None:
+    state = RuntimeState(opening_paused=False, enabled_symbols={"ETH/USDT:USDT"})
+    manager = RiskManager(
+        RiskConfig(
+            max_total_leverage=4,
+            ai_sizing_policy="calibrated_v1_controlled",
+            calibrated_min_factor_coverage=0.90,
+        ),
+        state,
+    )
+
+    decision = manager.evaluate(
+        _signal().model_copy(update={"signal_strength": 0.95}),
+        _ai(
+            confidence=0.92,
+            trend_confirmation_score=0.0,
+            range_risk_score=0.20,
+            news_risk_score=0.20,
+            orderflow_confirmation_score=0.0,
+            dense_zone_breakout_score=0.0,
+            pattern_confirmation_score=0.0,
+        ),
+        1000,
+        [],
+    )
+
+    assert decision.sizing_policy == "calibrated_v1_controlled"
+    assert decision.position_tier == decision.legacy_position_tier
+    assert "calibrated_v1_fallback_to_legacy_factor_coverage_low" in decision.warnings
+    assert "calibrated_factor_coverage_low_fallback_legacy" in decision.warnings
+
+
 def test_news_direction_score_cannot_override_conflict_hard_block() -> None:
     state = RuntimeState(opening_paused=False, enabled_symbols={"ETH/USDT:USDT"})
     manager = RiskManager(RiskConfig(max_total_leverage=4), state)

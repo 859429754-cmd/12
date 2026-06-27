@@ -415,7 +415,14 @@ def test_console_status_strategy_and_workbench(tmp_path: Path, monkeypatch) -> N
     policy = workbench.json()["decision_policy"]
     assert policy["technical_weight"] is None
     assert policy["position_tiers"] == {"block": 0.0, "weak": 0.25, "normal": 0.5, "strong": 0.75, "full": 1.0}
+    assert policy["sizing_policy"] == "legacy_factor_ranked"
+    assert "legacy_factor_ranked" in policy["rollback_command"]
     assert "trend_confirmation_score" in policy["score_fields"]
+
+    risk = client.get("/api/risk/summary")
+    assert risk.status_code == 200
+    assert risk.json()["ai_sizing_policy"] == "legacy_factor_ranked"
+    assert "legacy_factor_ranked" in risk.json()["rollback_command"]
 
     platform = client.get("/api/platform/overview")
     assert platform.status_code == 200

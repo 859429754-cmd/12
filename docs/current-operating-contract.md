@@ -82,6 +82,37 @@ eth_btc_rotation_score         1%
 
 仓位百分比默认按账户当前风险上限解释，而不是只按策略原始建议数量解释。策略层仍会生成 `strategy_baseline_notional`，RiskManager 会生成 `ai_desired_notional` 和 `sizing_basis`，用于审计 AI 是放大、维持还是降仓。若策略建议数量为 0，AI 不允许凭空生成开仓数量。
 
+## 2026-06-27 受控校准仓位模型上线合同
+
+以后以本节为准：小资金测试阶段允许 `calibrated_v1_controlled` 成为实盘主用仓位模型，但禁止裸切。忽略之前“未留旧五档对照、无回滚脚本、无单档限幅就直接替换实盘五档”的方案。
+
+当前两套仓位模型：
+
+- `legacy_factor_ranked`：旧版因子排序五档，作为回滚基线和对照组长期保留。
+- `calibrated_v1_controlled`：DeepSeek 输出结构化因子，本地 deterministic calibration 将质量因子与尾部风险合成 `calibrated_edge_score` 后映射档位。
+
+上线保护：
+
+- 新模型最终档位相对 `legacy_factor_ranked` 最多上调 `calibrated_max_tier_lift=1` 档。
+- 新模型可以比旧模型更低，遇到尾部风险、数据缺失、弱订单流、弱形态时必须降档或回退。
+- 结构化核心因子覆盖率低于 `calibrated_min_factor_coverage` 时自动回退旧五档。
+- RiskManager 原有硬阻断、新闻冲突、极端风险、BTC 冲突、订单流弱、密集区弱、同向持仓禁止加仓、readiness、账户杠杆上限继续优先。
+- 订单生命周期元数据必须记录 `risk_sizing_policy`、`legacy_position_tier`、`calibrated_position_tier`、`calibrated_edge_score`，用于事后审计。
+
+回滚命令：
+
+```powershell
+python scripts/ai_sizing_policy_control.py --policy legacy_factor_ranked
+```
+
+上线命令：
+
+```powershell
+python scripts/ai_sizing_policy_control.py --policy calibrated_v1_controlled --max-tier-lift 1
+```
+
+本合同不是对新模型收益的承诺。新模型仍需通过真实交易后的 AI 仓位分档效果审计，验证是否真正减少亏损、保留盈利、提高盈利因子和夏普率。
+
 ## 3. 多账户执行模型
 
 当前采用“一次策略信号 + 一次 DeepSeek 决策 + 多账户独立裁剪”：

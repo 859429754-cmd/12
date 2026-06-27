@@ -127,6 +127,9 @@ class RiskConfig(BaseModel):
     min_confidence_to_trade: float = Field(default=0.55, ge=0, le=1)
     ai_candidate_min_confidence: float = Field(default=0.65, ge=0, le=1)
     ai_dynamic_position_sizing: bool = True
+    ai_sizing_policy: Literal["legacy_factor_ranked", "calibrated_v1_controlled"] = "legacy_factor_ranked"
+    calibrated_max_tier_lift: int = Field(default=1, ge=0, le=2)
+    calibrated_min_factor_coverage: float = Field(default=0.70, ge=0, le=1)
     stale_data_seconds: int = Field(default=300, gt=0)
     small_position_mode: bool = False
     small_position_notional_usdt: float = Field(default=20.0, gt=0)
@@ -630,6 +633,12 @@ class RiskDecision(BaseModel):
     decision_score: float = Field(default=0.0, ge=0, le=1)
     position_scale: float = Field(default=0.0, ge=0, le=1)
     position_tier: Literal["block", "weak", "normal", "strong", "full"] = "block"
+    sizing_policy: str = "legacy_factor_ranked"
+    legacy_position_tier: Literal["block", "weak", "normal", "strong", "full"] | None = None
+    legacy_position_scale: float | None = Field(default=None, ge=0, le=1)
+    calibrated_position_tier: Literal["block", "weak", "normal", "strong", "full"] | None = None
+    calibrated_position_scale: float | None = Field(default=None, ge=0, le=1)
+    calibrated_edge_score: float | None = Field(default=None, ge=0, le=1)
     score_breakdown: dict[str, float] = Field(default_factory=dict)
     reason: str = ""
     warnings: list[str] = Field(default_factory=list)

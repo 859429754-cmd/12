@@ -476,7 +476,12 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
                 "risk",
                 "Risk limits",
                 "ok" if 0 < ctx.config.risk.max_total_leverage <= MAX_CONFIGURABLE_LEVERAGE else "block",
-                f"Max total leverage: {ctx.config.risk.max_total_leverage}x; hard ceiling: {MAX_CONFIGURABLE_LEVERAGE}x.",
+                (
+                    f"Max total leverage: {ctx.config.risk.max_total_leverage}x; "
+                    f"AI sizing policy: {ctx.config.risk.ai_sizing_policy}; "
+                    f"calibrated max lift: {ctx.config.risk.calibrated_max_tier_lift} tier(s); "
+                    f"hard ceiling: {MAX_CONFIGURABLE_LEVERAGE}x."
+                ),
             ),
             _readiness_check(
                 "news",
@@ -665,6 +670,10 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
                     "strong": 0.75,
                     "full": 1.0,
                 },
+                "sizing_policy": ctx.config.risk.ai_sizing_policy,
+                "legacy_policy": "legacy_factor_ranked",
+                "rollback_command": "python scripts/ai_sizing_policy_control.py --policy legacy_factor_ranked",
+                "calibrated_max_tier_lift": ctx.config.risk.calibrated_max_tier_lift,
                 "hard_rules": [
                     "策略确认模式：没有本地技术信号时，AI 不能自动开仓。",
                     "AI 候选审批模式：AI 置信度超过 65% 但策略未触发时，只能生成候选计划等待人工审批。",
@@ -1246,6 +1255,10 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
             "min_confidence_to_trade": ctx.config.risk.min_confidence_to_trade,
             "ai_candidate_min_confidence": ctx.config.risk.ai_candidate_min_confidence,
             "ai_full_size_confidence": ctx.config.risk.ai_full_size_confidence,
+            "ai_sizing_policy": ctx.config.risk.ai_sizing_policy,
+            "calibrated_max_tier_lift": ctx.config.risk.calibrated_max_tier_lift,
+            "calibrated_min_factor_coverage": ctx.config.risk.calibrated_min_factor_coverage,
+            "rollback_command": "python scripts/ai_sizing_policy_control.py --policy legacy_factor_ranked",
             "small_position_mode": ctx.config.risk.small_position_mode,
             "small_position_notional_usdt": ctx.config.risk.small_position_notional_usdt,
             "rules": [

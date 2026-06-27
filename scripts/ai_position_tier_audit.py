@@ -38,6 +38,12 @@ class TradeAudit:
     ai_desired_notional: float | None = None
     decision_score: float | None = None
     ai_confidence: float | None = None
+    sizing_policy: str = "legacy_factor_ranked"
+    legacy_position_tier: str | None = None
+    legacy_position_scale: float | None = None
+    calibrated_position_tier: str | None = None
+    calibrated_position_scale: float | None = None
+    calibrated_edge_score: float | None = None
     reason: str = ""
     warnings: list[str] = field(default_factory=list)
     shadow_tiers: dict[str, dict[str, float]] = field(default_factory=dict)
@@ -181,6 +187,12 @@ def build_trade_audit(rows: list[dict[str, Any]], account_slot: str | None = Non
                 ai_desired_notional=_as_float(metadata.get("ai_desired_notional")),
                 decision_score=_as_float(metadata.get("risk_decision_score")),
                 ai_confidence=_as_float(metadata.get("ai_confidence")),
+                sizing_policy=str(metadata.get("risk_sizing_policy") or "legacy_factor_ranked"),
+                legacy_position_tier=str(metadata.get("legacy_position_tier") or "") or None,
+                legacy_position_scale=_as_float(metadata.get("legacy_position_scale")),
+                calibrated_position_tier=str(metadata.get("calibrated_position_tier") or "") or None,
+                calibrated_position_scale=_as_float(metadata.get("calibrated_position_scale")),
+                calibrated_edge_score=_as_float(metadata.get("calibrated_edge_score")),
                 reason=reason,
             )
             if key in open_by_key:

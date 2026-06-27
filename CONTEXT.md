@@ -117,6 +117,13 @@ AI output must be structured Pydantic JSON and include:
 - `veto_action`
 - `brief_reason`
 
+Current sizing policy:
+
+- `legacy_factor_ranked`: baseline factor-ranked five-tier sizing. It remains the rollback path and audit control group.
+- `calibrated_v1_controlled`: small-capital live-test sizing policy. DeepSeek supplies structured factors; local deterministic calibration converts quality/tail-risk factors into `calibrated_edge_score`; RiskManager still applies hard caps.
+- `calibrated_v1_controlled` may lift the final tier by at most one tier above `legacy_factor_ranked`; it can reduce more aggressively. If structured factor coverage is too low, it falls back to `legacy_factor_ranked`.
+- Order lifecycle metadata must keep `risk_sizing_policy`, `legacy_position_tier`, `calibrated_position_tier`, and `calibrated_edge_score` for post-trade audit.
+
 Full-position conditions are strict:
 
 - Technicals, AI regime, news, orderflow/dense-zone: at least three strong same-direction confirmations

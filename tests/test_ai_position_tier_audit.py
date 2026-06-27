@@ -117,6 +117,41 @@ def test_ai_position_tier_audit_keeps_open_trades_separate() -> None:
     assert summary["by_tier"]["strong"]["avg_position_scale"] == pytest.approx(0.75)
 
 
+def test_ai_position_tier_audit_preserves_calibrated_and_legacy_sizing_fields() -> None:
+    entry = _entry(
+        client_order_id="calibrated_e",
+        tier="strong",
+        scale=0.75,
+        side="buy",
+        qty=7.5,
+        price=100,
+        baseline_notional=1000,
+    )
+    entry["metadata"].update(
+        {
+            "risk_sizing_policy": "calibrated_v1_controlled",
+            "legacy_position_tier": "normal",
+            "legacy_position_scale": 0.5,
+            "calibrated_position_tier": "full",
+            "calibrated_position_scale": 1.0,
+            "calibrated_edge_score": 0.84,
+        }
+    )
+
+    trades = build_trade_audit(
+        [
+            {"id": 1, "created_at": "2026-01-01 00:00:00", "symbol": SYMBOL, "payload": entry},
+        ]
+    )
+
+    assert trades[0].sizing_policy == "calibrated_v1_controlled"
+    assert trades[0].legacy_position_tier == "normal"
+    assert trades[0].legacy_position_scale == pytest.approx(0.5)
+    assert trades[0].calibrated_position_tier == "full"
+    assert trades[0].calibrated_position_scale == pytest.approx(1.0)
+    assert trades[0].calibrated_edge_score == pytest.approx(0.84)
+
+
 def test_ai_position_tier_audit_can_filter_account_slot(tmp_path: Path) -> None:
     store = make_store(tmp_path)
     try:

@@ -13,28 +13,17 @@ from ai_quant_trader.core.models import (
     VetoAction,
 )
 from ai_quant_trader.core.state import RuntimeState
-
-
-POSITION_TIER_SCALE = {
-    "block": 0.0,
-    "weak": 0.25,
-    "normal": 0.5,
-    "strong": 0.75,
-    "full": 1.0,
-}
-POSITION_TIER_ORDER = ("block", "weak", "normal", "strong", "full")
-FACTOR_RANKED_SCORE_WEIGHTS = {
-    "technical_signal_score": 0.18,
-    "orderflow_confirmation_score": 0.20,
-    "news_direction_alignment_score": 0.14,
-    "pattern_confirmation_score": 0.12,
-    "range_safety_score": 0.11,
-    "trend_confirmation_score": 0.10,
-    "dense_zone_breakout_score": 0.08,
-    "news_safety_score": 0.04,
-    "btc_leader_score": 0.02,
-    "eth_btc_rotation_score": 0.01,
-}
+from ai_quant_trader.risk.sizing import (
+    FACTOR_RANKED_SCORE_WEIGHTS,
+    POSITION_TIER_ORDER,
+    POSITION_TIER_SCALE,
+    PositionTier,
+    calibrated_v1_policy,
+    factor_ranked_policy,
+    limit_tier_lift,
+    max_tier,
+    min_tier,
+)
 
 
 class RiskManager:
@@ -123,6 +112,7 @@ class RiskManager:
             blocked.decision_score = score
             blocked.position_scale = 0.0
             blocked.position_tier = "block"
+            self._attach_sizing_audit(blocked, breakdown)
             blocked.score_breakdown = breakdown
             blocked.warnings = [*ai.data_quality_warnings, *score_warnings]
             return blocked
@@ -131,6 +121,7 @@ class RiskManager:
             blocked.decision_score = score
             blocked.position_scale = 0.0
             blocked.position_tier = "block"
+            self._attach_sizing_audit(blocked, breakdown)
             blocked.score_breakdown = breakdown
             blocked.warnings = [*ai.data_quality_warnings, *score_warnings]
             return blocked
@@ -160,6 +151,7 @@ class RiskManager:
             blocked.decision_score = score
             blocked.position_scale = 0.0
             blocked.position_tier = "block"
+            self._attach_sizing_audit(blocked, breakdown)
             blocked.score_breakdown = breakdown
             blocked.warnings = [*ai.data_quality_warnings, *score_warnings]
             return blocked
@@ -176,7 +168,7 @@ class RiskManager:
         if self.config.small_position_mode:
             clipped_notional = min(clipped_notional, self.config.small_position_notional_usdt)
         clipped_qty = clipped_notional / signal.current_price if signal.current_price > 0 else 0.0
-        return RiskDecision(
+        decision = RiskDecision(
             allowed=clipped_qty > 0,
             action=signal.action,
             symbol=signal.symbol,
@@ -195,6 +187,8 @@ class RiskManager:
             reason=self._scale_reason(tier, consensus_score) if clipped_qty > 0 else "qty_clipped_to_zero",
             warnings=[*ai.data_quality_warnings, *score_warnings],
         )
+        self._attach_sizing_audit(decision, breakdown)
+        return decision
 
     def _blocked(
         self,
@@ -246,7 +240,7 @@ class RiskManager:
             or float(evidence.get("major_news_event_count") or 0) > 0
         )
 
-    def _decision_score(self, signal: StrategySignal, ai: AiDecision) -> tuple[float, str, dict[str, float], list[str]]:
+    def _decision_score(self, signal: StrategySignal, ai: AiDecision) -> tuple[float, PositionTier, dict[str, float], list[str]]:
         technical = min(max(signal.signal_strength, 0.0), 1.0)
         trend = min(max(ai.trend_confirmation_score, 0.0), 1.0)
         range_safety = 1.0 - min(max(ai.range_risk_score, 0.0), 1.0)
@@ -270,16 +264,42 @@ class RiskManager:
             "btc_leader_score": btc_leader,
             "eth_btc_rotation_score": eth_btc_rotation,
         }
-        raw_score = min(
-            max(
-                sum(score_inputs[key] * weight for key, weight in FACTOR_RANKED_SCORE_WEIGHTS.items()),
-                0.0,
-            ),
-            1.0,
+        legacy = factor_ranked_policy(score_inputs, min_trade_score=self.config.min_confidence_to_trade)
+        calibrated = calibrated_v1_policy(
+            score_inputs,
+            min_trade_score=self.config.min_confidence_to_trade,
+            min_factor_coverage=self.config.calibrated_min_factor_coverage,
         )
 
-        tier = self._score_to_tier(raw_score)
-        warnings: list[str] = []
+        selected = legacy
+        selection_warnings: list[str] = []
+        if self.config.ai_sizing_policy == "calibrated_v1_controlled":
+            if "calibrated_factor_coverage_low_fallback_legacy" in calibrated.warnings:
+                selected = legacy
+                selection_warnings.append("calibrated_v1_fallback_to_legacy_factor_coverage_low")
+            else:
+                limited_tier = limit_tier_lift(
+                    calibrated.tier,
+                    legacy.tier,
+                    self.config.calibrated_max_tier_lift,
+                )
+                if limited_tier != calibrated.tier:
+                    selection_warnings.append(
+                        f"calibrated_tier_lift_limited:{calibrated.tier}->{limited_tier}:legacy={legacy.tier}"
+                    )
+                selected = type(calibrated)(
+                    policy=calibrated.policy,
+                    score=calibrated.score,
+                    tier=limited_tier,
+                    warnings=calibrated.warnings,
+                    coverage=calibrated.coverage,
+                )
+
+        raw_score = selected.score
+        tier = selected.tier
+        warnings: list[str] = [*selection_warnings]
+        if self.config.ai_sizing_policy == "calibrated_v1_controlled":
+            warnings.extend(calibrated.warnings)
         if ai.range_risk_score >= 0.85:
             tier = "block"
             warnings.append("range_risk_extreme_blocks_entry")
@@ -341,6 +361,14 @@ class RiskManager:
             "btc_leader_impact_score": min(max(ai.btc_leader_impact_score, 0.0), 1.0),
             "symbol_news_impact_score": min(max(ai.symbol_news_impact_score, 0.0), 1.0),
             **{f"weight_{key}": weight for key, weight in FACTOR_RANKED_SCORE_WEIGHTS.items()},
+            "legacy_decision_score": legacy.score,
+            "legacy_position_scale": POSITION_TIER_SCALE[legacy.tier],
+            "legacy_position_tier_index": float(self._tier_index(legacy.tier)),
+            "calibrated_edge_score": calibrated.score,
+            "calibrated_position_scale": POSITION_TIER_SCALE[calibrated.tier],
+            "calibrated_position_tier_index": float(self._tier_index(calibrated.tier)),
+            "calibrated_factor_coverage": calibrated.coverage,
+            "selected_position_tier_index": float(self._tier_index(tier)),
             "combined_decision_score": raw_score,
         }, warnings
 
@@ -415,25 +443,14 @@ class RiskManager:
             warn_once("symbol_news_unclear_caps_normal")
         return tier
 
-    def _score_to_tier(self, score: float) -> str:
-        if score >= 0.81:
-            return "full"
-        if score >= 0.70:
-            return "strong"
-        if score >= 0.62:
-            return "normal"
-        if score >= self.config.min_confidence_to_trade:
-            return "weak"
-        return "block"
-
     def _tier_index(self, tier: str) -> int:
         return POSITION_TIER_ORDER.index(tier)
 
-    def _min_tier(self, tier: str, cap: str) -> str:
-        return POSITION_TIER_ORDER[min(self._tier_index(tier), self._tier_index(cap))]
+    def _min_tier(self, tier: PositionTier, cap: PositionTier) -> PositionTier:
+        return min_tier(tier, cap)
 
-    def _max_tier(self, tier: str, floor: str) -> str:
-        return POSITION_TIER_ORDER[max(self._tier_index(tier), self._tier_index(floor))]
+    def _max_tier(self, tier: PositionTier, floor: PositionTier) -> PositionTier:
+        return max_tier(tier, floor)
 
     def _reduce_tier_cap(self, tier: str) -> str:
         if tier in {"full", "strong"}:
@@ -452,3 +469,15 @@ class RiskManager:
         if tier == "weak":
             return "weak_size_by_partial_consensus"
         return "blocked_by_five_score_model"
+
+    def _attach_sizing_audit(self, decision: RiskDecision, breakdown: dict[str, float]) -> None:
+        decision.sizing_policy = self.config.ai_sizing_policy
+        legacy_index = int(breakdown.get("legacy_position_tier_index", 0.0))
+        calibrated_index = int(breakdown.get("calibrated_position_tier_index", 0.0))
+        legacy_tier = POSITION_TIER_ORDER[max(0, min(legacy_index, len(POSITION_TIER_ORDER) - 1))]
+        calibrated_tier = POSITION_TIER_ORDER[max(0, min(calibrated_index, len(POSITION_TIER_ORDER) - 1))]
+        decision.legacy_position_tier = legacy_tier
+        decision.legacy_position_scale = POSITION_TIER_SCALE[legacy_tier]
+        decision.calibrated_position_tier = calibrated_tier
+        decision.calibrated_position_scale = POSITION_TIER_SCALE[calibrated_tier]
+        decision.calibrated_edge_score = breakdown.get("calibrated_edge_score")
