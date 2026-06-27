@@ -35,6 +35,7 @@ class SizingPolicyResult:
     tier: PositionTier
     warnings: list[str] = field(default_factory=list)
     coverage: float = 1.0
+    loss_risk_score: float | None = None
 
 
 def tier_index(tier: str) -> int:
@@ -157,4 +158,105 @@ def calibrated_v1_policy(
         tier=score_to_tier(edge_score, min_trade_score),
         warnings=warnings,
         coverage=coverage,
+    )
+
+
+def loss_risk_score(score_inputs: dict[str, float]) -> float:
+    technical = float(score_inputs.get("technical_signal_score", 0.0))
+    orderflow = float(score_inputs.get("orderflow_confirmation_score", 0.0))
+    pattern = float(score_inputs.get("pattern_confirmation_score", 0.0))
+    dense = float(score_inputs.get("dense_zone_breakout_score", 0.0))
+    trend = float(score_inputs.get("trend_confirmation_score", 0.0))
+    range_safety = float(score_inputs.get("range_safety_score", 0.0))
+    news_safety = float(score_inputs.get("news_safety_score", 0.0))
+    btc = float(score_inputs.get("btc_leader_score", 0.0))
+    rotation = float(score_inputs.get("eth_btc_rotation_score", 0.0))
+
+    weak_structure = (
+        max(0.0, 0.62 - orderflow) * 0.26
+        + max(0.0, 0.58 - pattern) * 0.22
+        + max(0.0, 0.55 - dense) * 0.18
+        + max(0.0, 0.55 - trend) * 0.10
+    )
+    hostile_context = (
+        (1.0 - range_safety) * 0.20
+        + (1.0 - news_safety) * 0.08
+        + max(0.0, 0.50 - btc) * 0.06
+        + max(0.0, 0.50 - rotation) * 0.04
+    )
+    late_breakout_divergence = max(0.0, technical - 0.72) * (
+        max(0.0, 0.60 - orderflow) * 0.22
+        + max(0.0, 0.55 - pattern) * 0.16
+        + max(0.0, 0.52 - dense) * 0.14
+    )
+    return min(max(weak_structure + hostile_context + late_breakout_divergence, 0.0), 1.0)
+
+
+def calibrated_v2_loss_aware_policy(
+    score_inputs: dict[str, float],
+    *,
+    min_trade_score: float,
+    min_factor_coverage: float,
+) -> SizingPolicyResult:
+    """Research-only loss-aware candidate.
+
+    The v1 calibration lifted too many historical losers. This candidate keeps
+    v1's edge score, but requires orderflow and structure confirmation before
+    allowing strong/full tiers, and cuts one tier when orderflow is very weak.
+    It is intentionally not wired into live config until shadow results justify
+    it.
+    """
+
+    base = calibrated_v1_policy(
+        score_inputs,
+        min_trade_score=min_trade_score,
+        min_factor_coverage=min_factor_coverage,
+    )
+    legacy = factor_ranked_policy(score_inputs, min_trade_score=min_trade_score)
+    risk = loss_risk_score(score_inputs)
+    if "calibrated_factor_coverage_low_fallback_legacy" in base.warnings:
+        return SizingPolicyResult(
+            policy="calibrated_v2_loss_aware",
+            score=base.score,
+            tier=base.tier,
+            warnings=[*base.warnings],
+            coverage=base.coverage,
+            loss_risk_score=risk,
+        )
+
+    orderflow = float(score_inputs.get("orderflow_confirmation_score", 0.0))
+    pattern = float(score_inputs.get("pattern_confirmation_score", 0.0))
+    dense = float(score_inputs.get("dense_zone_breakout_score", 0.0))
+    range_safety = float(score_inputs.get("range_safety_score", 0.0))
+    trend = float(score_inputs.get("trend_confirmation_score", 0.0))
+    volume = float(score_inputs.get("volume_score", 0.5))
+
+    tier = base.tier
+    warnings = [*base.warnings]
+    if orderflow < 0.74 and tier_index(tier) > tier_index(legacy.tier):
+        tier = legacy.tier
+        warnings.append("loss_aware_orderflow_blocks_promotion")
+    if orderflow < 0.30:
+        tier = POSITION_TIER_ORDER[max(0, tier_index(tier) - 1)]
+        warnings.append("loss_aware_very_weak_orderflow_reduces_tier")
+    if tier_index(tier) >= tier_index("full") and not (
+        orderflow >= 0.80 and pattern >= 0.88 and dense >= 0.45 and range_safety >= 0.62
+    ):
+        tier = "strong"
+        warnings.append("loss_aware_full_requires_orderflow_pattern_range")
+    if tier_index(tier) >= tier_index("strong") and not (
+        orderflow >= 0.74 and (pattern >= 0.88 or dense >= 0.45) and trend >= 0.45
+    ):
+        tier = "normal"
+        warnings.append("loss_aware_strong_requires_orderflow_structure")
+    if orderflow < 0.50 and volume < 0.60:
+        tier = min_tier(tier, "weak")
+        warnings.append("loss_aware_low_orderflow_low_volume_caps_weak")
+    return SizingPolicyResult(
+        policy="calibrated_v2_loss_aware",
+        score=base.score,
+        tier=tier,
+        warnings=warnings,
+        coverage=base.coverage,
+        loss_risk_score=risk,
     )

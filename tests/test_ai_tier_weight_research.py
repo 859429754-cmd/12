@@ -6,9 +6,12 @@ from scripts.ai_tier_weight_research import (
     ResearchRow,
     balanced_policy,
     build_rows,
+    calibrated_v1_controlled_research_policy,
+    calibrated_v2_loss_aware_research_policy,
     current_factor_policy,
     evaluate_walk_forward,
     evaluate_policy,
+    policy_transition_effects,
     parse_walk_forward_periods,
     rows_before,
     rows_between,
@@ -83,6 +86,33 @@ def test_current_factor_policy_does_not_use_missing_news_as_positive_confirmatio
     assert row.scores["news_direction_alignment_score"] == 0.0
 
 
+def test_loss_aware_candidate_reduces_high_risk_promotion() -> None:
+    row = _row(
+        scores={
+            "technical_signal_score": 0.95,
+            "orderflow_confirmation_score": 0.42,
+            "pattern_confirmation_score": 0.38,
+            "dense_zone_breakout_score": 0.36,
+            "range_safety_score": 0.35,
+            "trend_confirmation_score": 0.78,
+            "news_safety_score": 0.50,
+        },
+        raw={
+            "regime_range_score": 0.65,
+            "regime_risk_score": 0.45,
+            "regime_trend_score": 0.78,
+            "dense_trend_score": 0.36,
+        },
+    )
+
+    legacy_scale = {"block": 0.0, "weak": 0.25, "normal": 0.50, "strong": 0.75, "full": 1.0}
+    v1 = calibrated_v1_controlled_research_policy(row)
+    v2 = calibrated_v2_loss_aware_research_policy(row)
+
+    assert legacy_scale[v2] <= legacy_scale[v1]
+    assert v2 in {"block", "weak", "normal"}
+
+
 def test_weighted_policy_can_promote_high_orderflow_quality_without_directional_cvd() -> None:
     row = _row(scores={"orderflow_confirmation_score": 0.98, "orderflow_direction_score": 0.0})
     policy = weighted_policy(
@@ -122,6 +152,23 @@ def test_evaluate_policy_reports_trade_level_sharpe() -> None:
 
     assert result["avg_trade_return_pct"] > 0
     assert result["trade_sharpe"] > 0
+
+
+def test_policy_transition_effects_reports_loser_scaled_down() -> None:
+    rows = [
+        _row(signal_idx=1, pnl=100),
+        _row(signal_idx=2, pnl=-50),
+    ]
+
+    result = policy_transition_effects(
+        rows,
+        lambda _row: "strong",
+        lambda row: "normal" if row.pnl <= 0 else "full",
+    )
+
+    assert result["winning_trades_scaled_up"] == 1
+    assert result["losing_trades_scaled_down"] == 1
+    assert result["loser_pnl_delta_ratio_sum"] > 0
 
 
 def test_evaluate_policy_stops_when_overlay_equity_is_ruined() -> None:

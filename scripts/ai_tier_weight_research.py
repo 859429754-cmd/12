@@ -4,12 +4,22 @@ import argparse
 import itertools
 import json
 import math
+import sys
 from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from statistics import median
 from typing import Any, Callable
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from ai_quant_trader.risk.sizing import (
+    calibrated_v1_policy,
+    calibrated_v2_loss_aware_policy,
+    factor_ranked_policy,
+    limit_tier_lift,
+)
 
 
 INPUT_FEATURES = Path("data/research/pure_strategy_tier_research_eth_2022_2026_no_ema.json")
@@ -326,6 +336,39 @@ def current_factor_testable_renormalized_policy(row: ResearchRow) -> str:
     return apply_research_caps(row, score_to_tier(score))
 
 
+def live_sizing_score_inputs(row: ResearchRow) -> dict[str, float]:
+    return {
+        "technical_signal_score": row.scores.get("technical_signal_score", 0.0),
+        "orderflow_confirmation_score": row.scores.get("orderflow_confirmation_score", 0.0),
+        "news_direction_alignment_score": row.scores.get("news_direction_alignment_score", 0.0),
+        "pattern_confirmation_score": row.scores.get("pattern_confirmation_score", 0.0),
+        "dense_zone_breakout_score": row.scores.get("dense_zone_breakout_score", 0.0),
+        "range_safety_score": row.scores.get("range_safety_score", 0.0),
+        "trend_confirmation_score": row.scores.get("trend_confirmation_score", 0.0),
+        "news_safety_score": row.scores.get("news_safety_score", 0.5),
+        "btc_leader_score": row.scores.get("btc_leader_score", 0.5),
+        "eth_btc_rotation_score": row.scores.get("eth_btc_rotation_score", 0.5),
+    }
+
+
+def calibrated_v1_controlled_research_policy(row: ResearchRow) -> str:
+    score_inputs = live_sizing_score_inputs(row)
+    legacy = factor_ranked_policy(score_inputs, min_trade_score=0.55)
+    calibrated = calibrated_v1_policy(score_inputs, min_trade_score=0.55, min_factor_coverage=0.70)
+    if "calibrated_factor_coverage_low_fallback_legacy" in calibrated.warnings:
+        return apply_research_caps(row, legacy.tier)
+    return apply_research_caps(row, limit_tier_lift(calibrated.tier, legacy.tier, 1))
+
+
+def calibrated_v2_loss_aware_research_policy(row: ResearchRow) -> str:
+    score_inputs = live_sizing_score_inputs(row)
+    legacy = factor_ranked_policy(score_inputs, min_trade_score=0.55)
+    calibrated = calibrated_v2_loss_aware_policy(score_inputs, min_trade_score=0.55, min_factor_coverage=0.70)
+    if "calibrated_factor_coverage_low_fallback_legacy" in calibrated.warnings:
+        return apply_research_caps(row, legacy.tier)
+    return apply_research_caps(row, limit_tier_lift(calibrated.tier, legacy.tier, 1))
+
+
 def weighted_policy(weights: dict[str, float], thresholds: dict[str, float]) -> Callable[[ResearchRow], str]:
     active_total = sum(weights.values())
 
@@ -385,6 +428,50 @@ def evaluate_policy(rows: list[ResearchRow], policy: Callable[[ResearchRow], str
         "trade_sharpe": trade_level_annualized_sharpe(taken_returns, taken_times),
         "ruined": ruined,
         "objective": robust_objective((overlay_equity - initial_equity) / max(initial_equity, 1e-9) * 100, drawdown, len(taken), len(rows)),
+    }
+
+
+def policy_transition_effects(
+    rows: list[ResearchRow],
+    baseline_policy: Callable[[ResearchRow], str],
+    candidate_policy: Callable[[ResearchRow], str],
+) -> dict[str, Any]:
+    counts: Counter[str] = Counter()
+    pnl_delta = 0.0
+    winner_pnl_delta = 0.0
+    loser_pnl_delta = 0.0
+    for row in rows:
+        baseline_tier = baseline_policy(row)
+        candidate_tier = candidate_policy(row)
+        baseline_scale = TIER_SCALE[baseline_tier]
+        candidate_scale = TIER_SCALE[candidate_tier]
+        delta_scale = candidate_scale - baseline_scale
+        pnl_ratio = row.pnl / max(row.baseline_equity_before, 1e-9)
+        delta = pnl_ratio * delta_scale
+        pnl_delta += delta
+        if abs(delta_scale) < 1e-12:
+            counts["same"] += 1
+        elif row.pnl > 0 and delta_scale > 0:
+            counts["winning_trades_scaled_up"] += 1
+            winner_pnl_delta += delta
+        elif row.pnl > 0 and delta_scale < 0:
+            counts["winning_trades_scaled_down"] += 1
+            winner_pnl_delta += delta
+        elif row.pnl <= 0 and delta_scale > 0:
+            counts["losing_trades_scaled_up"] += 1
+            loser_pnl_delta += delta
+        elif row.pnl <= 0 and delta_scale < 0:
+            counts["losing_trades_scaled_down"] += 1
+            loser_pnl_delta += delta
+    return {
+        "same": counts["same"],
+        "winning_trades_scaled_up": counts["winning_trades_scaled_up"],
+        "winning_trades_scaled_down": counts["winning_trades_scaled_down"],
+        "losing_trades_scaled_up": counts["losing_trades_scaled_up"],
+        "losing_trades_scaled_down": counts["losing_trades_scaled_down"],
+        "pnl_delta_ratio_sum": pnl_delta,
+        "winner_pnl_delta_ratio_sum": winner_pnl_delta,
+        "loser_pnl_delta_ratio_sum": loser_pnl_delta,
     }
 
 
@@ -842,6 +929,16 @@ def build_markdown_v2(summary: dict[str, Any]) -> str:
                 f"full_return `{full['return_pct']:.2f}%`, full_DD `{full['max_drawdown_pct']:.2f}%`"
             )
 
+    if summary.get("transition_effects"):
+        lines.extend(["", "## Transition effects versus legacy factor-ranked policy"])
+        for name, stats in summary["transition_effects"].items():
+            lines.append(
+                f"- `{name}`: same `{stats['same']}`, win_up `{stats['winning_trades_scaled_up']}`, "
+                f"win_down `{stats['winning_trades_scaled_down']}`, loss_up `{stats['losing_trades_scaled_up']}`, "
+                f"loss_down `{stats['losing_trades_scaled_down']}`, "
+                f"winner_delta `{stats['winner_pnl_delta_ratio_sum']:.4f}`, loser_delta `{stats['loser_pnl_delta_ratio_sum']:.4f}`"
+            )
+
     best = summary["optimized_candidates"][0] if summary["optimized_candidates"] else None
     if best:
         lines.extend(
@@ -906,6 +1003,8 @@ def main() -> None:
         "balanced_candidate_v1": balanced_policy,
         "factor_ranked_current_weights_zero_news": current_factor_policy,
         "factor_ranked_current_weights_testable_renormalized": current_factor_testable_renormalized_policy,
+        "calibrated_v1_controlled_live": calibrated_v1_controlled_research_policy,
+        "calibrated_v2_loss_aware": calibrated_v2_loss_aware_research_policy,
     }
     baseline_results = {
         name: {
@@ -994,6 +1093,18 @@ def main() -> None:
         "sample": {"rows": len(rows), "train_rows": len(train_rows), "validation_rows": len(validation_rows)},
         "baseline_policies": baseline_results,
         "baseline_walk_forward": baseline_walk_forward,
+        "transition_effects": {
+            "calibrated_v1_controlled_live": policy_transition_effects(
+                rows,
+                current_factor_policy,
+                calibrated_v1_controlled_research_policy,
+            ),
+            "calibrated_v2_loss_aware": policy_transition_effects(
+                rows,
+                current_factor_policy,
+                calibrated_v2_loss_aware_research_policy,
+            ),
+        },
         "optimized_candidates": candidates,
         "walk_forward_candidates": walk_forward_candidates,
         "feature_effects": feature_effects(rows),
