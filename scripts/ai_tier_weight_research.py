@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from ai_quant_trader.risk.sizing import (
     calibrated_v1_policy,
     calibrated_v2_loss_aware_policy,
+    calibrated_v21_profit_loss_policy,
     factor_ranked_policy,
     limit_tier_lift,
 )
@@ -142,6 +143,10 @@ def build_orderflow_map(orderflow_payload: dict[str, Any], window: str = "60") -
     return {int(row["signal_idx"]): row for row in rows if "signal_idx" in row}
 
 
+def usable_orderflow_row(row: dict[str, Any] | None) -> bool:
+    return bool(row) and not row.get("missing_days") and float(row.get("trade_count") or 0.0) > 0.0
+
+
 def is_train(signal_time: str, split: str) -> bool:
     return signal_time[:10] < split
 
@@ -182,15 +187,23 @@ def orderflow_quality_scores(
 ) -> dict[int, dict[str, float]]:
     fields = ["trade_count", "total_quote", "large_trade_quote", "max_trade_quote"]
     train_rows = [
-        orderflow_by_idx.get(int(item["signal_idx"]), {})
+        row
         for item in features
         if is_train(str(item["signal_time"]), split)
+        for row in [orderflow_by_idx.get(int(item["signal_idx"]))]
+        if usable_orderflow_row(row)
     ]
     train_values = {field: [float(row.get(field) or 0.0) for row in train_rows] for field in fields}
     output: dict[int, dict[str, float]] = {}
     for item in features:
         signal_idx = int(item["signal_idx"])
-        row = orderflow_by_idx.get(signal_idx, {})
+        row = orderflow_by_idx.get(signal_idx)
+        if not usable_orderflow_row(row):
+            output[signal_idx] = {
+                "orderflow_confirmation_score": 0.5,
+                "orderflow_direction_score": 0.0,
+            }
+            continue
         percentiles = [empirical_percentile(train_values[field], float(row.get(field) or 0.0)) for field in fields]
         directional_cvd = clip(float(row.get("directional_cvd_quote_ratio") or 0.0) / 0.35)
         directional_large = clip(float(row.get("directional_large_trade_ratio") or 0.0) / 0.35)
@@ -325,6 +338,85 @@ def balanced_policy(row: ResearchRow) -> str:
     return "block"
 
 
+def non_volume_confirmation_count(row: ResearchRow) -> int:
+    raw = row.raw
+    checks = [
+        row.scores["technical_signal_score"] >= 0.75,
+        float(raw.get("breakout_atr") or 0.0) >= 0.55,
+        row.scores["pattern_confirmation_score"] >= 0.65,
+        row.scores["dense_zone_breakout_score"] >= 0.58
+        or str(raw.get("dense_breakout_status") or "") in {"breakout_up", "breakout_down", "vacuum_travel"},
+        row.scores["trend_confirmation_score"] >= 0.62 and str(raw.get("regime_breakout_quality") or "") in {"strong", "pending"},
+        row.scores["htf_alignment_score"] >= 0.62,
+    ]
+    return sum(1 for item in checks if item)
+
+
+def balanced_volume_dedup_score(row: ResearchRow) -> float:
+    return clip(
+        row.scores["technical_signal_score"] * 0.14
+        + row.scores["breakout_score"] * 0.17
+        + row.scores["trend_confirmation_score"] * 0.20
+        + row.scores["dense_zone_breakout_score"] * 0.13
+        + row.scores["pattern_confirmation_score"] * 0.14
+        + row.scores["htf_alignment_score"] * 0.12
+        + row.scores["range_safety_score"] * 0.06
+        + row.scores["regime_risk_safety_score"] * 0.04
+    )
+
+
+def balanced_volume_dedup_policy(row: ResearchRow) -> str:
+    if structural_hard_block(row):
+        return "block"
+    score = balanced_volume_dedup_score(row)
+    confirmations = non_volume_confirmation_count(row)
+    if str(row.raw.get("regime_strategy_allowed") or "trend") not in {"trend", "none"} and score < 0.68:
+        return "weak"
+    if float(row.raw.get("regime_range_score") or 0.0) >= 0.70 and row.scores["trend_confirmation_score"] < 0.60:
+        return "weak"
+    if score >= 0.82 and confirmations >= 4 and float(row.raw.get("regime_risk_score") or 0.0) < 0.45:
+        return "full"
+    if score >= 0.72 and confirmations >= 3:
+        return "strong"
+    if score >= 0.62 and confirmations >= 2:
+        return "normal"
+    if score >= 0.52:
+        return "weak"
+    return "block"
+
+
+def structure_context_score(row: ResearchRow) -> float:
+    return clip(
+        row.scores["breakout_score"] * 0.17
+        + row.scores["trend_confirmation_score"] * 0.22
+        + row.scores["dense_zone_breakout_score"] * 0.15
+        + row.scores["pattern_confirmation_score"] * 0.16
+        + row.scores["htf_alignment_score"] * 0.14
+        + row.scores["range_safety_score"] * 0.10
+        + row.scores["regime_risk_safety_score"] * 0.06
+    )
+
+
+def structure_context_policy(row: ResearchRow) -> str:
+    if structural_hard_block(row):
+        return "block"
+    score = structure_context_score(row)
+    confirmations = non_volume_confirmation_count(row)
+    if str(row.raw.get("regime_strategy_allowed") or "trend") not in {"trend", "none"} and score < 0.66:
+        return "weak"
+    if float(row.raw.get("regime_range_score") or 0.0) >= 0.70 and row.scores["trend_confirmation_score"] < 0.60:
+        return "weak"
+    if score >= 0.80 and confirmations >= 4 and float(row.raw.get("regime_risk_score") or 0.0) < 0.45:
+        return "full"
+    if score >= 0.70 and confirmations >= 3:
+        return "strong"
+    if score >= 0.60 and confirmations >= 2:
+        return "normal"
+    if score >= 0.50:
+        return "weak"
+    return "block"
+
+
 def current_factor_policy(row: ResearchRow) -> str:
     score = sum(row.scores[key] * weight for key, weight in CURRENT_FACTOR_WEIGHTS.items())
     return apply_research_caps(row, score_to_tier(score))
@@ -364,6 +456,15 @@ def calibrated_v2_loss_aware_research_policy(row: ResearchRow) -> str:
     score_inputs = live_sizing_score_inputs(row)
     legacy = factor_ranked_policy(score_inputs, min_trade_score=0.55)
     calibrated = calibrated_v2_loss_aware_policy(score_inputs, min_trade_score=0.55, min_factor_coverage=0.70)
+    if "calibrated_factor_coverage_low_fallback_legacy" in calibrated.warnings:
+        return apply_research_caps(row, legacy.tier)
+    return apply_research_caps(row, limit_tier_lift(calibrated.tier, legacy.tier, 1))
+
+
+def calibrated_v21_profit_loss_research_policy(row: ResearchRow) -> str:
+    score_inputs = live_sizing_score_inputs(row)
+    legacy = factor_ranked_policy(score_inputs, min_trade_score=0.55)
+    calibrated = calibrated_v21_profit_loss_policy(score_inputs, min_trade_score=0.55, min_factor_coverage=0.70)
     if "calibrated_factor_coverage_low_fallback_legacy" in calibrated.warnings:
         return apply_research_caps(row, legacy.tier)
     return apply_research_caps(row, limit_tier_lift(calibrated.tier, legacy.tier, 1))
@@ -1131,10 +1232,13 @@ def main() -> None:
     validation_rows = [row for row in rows if not is_train(row.signal_time, args.split)]
     baselines = {
         "balanced_candidate_v1": balanced_policy,
+        "balanced_volume_dedup_v1": balanced_volume_dedup_policy,
+        "structure_context_v1": structure_context_policy,
         "factor_ranked_current_weights_zero_news": current_factor_policy,
         "factor_ranked_current_weights_testable_renormalized": current_factor_testable_renormalized_policy,
         "calibrated_v1_controlled_live": calibrated_v1_controlled_research_policy,
         "calibrated_v2_loss_aware": calibrated_v2_loss_aware_research_policy,
+        "calibrated_v21_profit_loss": calibrated_v21_profit_loss_research_policy,
     }
     baseline_results = {
         name: {
@@ -1178,7 +1282,7 @@ def main() -> None:
         if current["return_pct"] < balanced["return_pct"]:
             conclusions.append("当前权重在缺失新闻方向时偏保守，这解释了实盘五档经常低于平衡版。")
     conclusions = [
-        "This version accepts the 291 closed-trade research sample as the current AI tier-sizing research baseline.",
+        f"This version accepts the {len(rows)} closed-trade research sample as the current AI tier-sizing research baseline.",
         "Historical news direction is incomplete, so news direction must remain a live contextual factor instead of a hindsight-optimized historical weight.",
         "Orderflow is useful as participation/liquidity/impulse quality, but the current archive does not prove simple directional orderflow timing.",
         "Rolling walk-forward uses baseline_equity_before for each historical trade; validation windows no longer misuse full-path absolute PnL after resetting equity.",
@@ -1233,6 +1337,21 @@ def main() -> None:
                 rows,
                 current_factor_policy,
                 calibrated_v2_loss_aware_research_policy,
+            ),
+            "calibrated_v21_profit_loss": policy_transition_effects(
+                rows,
+                current_factor_policy,
+                calibrated_v21_profit_loss_research_policy,
+            ),
+            "balanced_volume_dedup_v1": policy_transition_effects(
+                rows,
+                current_factor_policy,
+                balanced_volume_dedup_policy,
+            ),
+            "structure_context_v1": policy_transition_effects(
+                rows,
+                current_factor_policy,
+                structure_context_policy,
             ),
         },
         "optimized_candidates": candidates,

@@ -4,11 +4,14 @@ import pytest
 
 from scripts.pure_strategy_tier_research import (
     TradeFeature,
+    apply_trend_overrides,
     balanced_policy,
     evaluate_policy,
     summarize_factor_groups,
     summarize_numeric_features,
 )
+
+from ai_quant_trader.core.models import TrendStrategyConfig
 
 
 def _feature(**overrides):
@@ -103,3 +106,40 @@ def test_factor_groups_mark_live_news_orderflow_as_not_backtestable_without_arch
     assert groups["core_strategy_trigger"]["top_numeric"]
     assert groups["live_news_orderflow"]["verdict"] == "live_only_needs_archival_backtest"
     assert "news_risk_score" in groups["live_news_orderflow"]["live_only"]
+
+
+def test_apply_trend_overrides_keeps_default_config_when_args_are_empty() -> None:
+    config = TrendStrategyConfig(volume_multiple=2.5, kc_scalar=2.8, atr_stop_multiple=1.5)
+    args = type(
+        "Args",
+        (),
+        {
+            "kc_scalar": None,
+            "volume_multiple": None,
+            "atr_stop_multiple": None,
+            "position_fraction": None,
+        },
+    )()
+
+    assert apply_trend_overrides(config, args) is config
+
+
+def test_apply_trend_overrides_can_replay_legacy_volume_threshold() -> None:
+    config = TrendStrategyConfig(volume_multiple=2.5, kc_scalar=2.8, atr_stop_multiple=1.5)
+    args = type(
+        "Args",
+        (),
+        {
+            "kc_scalar": 2.8,
+            "volume_multiple": 2.0,
+            "atr_stop_multiple": 1.5,
+            "position_fraction": 1.0,
+        },
+    )()
+
+    updated = apply_trend_overrides(config, args)
+
+    assert updated is not config
+    assert updated.volume_multiple == pytest.approx(2.0)
+    assert updated.position_fraction == pytest.approx(1.0)
+    assert config.volume_multiple == pytest.approx(2.5)

@@ -456,6 +456,7 @@ def test_console_status_strategy_and_workbench(tmp_path: Path, monkeypatch) -> N
         "data_health",
         "ai_drift",
         "major_news_review",
+        "position_review",
         "worker_heartbeat",
         "runtime_maintenance",
     }
@@ -466,6 +467,7 @@ def test_console_status_strategy_and_workbench(tmp_path: Path, monkeypatch) -> N
     assert "latest_data_health" in readiness_body
     assert "latest_ai_drift" in readiness_body
     assert "latest_news_risk_review" in readiness_body
+    assert "latest_position_review" in readiness_body
     assert "latest_ai_budget" in readiness_body
     assert "latest_worker_heartbeats" in readiness_body
     assert "worker_heartbeat_details" in readiness_body

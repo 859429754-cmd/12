@@ -391,6 +391,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
             "latest_data_health": ctx.store.fetch_latest("data_health"),
             "latest_ai_drift": ctx.store.fetch_latest("ai_drift_checks"),
             "latest_news_risk_review": ctx.store.fetch_latest("news_risk_reviews"),
+            "latest_position_review": ctx.store.fetch_latest("position_reviews"),
             "latest_ai_budget": ctx.store.fetch_latest("ai_call_budget_events"),
             "latest_worker_heartbeats": _worker_heartbeat_rows(ctx),
             "latest_maintenance": ctx.store.fetch_latest("maintenance_runs"),
@@ -418,6 +419,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         latest_ai_drift = ctx.store.fetch_latest("ai_drift_checks")
         latest_ai_decision = _latest_trade_ai_decision(ctx)
         latest_news_risk = ctx.store.fetch_latest("news_risk_reviews")
+        latest_position_review = ctx.store.fetch_latest("position_reviews")
         latest_ai_budget = ctx.store.fetch_latest("ai_call_budget_events")
         latest_worker_heartbeats = _worker_heartbeat_rows(ctx)
         worker_heartbeat_details = _worker_heartbeat_details(ctx, latest_worker_heartbeats)
@@ -480,8 +482,20 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
                     f"Max total leverage: {ctx.config.risk.max_total_leverage}x; "
                     f"AI sizing policy: {ctx.config.risk.ai_sizing_policy}; "
                     f"calibrated max lift: {ctx.config.risk.calibrated_max_tier_lift} tier(s); "
+                    f"position review: {ctx.config.risk.position_review.mode}; "
                     f"hard ceiling: {MAX_CONFIGURABLE_LEVERAGE}x."
                 ),
+            ),
+            _readiness_check(
+                "position_review",
+                "Position review",
+                "ok" if ctx.config.risk.position_review.enabled else "warn",
+                (
+                    "Position review is enabled in shadow mode; no add-on orders are submitted."
+                    if ctx.config.risk.position_review.mode == "shadow"
+                    else f"Position review mode: {ctx.config.risk.position_review.mode}."
+                ),
+                age_minutes=_row_age_minutes(latest_position_review),
             ),
             _readiness_check(
                 "news",
@@ -568,6 +582,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
             "latest_ai_drift": latest_ai_drift,
             "latest_ai_decision": latest_ai_decision,
             "latest_news_risk_review": latest_news_risk,
+            "latest_position_review": latest_position_review,
             "latest_ai_budget": latest_ai_budget,
             "latest_worker_heartbeats": latest_worker_heartbeats,
             "latest_maintenance": latest_maintenance,
@@ -604,6 +619,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
             "latest_ai_drift": latest_ai_drift,
             "latest_ai_decision": latest_ai_decision,
             "latest_news_risk_review": latest_news_risk,
+            "latest_position_review": latest_position_review,
             "latest_ai_budget": latest_ai_budget,
             "latest_worker_heartbeats": latest_worker_heartbeats,
             "worker_heartbeat_details": worker_heartbeat_details,

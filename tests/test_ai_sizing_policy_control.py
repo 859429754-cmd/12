@@ -34,3 +34,19 @@ def test_ai_sizing_policy_control_switches_policy_and_creates_backup(tmp_path: P
     assert updated["risk"]["calibrated_min_factor_coverage"] == 0.7
     assert "legacy_factor_ranked" in result["rollback_command"]
     assert result["legacy_rollback_command"].endswith("--policy legacy_factor_ranked")
+
+
+def test_ai_sizing_policy_control_allows_hybrid_subjective_guarded_v2(tmp_path: Path) -> None:
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        yaml.safe_dump({"risk": {"ai_sizing_policy": "calibrated_v2_loss_aware"}}, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    result = set_policy(config, "hybrid_subjective_guarded_v2", max_tier_lift=1, min_factor_coverage=0.7)
+    updated = yaml.safe_load(config.read_text(encoding="utf-8"))
+
+    assert result["previous_policy"] == "calibrated_v2_loss_aware"
+    assert result["new_policy"] == "hybrid_subjective_guarded_v2"
+    assert updated["risk"]["ai_sizing_policy"] == "hybrid_subjective_guarded_v2"
+    assert result["legacy_rollback_command"].endswith("--policy legacy_factor_ranked")

@@ -19,10 +19,12 @@ from ai_quant_trader.risk.sizing import (
     POSITION_TIER_SCALE,
     PositionTier,
     calibrated_v1_policy,
+    calibrated_v2_loss_aware_policy,
     factor_ranked_policy,
     limit_tier_lift,
     max_tier,
     min_tier,
+    tier_index,
 )
 
 
@@ -129,7 +131,12 @@ class RiskManager:
         consensus_score = self._consensus_score(ai)
         if tier == "full" and (consensus_score < 3 or ai.confidence < self.config.ai_full_size_confidence):
             tier = "strong"
-        if consensus_score >= 3 and ai.confidence >= self.config.ai_full_size_confidence and score >= 0.85:
+        if (
+            self.config.ai_sizing_policy != "hybrid_subjective_guarded_v2"
+            and consensus_score >= 3
+            and ai.confidence >= self.config.ai_full_size_confidence
+            and score >= 0.85
+        ):
             tier = self._max_tier(tier, "full")
         tier = self._apply_post_consensus_caps(tier, ai, score_warnings)
         if major_news_context and ai.news_alignment in {Alignment.NEUTRAL, Alignment.UNKNOWN}:
@@ -265,7 +272,12 @@ class RiskManager:
             "eth_btc_rotation_score": eth_btc_rotation,
         }
         legacy = factor_ranked_policy(score_inputs, min_trade_score=self.config.min_confidence_to_trade)
-        calibrated = calibrated_v1_policy(
+        calibrated_v1 = calibrated_v1_policy(
+            score_inputs,
+            min_trade_score=self.config.min_confidence_to_trade,
+            min_factor_coverage=self.config.calibrated_min_factor_coverage,
+        )
+        calibrated_v2 = calibrated_v2_loss_aware_policy(
             score_inputs,
             min_trade_score=self.config.min_confidence_to_trade,
             min_factor_coverage=self.config.calibrated_min_factor_coverage,
@@ -274,32 +286,49 @@ class RiskManager:
         selected = legacy
         selection_warnings: list[str] = []
         if self.config.ai_sizing_policy == "calibrated_v1_controlled":
-            if "calibrated_factor_coverage_low_fallback_legacy" in calibrated.warnings:
+            if "calibrated_factor_coverage_low_fallback_legacy" in calibrated_v1.warnings:
                 selected = legacy
                 selection_warnings.append("calibrated_v1_fallback_to_legacy_factor_coverage_low")
             else:
                 limited_tier = limit_tier_lift(
-                    calibrated.tier,
+                    calibrated_v1.tier,
                     legacy.tier,
                     self.config.calibrated_max_tier_lift,
                 )
-                if limited_tier != calibrated.tier:
+                if limited_tier != calibrated_v1.tier:
                     selection_warnings.append(
-                        f"calibrated_tier_lift_limited:{calibrated.tier}->{limited_tier}:legacy={legacy.tier}"
+                        f"calibrated_tier_lift_limited:{calibrated_v1.tier}->{limited_tier}:legacy={legacy.tier}"
                     )
-                selected = type(calibrated)(
-                    policy=calibrated.policy,
-                    score=calibrated.score,
+                selected = type(calibrated_v1)(
+                    policy=calibrated_v1.policy,
+                    score=calibrated_v1.score,
                     tier=limited_tier,
-                    warnings=calibrated.warnings,
-                    coverage=calibrated.coverage,
+                    warnings=calibrated_v1.warnings,
+                    coverage=calibrated_v1.coverage,
                 )
+        elif self.config.ai_sizing_policy == "calibrated_v2_loss_aware":
+            if "calibrated_factor_coverage_low_fallback_legacy" in calibrated_v2.warnings:
+                selected = legacy
+                selection_warnings.append("calibrated_v2_fallback_to_legacy_factor_coverage_low")
+            else:
+                selected = calibrated_v2
+        elif self.config.ai_sizing_policy == "hybrid_subjective_guarded_v2":
+            if "calibrated_factor_coverage_low_fallback_legacy" in calibrated_v2.warnings:
+                selected = legacy
+                selection_warnings.append("hybrid_v2_fallback_to_legacy_factor_coverage_low")
+            else:
+                selected, hybrid_warnings = self._hybrid_subjective_guarded_v2(calibrated_v2, ai)
+                selection_warnings.extend(hybrid_warnings)
 
         raw_score = selected.score
         tier = selected.tier
         warnings: list[str] = [*selection_warnings]
         if self.config.ai_sizing_policy == "calibrated_v1_controlled":
-            warnings.extend(calibrated.warnings)
+            warnings.extend(calibrated_v1.warnings)
+        elif self.config.ai_sizing_policy == "calibrated_v2_loss_aware":
+            warnings.extend(calibrated_v2.warnings)
+        elif self.config.ai_sizing_policy == "hybrid_subjective_guarded_v2":
+            warnings.extend(calibrated_v2.warnings)
         if ai.range_risk_score >= 0.85:
             tier = "block"
             warnings.append("range_risk_extreme_blocks_entry")
@@ -364,13 +393,152 @@ class RiskManager:
             "legacy_decision_score": legacy.score,
             "legacy_position_scale": POSITION_TIER_SCALE[legacy.tier],
             "legacy_position_tier_index": float(self._tier_index(legacy.tier)),
-            "calibrated_edge_score": calibrated.score,
-            "calibrated_position_scale": POSITION_TIER_SCALE[calibrated.tier],
-            "calibrated_position_tier_index": float(self._tier_index(calibrated.tier)),
-            "calibrated_factor_coverage": calibrated.coverage,
+            "calibrated_v1_edge_score": calibrated_v1.score,
+            "calibrated_v1_position_scale": POSITION_TIER_SCALE[calibrated_v1.tier],
+            "calibrated_v1_position_tier_index": float(self._tier_index(calibrated_v1.tier)),
+            "calibrated_edge_score": (
+                calibrated_v2.score
+                if self.config.ai_sizing_policy in {"calibrated_v2_loss_aware", "hybrid_subjective_guarded_v2"}
+                else calibrated_v1.score
+            ),
+            "calibrated_position_scale": (
+                POSITION_TIER_SCALE[calibrated_v2.tier]
+                if self.config.ai_sizing_policy in {"calibrated_v2_loss_aware", "hybrid_subjective_guarded_v2"}
+                else POSITION_TIER_SCALE[calibrated_v1.tier]
+            ),
+            "calibrated_position_tier_index": (
+                float(self._tier_index(calibrated_v2.tier))
+                if self.config.ai_sizing_policy in {"calibrated_v2_loss_aware", "hybrid_subjective_guarded_v2"}
+                else float(self._tier_index(calibrated_v1.tier))
+            ),
+            "calibrated_factor_coverage": calibrated_v2.coverage
+            if self.config.ai_sizing_policy in {"calibrated_v2_loss_aware", "hybrid_subjective_guarded_v2"}
+            else calibrated_v1.coverage,
+            "calibrated_v2_edge_score": calibrated_v2.score,
+            "calibrated_v2_position_scale": POSITION_TIER_SCALE[calibrated_v2.tier],
+            "calibrated_v2_position_tier_index": float(self._tier_index(calibrated_v2.tier)),
+            "loss_risk_score": calibrated_v2.loss_risk_score if calibrated_v2.loss_risk_score is not None else 0.0,
+            "hybrid_base_position_tier_index": float(self._tier_index(calibrated_v2.tier)),
+            "subjective_position_tier_index": float(self._tier_index(self._subjective_position_tier(ai)[0])),
+            "subjective_position_confidence": self._subjective_position_tier(ai)[1],
             "selected_position_tier_index": float(self._tier_index(tier)),
             "combined_decision_score": raw_score,
         }, warnings
+
+    def _hybrid_subjective_guarded_v2(
+        self,
+        base,
+        ai: AiDecision,
+    ):
+        subjective_tier, subjective_confidence = self._subjective_position_tier(ai)
+        base_tier = base.tier
+        base_index = tier_index(base_tier)
+        subjective_index = tier_index(subjective_tier)
+        warnings: list[str] = []
+
+        if subjective_index < base_index:
+            warnings.append("hybrid_subjective_reduced_tier")
+            return type(base)(
+                policy="hybrid_subjective_guarded_v2",
+                score=base.score,
+                tier=subjective_tier,
+                warnings=base.warnings,
+                coverage=base.coverage,
+                loss_risk_score=base.loss_risk_score,
+                profit_expansion_score=base.profit_expansion_score,
+            ), warnings
+
+        if subjective_index <= base_index or base_tier == "block":
+            return type(base)(
+                policy="hybrid_subjective_guarded_v2",
+                score=base.score,
+                tier=base_tier,
+                warnings=base.warnings,
+                coverage=base.coverage,
+                loss_risk_score=base.loss_risk_score,
+                profit_expansion_score=base.profit_expansion_score,
+            ), warnings
+
+        promoted_tier = POSITION_TIER_ORDER[min(base_index + 1, subjective_index)]
+        if self._subjective_promotion_allowed(base_tier, promoted_tier, subjective_confidence, ai):
+            warnings.append(f"hybrid_subjective_promoted_one_tier:{base_tier}->{promoted_tier}:raw={subjective_tier}")
+            tier = promoted_tier
+        else:
+            warnings.append(f"hybrid_subjective_promotion_rejected:{base_tier}->{subjective_tier}")
+            tier = base_tier
+        return type(base)(
+            policy="hybrid_subjective_guarded_v2",
+            score=base.score,
+            tier=tier,
+            warnings=base.warnings,
+            coverage=base.coverage,
+            loss_risk_score=base.loss_risk_score,
+            profit_expansion_score=base.profit_expansion_score,
+        ), warnings
+
+    def _subjective_position_tier(self, ai: AiDecision) -> tuple[PositionTier, float]:
+        if ai.subjective_position_tier is not None:
+            return ai.subjective_position_tier, ai.subjective_position_confidence or ai.confidence
+        risk = max(
+            ai.range_risk_score,
+            ai.news_risk_score,
+            1.0 - ai.orderflow_confirmation_score,
+            1.0 - ai.dense_zone_breakout_score,
+        )
+        if ai.veto_action == VetoAction.BLOCK:
+            return "block", ai.confidence
+        if ai.veto_action == VetoAction.REDUCE:
+            if risk >= 0.80 and ai.confidence >= 0.65:
+                return "weak", ai.confidence
+            if risk >= 0.70 and ai.confidence >= 0.60:
+                return "normal", ai.confidence
+            return "strong", ai.confidence
+        if risk >= 0.90 and ai.confidence >= 0.75:
+            return "strong", ai.confidence
+        return "full", ai.confidence
+
+    def _subjective_promotion_allowed(
+        self,
+        base_tier: PositionTier,
+        promoted_tier: PositionTier,
+        subjective_confidence: float,
+        ai: AiDecision,
+    ) -> bool:
+        if subjective_confidence < 0.72:
+            return False
+        if ai.news_alignment == Alignment.CONFLICT or ai.orderflow_alignment == Alignment.CONFLICT:
+            return False
+        rotation_context = ai.btc_leader_regime in {"rotation_lag", "leader_pullback"} and ai.eth_btc_rotation_score >= 0.55
+        if ai.btc_leader_alignment == Alignment.CONFLICT and ai.btc_leader_impact_score >= 0.80 and not rotation_context:
+            return False
+
+        if promoted_tier == "full":
+            return (
+                subjective_confidence >= 0.80
+                and ai.orderflow_confirmation_score >= 0.82
+                and ai.pattern_confirmation_score >= 0.82
+                and ai.dense_zone_breakout_score >= 0.65
+                and ai.trend_confirmation_score >= 0.70
+                and ai.range_risk_score <= 0.45
+                and (ai.news_risk_score <= 0.55 or ai.news_alignment == Alignment.ALIGNED)
+            )
+        if promoted_tier == "strong":
+            return (
+                subjective_confidence >= 0.74
+                and ai.orderflow_confirmation_score >= 0.74
+                and (ai.pattern_confirmation_score >= 0.72 or ai.dense_zone_breakout_score >= 0.50)
+                and ai.trend_confirmation_score >= 0.50
+                and ai.range_risk_score <= 0.50
+                and ai.news_risk_score <= 0.70
+            )
+        if promoted_tier == "normal":
+            return (
+                ai.orderflow_confirmation_score >= 0.65
+                and ai.pattern_confirmation_score >= 0.55
+                and ai.dense_zone_breakout_score >= 0.55
+                and ai.range_risk_score <= 0.55
+            )
+        return False
 
     def _btc_leader_score(self, ai: AiDecision) -> float:
         impact = min(max(ai.btc_leader_impact_score, 0.0), 1.0)
@@ -481,3 +649,11 @@ class RiskManager:
         decision.calibrated_position_tier = calibrated_tier
         decision.calibrated_position_scale = POSITION_TIER_SCALE[calibrated_tier]
         decision.calibrated_edge_score = breakdown.get("calibrated_edge_score")
+        subjective_index = breakdown.get("subjective_position_tier_index")
+        if subjective_index is not None:
+            subjective_tier = POSITION_TIER_ORDER[
+                max(0, min(int(subjective_index), len(POSITION_TIER_ORDER) - 1))
+            ]
+            decision.subjective_position_tier = subjective_tier
+            decision.subjective_position_scale = POSITION_TIER_SCALE[subjective_tier]
+            decision.subjective_position_confidence = breakdown.get("subjective_position_confidence")

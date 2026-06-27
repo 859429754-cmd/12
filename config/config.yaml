@@ -15,12 +15,25 @@ risk:
   min_confidence_to_trade: 0.55
   ai_candidate_min_confidence: 0.65
   ai_dynamic_position_sizing: true
-  ai_sizing_policy: calibrated_v1_controlled
+  ai_sizing_policy: hybrid_subjective_guarded_v2
   calibrated_max_tier_lift: 1
   calibrated_min_factor_coverage: 0.7
   stale_data_seconds: 300
   small_position_mode: false
   small_position_notional_usdt: 20.0
+  position_review:
+    enabled: true
+    mode: shadow
+    min_profit_r: 0.5
+    min_profit_atr: 0.5
+    min_orderflow_confirmation: 0.75
+    min_pattern_confirmation: 0.70
+    min_dense_zone_breakout: 0.65
+    min_confirmation_count: 2
+    max_range_risk_score: 0.45
+    max_news_risk_score: 0.75
+    max_add_fraction: 0.25
+    require_native_stop_verified: true
 ai:
   decision_model: deepseek-v4-pro
   report_model: deepseek-v4-pro

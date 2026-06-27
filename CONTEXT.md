@@ -120,9 +120,19 @@ AI output must be structured Pydantic JSON and include:
 Current sizing policy:
 
 - `legacy_factor_ranked`: baseline factor-ranked five-tier sizing. It remains the rollback path and audit control group.
-- `calibrated_v1_controlled`: small-capital live-test sizing policy. DeepSeek supplies structured factors; local deterministic calibration converts quality/tail-risk factors into `calibrated_edge_score`; RiskManager still applies hard caps.
-- `calibrated_v1_controlled` may lift the final tier by at most one tier above `legacy_factor_ranked`; it can reduce more aggressively. If structured factor coverage is too low, it falls back to `legacy_factor_ranked`.
-- Order lifecycle metadata must keep `risk_sizing_policy`, `legacy_position_tier`, `calibrated_position_tier`, and `calibrated_edge_score` for post-trade audit.
+- `calibrated_v1_controlled`: previous small-capital calibration policy. It remains available for audit and rollback research.
+- `calibrated_v2_loss_aware`: loss-aware calibration policy. It uses the same structured factors but blocks promotions unless orderflow and structure confirmation are strong enough.
+- `hybrid_subjective_guarded_v2`: current live-test sizing policy. It uses `calibrated_v2_loss_aware` as the base tier and accepts DeepSeek's `subjective_position_tier` as a guarded subjective proposal. Subjective proposals may reduce faster; promotions are limited to one tier above the v2 base and cannot revive a v2 `block`.
+- If structured factor coverage is too low, v2 and hybrid fall back to `legacy_factor_ranked`.
+- Order lifecycle metadata must keep `risk_sizing_policy`, `legacy_position_tier`, `calibrated_position_tier`, `calibrated_edge_score`, `subjective_position_tier`, and `subjective_position_confidence` for post-trade audit.
+
+Position review:
+
+- `PositionReviewEngine` is a separate holding-management module, not part of first-entry sizing.
+- It evaluates existing trend positions after a closed 1h candle and writes `position_reviews`.
+- Current production-safe mode is `risk.position_review.mode = shadow`; this records add-on candidates but submits no orders.
+- Add-on candidates require validated profit, intact KC middle structure, verified native stop, healthy readiness, and at least two continuing confirmations from orderflow/pattern/dense-zone.
+- Position review does not replace Keltner middle exit, ATR fixed stop, or same-direction duplicate-entry protection.
 
 Full-position conditions are strict:
 

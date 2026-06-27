@@ -121,18 +121,39 @@ class FollowerAccountConfig(BaseModel):
     mirror_exits: bool = True
 
 
+class PositionReviewConfig(BaseModel):
+    enabled: bool = True
+    mode: Literal["disabled", "shadow", "live_addon"] = "shadow"
+    min_profit_r: float = Field(default=0.5, ge=0, le=5)
+    min_profit_atr: float = Field(default=0.5, ge=0, le=5)
+    min_orderflow_confirmation: float = Field(default=0.75, ge=0, le=1)
+    min_pattern_confirmation: float = Field(default=0.70, ge=0, le=1)
+    min_dense_zone_breakout: float = Field(default=0.65, ge=0, le=1)
+    min_confirmation_count: int = Field(default=2, ge=1, le=3)
+    max_range_risk_score: float = Field(default=0.45, ge=0, le=1)
+    max_news_risk_score: float = Field(default=0.75, ge=0, le=1)
+    max_add_fraction: float = Field(default=0.25, gt=0, le=0.5)
+    require_native_stop_verified: bool = True
+
+
 class RiskConfig(BaseModel):
     max_total_leverage: float = Field(default=4.0, gt=0, le=MAX_CONFIGURABLE_LEVERAGE)
     ai_full_size_confidence: float = Field(default=0.75, ge=0, le=1)
     min_confidence_to_trade: float = Field(default=0.55, ge=0, le=1)
     ai_candidate_min_confidence: float = Field(default=0.65, ge=0, le=1)
     ai_dynamic_position_sizing: bool = True
-    ai_sizing_policy: Literal["legacy_factor_ranked", "calibrated_v1_controlled"] = "legacy_factor_ranked"
+    ai_sizing_policy: Literal[
+        "legacy_factor_ranked",
+        "calibrated_v1_controlled",
+        "calibrated_v2_loss_aware",
+        "hybrid_subjective_guarded_v2",
+    ] = "legacy_factor_ranked"
     calibrated_max_tier_lift: int = Field(default=1, ge=0, le=2)
     calibrated_min_factor_coverage: float = Field(default=0.70, ge=0, le=1)
     stale_data_seconds: int = Field(default=300, gt=0)
     small_position_mode: bool = False
     small_position_notional_usdt: float = Field(default=20.0, gt=0)
+    position_review: PositionReviewConfig = Field(default_factory=PositionReviewConfig)
 
 
 class TrendStrategyConfig(BaseModel):
@@ -531,6 +552,8 @@ class AiDecision(BaseModel):
     sl_estimate: float | None = None
     action_suggestion: str = "hold"
     veto_action: VetoAction = VetoAction.BLOCK
+    subjective_position_tier: Literal["block", "weak", "normal", "strong", "full"] | None = None
+    subjective_position_confidence: float | None = Field(default=None, ge=0, le=1)
     brief_reason: str = ""
     reason_codes: list[str] = Field(default_factory=list)
     data_quality_warnings: list[str] = Field(default_factory=list)
@@ -656,9 +679,42 @@ class RiskDecision(BaseModel):
     calibrated_position_tier: Literal["block", "weak", "normal", "strong", "full"] | None = None
     calibrated_position_scale: float | None = Field(default=None, ge=0, le=1)
     calibrated_edge_score: float | None = Field(default=None, ge=0, le=1)
+    subjective_position_tier: Literal["block", "weak", "normal", "strong", "full"] | None = None
+    subjective_position_scale: float | None = Field(default=None, ge=0, le=1)
+    subjective_position_confidence: float | None = Field(default=None, ge=0, le=1)
     score_breakdown: dict[str, float] = Field(default_factory=dict)
     reason: str = ""
     warnings: list[str] = Field(default_factory=list)
+
+
+class PositionReviewDecision(BaseModel):
+    model_config = ConfigDict(use_enum_values=True)
+
+    symbol: str
+    side: Side = Side.FLAT
+    mode: Literal["disabled", "shadow", "live_addon"] = "shadow"
+    action: Literal["disabled", "no_position", "hold", "add_candidate", "blocked"] = "hold"
+    shadow_only: bool = True
+    can_add: bool = False
+    add_fraction: float = Field(default=0.0, ge=0, le=1)
+    add_qty: float = Field(default=0.0, ge=0)
+    r_multiple: float = 0.0
+    atr_profit_multiple: float = 0.0
+    unrealized_pnl: float = 0.0
+    entry_price: float = 0.0
+    current_price: float = 0.0
+    stop_loss_price: float | None = None
+    kc_mid: float | None = None
+    kc_upper: float | None = None
+    kc_lower: float | None = None
+    trend_intact: bool = False
+    profit_validated: bool = False
+    native_stop_verified: bool = False
+    confirmation_count: int = 0
+    reason: str = ""
+    reason_codes: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class OrderRequest(BaseModel):

@@ -13,6 +13,7 @@ from ai_quant_trader.core.models import (
 )
 from ai_quant_trader.core.state import RuntimeState
 from ai_quant_trader.risk.manager import RiskManager
+from ai_quant_trader.risk.sizing import calibrated_v21_profit_loss_policy
 
 
 def _signal() -> StrategySignal:
@@ -427,6 +428,138 @@ def test_calibrated_sizing_policy_falls_back_to_legacy_when_factor_coverage_is_l
     assert decision.position_tier == decision.legacy_position_tier
     assert "calibrated_v1_fallback_to_legacy_factor_coverage_low" in decision.warnings
     assert "calibrated_factor_coverage_low_fallback_legacy" in decision.warnings
+
+
+def test_calibrated_v2_loss_aware_can_be_selected_as_live_sizing_policy() -> None:
+    state = RuntimeState(opening_paused=False, enabled_symbols={"ETH/USDT:USDT"})
+    manager = RiskManager(
+        RiskConfig(max_total_leverage=4, ai_sizing_policy="calibrated_v2_loss_aware"),
+        state,
+    )
+
+    decision = manager.evaluate(
+        _signal().model_copy(update={"signal_strength": 0.96}),
+        _ai(
+            confidence=0.92,
+            trend_confirmation_score=0.76,
+            range_risk_score=0.18,
+            news_risk_score=0.18,
+            orderflow_confirmation_score=0.82,
+            dense_zone_breakout_score=0.65,
+            pattern_confirmation_score=0.90,
+        ),
+        1000,
+        [],
+    )
+
+    assert decision.allowed
+    assert decision.sizing_policy == "calibrated_v2_loss_aware"
+    assert decision.calibrated_position_tier in {"strong", "full"}
+    assert decision.score_breakdown["loss_risk_score"] < 0.30
+
+
+def test_hybrid_subjective_guarded_v2_promotes_only_one_tier_above_v2_base() -> None:
+    state = RuntimeState(opening_paused=False, enabled_symbols={"ETH/USDT:USDT"})
+    manager = RiskManager(
+        RiskConfig(max_total_leverage=4, ai_sizing_policy="hybrid_subjective_guarded_v2"),
+        state,
+    )
+
+    decision = manager.evaluate(
+        _signal().model_copy(update={"signal_strength": 0.30}),
+        _ai(
+            confidence=0.92,
+            subjective_position_tier="full",
+            subjective_position_confidence=0.86,
+            trend_confirmation_score=0.55,
+            range_risk_score=0.22,
+            news_risk_score=0.20,
+            orderflow_confirmation_score=0.74,
+            dense_zone_breakout_score=0.50,
+            pattern_confirmation_score=0.72,
+        ),
+        1000,
+        [],
+    )
+
+    assert decision.allowed
+    assert decision.sizing_policy == "hybrid_subjective_guarded_v2"
+    assert decision.subjective_position_tier == "full"
+    assert decision.position_tier == "strong"
+    assert decision.score_breakdown["hybrid_base_position_tier_index"] == 2
+    assert "hybrid_subjective_promoted_one_tier:normal->strong:raw=full" in decision.warnings
+
+
+def test_hybrid_subjective_guarded_v2_can_reduce_below_v2_base() -> None:
+    state = RuntimeState(opening_paused=False, enabled_symbols={"ETH/USDT:USDT"})
+    manager = RiskManager(
+        RiskConfig(max_total_leverage=4, ai_sizing_policy="hybrid_subjective_guarded_v2"),
+        state,
+    )
+
+    decision = manager.evaluate(
+        _signal().model_copy(update={"signal_strength": 0.96}),
+        _ai(
+            confidence=0.88,
+            subjective_position_tier="weak",
+            subjective_position_confidence=0.82,
+            trend_confirmation_score=0.78,
+            range_risk_score=0.28,
+            news_risk_score=0.24,
+            orderflow_confirmation_score=0.86,
+            dense_zone_breakout_score=0.70,
+            pattern_confirmation_score=0.90,
+        ),
+        1000,
+        [],
+    )
+
+    assert decision.allowed
+    assert decision.subjective_position_tier == "weak"
+    assert decision.position_tier == "weak"
+    assert "hybrid_subjective_reduced_tier" in decision.warnings
+
+
+def test_calibrated_v21_profit_loss_policy_separates_expansion_and_loss_risk() -> None:
+    clean = calibrated_v21_profit_loss_policy(
+        {
+            "technical_signal_score": 0.96,
+            "orderflow_confirmation_score": 0.92,
+            "pattern_confirmation_score": 0.92,
+            "dense_zone_breakout_score": 0.76,
+            "range_safety_score": 0.86,
+            "trend_confirmation_score": 0.82,
+            "news_direction_alignment_score": 0.70,
+            "news_safety_score": 0.80,
+            "btc_leader_score": 0.70,
+            "eth_btc_rotation_score": 0.65,
+        },
+        min_trade_score=0.55,
+        min_factor_coverage=0.70,
+    )
+    noisy = calibrated_v21_profit_loss_policy(
+        {
+            "technical_signal_score": 0.94,
+            "orderflow_confirmation_score": 0.46,
+            "pattern_confirmation_score": 0.34,
+            "dense_zone_breakout_score": 0.32,
+            "range_safety_score": 0.30,
+            "trend_confirmation_score": 0.62,
+            "news_direction_alignment_score": 0.0,
+            "news_safety_score": 0.45,
+            "btc_leader_score": 0.50,
+            "eth_btc_rotation_score": 0.50,
+        },
+        min_trade_score=0.55,
+        min_factor_coverage=0.70,
+    )
+
+    assert clean.profit_expansion_score is not None
+    assert noisy.loss_risk_score is not None
+    assert clean.profit_expansion_score > noisy.profit_expansion_score
+    assert noisy.loss_risk_score > clean.loss_risk_score
+    assert clean.tier in {"strong", "full"}
+    assert noisy.tier in {"block", "weak", "normal"}
 
 
 def test_news_direction_score_cannot_override_conflict_hard_block() -> None:

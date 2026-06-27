@@ -39,9 +39,41 @@ python scripts/cloud_release_deploy_v2.py --restart
 cd /root/ai-quant-trader
 .venv/bin/python current/scripts/ai_sizing_policy_control.py \
   --config config/config.yaml \
-  --policy calibrated_v1_controlled \
+  --policy hybrid_subjective_guarded_v2 \
   --max-tier-lift 1 \
   --min-factor-coverage 0.7
+systemctl restart ai-quant-trader.service ai-quant-console.service
+```
+
+开启持仓复评 shadow 记录：
+
+```bash
+cd /root/ai-quant-trader
+.venv/bin/python - <<'PY'
+from ai_quant_trader.core.control import RuntimeControlManager
+from ai_quant_trader.storage.sqlite import SQLiteStore
+
+store = SQLiteStore("data/trader.sqlite3", "logs/audit.jsonl")
+control = RuntimeControlManager(store, "config/config.yaml")
+config = control.read_config()
+control.set_config_value(config, "risk.position_review.enabled", True)
+control.set_config_value(config, "risk.position_review.mode", "shadow")
+control.set_config_value(config, "risk.position_review.max_add_fraction", 0.25)
+control.write_config(config)
+store.close()
+PY
+systemctl restart ai-quant-trader.service ai-quant-console.service
+```
+
+不要在云端直接把 `risk.position_review.mode` 切到 `live_addon`。该模式必须先有 shadow 审计样本证明有效，再单独上线。
+
+退回 v2 减亏基准但不使用 DeepSeek 主观五档融合：
+
+```bash
+cd /root/ai-quant-trader
+.venv/bin/python current/scripts/ai_sizing_policy_control.py \
+  --config config/config.yaml \
+  --policy calibrated_v2_loss_aware
 systemctl restart ai-quant-trader.service ai-quant-console.service
 ```
 

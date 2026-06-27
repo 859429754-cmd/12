@@ -250,6 +250,117 @@ async def test_trading_cycle_opens_places_stop_then_exits_and_cancels_stop(tmp_p
 
 
 @pytest.mark.asyncio
+async def test_trading_cycle_records_shadow_position_review_without_addon_order(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    db_path = tmp_path / "trader.sqlite3"
+    audit_path = tmp_path / "audit.jsonl"
+    _write_config(config_path, db_path, audit_path)
+
+    app = TradingApp(str(config_path))
+    app.execution = MockExchangeGateway(str(tmp_path / "mock_exchange.json"))
+    app.trend_state = TrendStateStore(str(tmp_path / "state_trend.json"))
+    app.order_lifecycle.gateway_mode = "mock"
+    app.control.enable_symbol_report(app.state, ["ETH/USDT:USDT"], operator_id="test")
+    app.trend_state.record_entry(
+        "ETH/USDT:USDT",
+        Side.LONG,
+        entry_price=100.0,
+        atr_value=10.0,
+        atr_stop_multiple=1.5,
+        native_stop_order_id="mock_stop_verified",
+    )
+    await app.execution.create_market_order(
+        OrderRequest(
+            symbol="ETH/USDT:USDT",
+            side="buy",
+            amount=1.0,
+            reduce_only=False,
+            client_order_id="seed_position",
+            reason="seed_existing_position",
+            metadata={"signal_current_price": 100.0},
+        )
+    )
+
+    async def fake_news(live_news: bool):  # noqa: ANN001
+        from ai_quant_trader.core.models import NewsDigest
+
+        return NewsDigest(summary="mock aligned news", crypto_sentiment=Alignment.ALIGNED)
+
+    async def fake_fetch_ohlcv(*args, **kwargs):  # noqa: ANN002, ANN003
+        frame = _candles()
+        frame.loc[frame.index[-1], "close"] = 110.0
+        frame.loc[frame.index[-1], "high"] = 112.0
+        frame.loc[frame.index[-1], "low"] = 108.0
+        return frame
+
+    async def fake_fetch_summaries(*args, **kwargs):  # noqa: ANN002, ANN003
+        return []
+
+    async def fake_analyze(call_type, signal, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        return _ai_for_symbol(signal.symbol, SignalAction.LONG)
+
+    def fake_regime(symbol, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        return RegimePattern(
+            symbol=symbol,
+            regime_candidate="trend",
+            strategy_allowed="trend",
+            trend_score=0.9,
+            range_score=0.1,
+            reason_codes=["mock_trend_allowed"],
+        )
+
+    def fake_signal(symbol, timeframe, candles, position, equity):  # noqa: ANN001
+        position.mark_price = 110.0
+        position.unrealized_pnl = 10.0
+        return StrategySignal(
+            symbol=symbol,
+            timeframe=timeframe,
+            action=SignalAction.HOLD,
+            current_price=110.0,
+            suggested_qty=0.0,
+            signal_strength=0.0,
+            technical_evidence={
+                "strategy_allowed": "trend",
+                "kc_mid": 102.0,
+                "kc_upper": 108.0,
+                "kc_lower": 96.0,
+                "exit_long": False,
+                "exit_short": False,
+            },
+        )
+
+    monkeypatch.setattr(app, "_news_for_trading_cycle", fake_news)
+    monkeypatch.setattr(app.market, "fetch_ohlcv", fake_fetch_ohlcv)
+    monkeypatch.setattr(app.orderflow_client, "fetch_summaries", fake_fetch_summaries)
+    monkeypatch.setattr(app, "_analyze_with_deepseek_budget", fake_analyze)
+    monkeypatch.setattr(app.regime_patterns, "analyze", fake_regime)
+    monkeypatch.setattr(app, "_generate_local_signal", fake_signal)
+    monkeypatch.setattr(
+        app.data_health,
+        "evaluate_symbol",
+        lambda symbol, **kwargs: DataHealthReport(symbol=symbol, status=HealthStatus.OK, can_open_new_entries=True),
+    )
+
+    try:
+        await app.run_once(equity=1000.0, live_news=False)
+
+        reviews = app.store.fetch_payloads("position_reviews", symbol="ETH/USDT:USDT", limit=5)
+        orders = app.store.fetch_payloads("orders", symbol="ETH/USDT:USDT", limit=10)
+        mock_state = json.loads((tmp_path / "mock_exchange.json").read_text(encoding="utf-8"))
+        assert reviews
+        assert reviews[0]["payload"]["action"] == "add_candidate"
+        assert reviews[0]["payload"]["shadow_only"] is True
+        assert reviews[0]["payload"]["can_add"] is False
+        assert orders == []
+        assert len([row for row in mock_state["orders"] if row.get("status") == "mock_created"]) == 1
+    finally:
+        await app.close()
+
+
+@pytest.mark.asyncio
 async def test_run_once_refreshes_positions_after_entry_before_next_symbol_risk(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

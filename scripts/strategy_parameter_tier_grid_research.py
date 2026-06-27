@@ -140,17 +140,22 @@ def build_orderflow_scores(
     rows = orderflow_payload.get("rows", {}).get(window, [])
     orderflow_by_idx = {int(row["signal_idx"]): row for row in rows if "signal_idx" in row}
     fields = ["trade_count", "total_quote", "large_trade_quote", "max_trade_quote"]
+    def usable_orderflow_row(row: dict[str, Any] | None) -> bool:
+        return bool(row) and not row.get("missing_days") and float(row.get("trade_count") or 0.0) > 0.0
+
     train_orderflow_rows = [
-        orderflow_by_idx[item.signal_idx]
+        row
         for item in features
-        if item.signal_time[:10] < split and item.signal_idx in orderflow_by_idx
+        if item.signal_time[:10] < split
+        for row in [orderflow_by_idx.get(item.signal_idx)]
+        if usable_orderflow_row(row)
     ]
     train_values = {field: [float(row.get(field) or 0.0) for row in train_orderflow_rows] for field in fields}
     scores: dict[int, dict[str, float]] = {}
     covered = 0
     for item in features:
         row = orderflow_by_idx.get(item.signal_idx)
-        if not row:
+        if not usable_orderflow_row(row):
             scores[item.signal_idx] = {
                 "orderflow_confirmation_score": 0.5,
                 "orderflow_direction_score": 0.0,

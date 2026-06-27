@@ -55,6 +55,7 @@ from ai_quant_trader.optimizer.proposals import StrategyOptimizer
 from ai_quant_trader.reporting.hourly import HourlyReportBuilder
 from ai_quant_trader.research.live_factor_archive import build_live_factor_snapshot
 from ai_quant_trader.risk.manager import RiskManager
+from ai_quant_trader.risk.position_review import PositionReviewEngine
 from ai_quant_trader.storage.sqlite import SQLiteStore
 from ai_quant_trader.strategy.lab import StrategyCodeError, generate_custom_signal, get_active_strategy
 from ai_quant_trader.strategy.trend import TrendStrategy
@@ -102,6 +103,7 @@ class TradingApp:
         self.brain.backup_api_key = os.getenv(self.config.ai.backup_api_key_env)
         self.deepseek_budget = DeepSeekBudgetGuard.from_config(self.store, self.config.ai)
         self.risk = RiskManager(self.config.risk, self.state)
+        self.position_review = PositionReviewEngine(self.config.risk.position_review)
         self.execution = create_exchange_gateway(self.config, account_slot=TREND_ACCOUNT_SLOT)
         self.exchange_safety = ExchangeSafetyMonitor(self.config.risk.stale_data_seconds)
         self.order_lifecycle = OrderLifecycleManager(
@@ -219,12 +221,23 @@ class TradingApp:
                 orderflow=aggregated,
             )
             risk = self.risk.evaluate(signal, ai, equity, positions)
+            position_review = self._review_open_trend_position(
+                signal,
+                position,
+                ai,
+                aggregated,
+                zone,
+                pattern,
+                data_health.status,
+            )
 
             self.store.insert("orderflow_summaries", aggregated, symbol_cfg.symbol)
             self.store.insert("dense_zones", zone, symbol_cfg.symbol)
             self.store.insert("data_health", data_health, symbol_cfg.symbol)
             self.store.insert("ai_drift_checks", drift, symbol_cfg.symbol)
             self.store.insert("ai_decisions", ai, symbol_cfg.symbol)
+            if position_review is not None:
+                self.store.insert("position_reviews", position_review, symbol_cfg.symbol)
             if signal.action != SignalAction.HOLD:
                 self.store.insert(
                     "live_factor_snapshots",
@@ -931,6 +944,7 @@ class TradingApp:
         self.state = self.control.load_state([symbol.symbol for symbol in self.config.symbols])
         self.risk.config = self.config.risk
         self.risk.state = self.state
+        self.position_review.config = self.config.risk.position_review
         self.deepseek_budget = DeepSeekBudgetGuard.from_config(self.store, self.config.ai)
         self.brain.backup_api_key = os.getenv(self.config.ai.backup_api_key_env)
         self._refresh_symbol_strategies()
@@ -1180,6 +1194,33 @@ class TradingApp:
         )
         stop_signal = self._fixed_atr_stop_signal(symbol, timeframe, candles, position)
         return stop_signal or signal
+
+    def _review_open_trend_position(
+        self,
+        signal: StrategySignal,
+        position: PositionSnapshot,
+        ai: AiDecision,
+        aggregated: AggregatedOrderflow,
+        zone: DenseZone,
+        pattern: PatternCandidate,
+        data_health_status: HealthStatus,
+    ):
+        if not self.config.risk.position_review.enabled:
+            return None
+        if position.side == Side.FLAT or abs(position.qty) <= 0:
+            return None
+        state = self.trend_state.get(signal.symbol)
+        return self.position_review.evaluate(
+            signal,
+            position,
+            state,
+            ai,
+            aggregated,
+            zone,
+            pattern,
+            self.exchange_safety.state,
+            data_health_status=data_health_status,
+        )
 
     def _fixed_atr_stop_signal(
         self,

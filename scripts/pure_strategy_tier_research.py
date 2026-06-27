@@ -181,8 +181,27 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fee-rate", type=float, default=0.0006)
     parser.add_argument("--slippage-bps", type=float, default=2.0)
     parser.add_argument("--split", default="2024-01-01")
+    parser.add_argument("--kc-scalar", type=float, default=None)
+    parser.add_argument("--volume-multiple", type=float, default=None)
+    parser.add_argument("--atr-stop-multiple", type=float, default=None)
+    parser.add_argument("--position-fraction", type=float, default=None)
     parser.add_argument("--output", default="data/research/pure_strategy_tier_research_eth_2022_2026.json")
     return parser.parse_args()
+
+
+def apply_trend_overrides(trend_config: Any, args: argparse.Namespace) -> Any:
+    updates: dict[str, float] = {}
+    if args.kc_scalar is not None:
+        updates["kc_scalar"] = args.kc_scalar
+    if args.volume_multiple is not None:
+        updates["volume_multiple"] = args.volume_multiple
+    if args.atr_stop_multiple is not None:
+        updates["atr_stop_multiple"] = args.atr_stop_multiple
+    if args.position_fraction is not None:
+        updates["position_fraction"] = args.position_fraction
+    if not updates:
+        return trend_config
+    return trend_config.model_copy(update=updates)
 
 
 def clip(value: float, low: float = 0.0, high: float = 1.0) -> float:
@@ -630,7 +649,7 @@ def build_report(summary: dict[str, Any]) -> str:
 async def main() -> None:
     args = parse_args()
     app_config = load_config()
-    trend_config = app_config.strategy.trend
+    trend_config = apply_trend_overrides(app_config.strategy.trend, args)
     market = MarketDataClient(app_config)
     try:
         candles = await market.fetch_ohlcv_history(

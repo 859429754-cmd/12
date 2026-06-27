@@ -340,7 +340,8 @@ class DeepSeekBrain:
             "news_alignment、orderflow_alignment、dense_zone_position、entry_zone_estimate、"
             "tp_estimate、sl_estimate、action_suggestion、brief_reason、reason_codes、"
             "trend_confirmation_score、range_risk_score、news_risk_score、"
-            "news_direction_alignment_score、orderflow_confirmation_score、dense_zone_breakout_score。"
+            "news_direction_alignment_score、orderflow_confirmation_score、dense_zone_breakout_score、"
+            "subjective_position_tier、subjective_position_confidence。"
             "六个核心分数字段必须是 0 到 1 之间的小数："
             "trend_confirmation_score 越高代表趋势信号越可靠；"
             "range_risk_score 越高代表震荡/假突破风险越高；"
@@ -350,7 +351,8 @@ class DeepSeekBrain:
             "dense_zone_breakout_score 越高代表密集区突破或迁移质量越好。"
             "枚举只能使用：regime=trend/range/uncertain；direction=long/short/flat；"
             "news_alignment 和 orderflow_alignment=aligned/conflict/neutral/unknown；"
-            "veto_action=allow/reduce/block；action_suggestion=open_long/open_short/reduce/close/hold/block。"
+            "veto_action=allow/reduce/block；action_suggestion=open_long/open_short/reduce/close/hold/block；"
+            "subjective_position_tier=block/weak/normal/strong/full。"
             "entry_zone_estimate、tp_estimate、sl_estimate 没有明确价格时必须填 null，不能填字符串。"
             "你必须像交易员一样给出可执行主倾向：优先在 trend/range 中二选一，direction 优先在 long/short 中二选一；"
             "只有数据明显缺失、信号互相抵消或事件风险无法定价时，才允许使用 uncertain 或 flat。"
@@ -369,6 +371,9 @@ class DeepSeekBrain:
             "但只有流动性抽干、交易所/监管系统性风险、订单流明显反向或密集区突破质量极差等执行风险同时出现时，才允许 veto_action=block。"
             "如果技术信号很强但消息面或订单流冲突，只能 reduce 或 block。"
             "如果出现央行意外、地缘冲突、监管黑天鹅、交易所风险、流动性恶化或数据质量差，必须 reduce 或 block。"
+            "subjective_position_tier 是你的主观五档仓位提案，不是最终下单仓位；"
+            "它应体现你作为交易员对盈利扩张和亏损风险的综合判断。"
+            "如果只是数据缺失、旧闻背景衰减或无法确认订单流，subjective_position_tier 不得高于 normal。"
         )
 
     def _extract_decision_json(self, parsed: dict[str, Any]) -> dict[str, Any]:
@@ -389,6 +394,7 @@ class DeepSeekBrain:
         item["regime"] = self._normalize_regime(item.get("regime"))
         item["direction"] = self._normalize_side(item.get("direction"))
         item["veto_action"] = self._normalize_veto(item.get("veto_action"))
+        item["subjective_position_tier"] = self._normalize_position_tier(item.get("subjective_position_tier"))
         item["news_alignment"] = self._normalize_alignment(item.get("news_alignment"))
         item["orderflow_alignment"] = self._normalize_alignment(item.get("orderflow_alignment"))
         item["btc_leader_alignment"] = self._normalize_alignment(item.get("btc_leader_alignment"))
@@ -397,6 +403,11 @@ class DeepSeekBrain:
             item[key] = self._normalize_optional_float(item.get(key))
         item["confidence"] = self._clip_float(item.get("confidence"), 0.0, 1.0, 0.35)
         item["multiplier"] = self._clip_float(item.get("multiplier"), 0.5, 1.5, 0.5)
+        item["subjective_position_confidence"] = self._clip_optional_float(
+            item.get("subjective_position_confidence"),
+            0.0,
+            1.0,
+        )
         item["trend_confirmation_score"] = self._clip_float(item.get("trend_confirmation_score"), 0.0, 1.0, 0.35)
         item["range_risk_score"] = self._clip_float(item.get("range_risk_score"), 0.0, 1.0, 0.65)
         item["news_risk_score"] = self._clip_float(item.get("news_risk_score"), 0.0, 1.0, 0.65)
@@ -450,6 +461,34 @@ class DeepSeekBrain:
             return "reduce"
         return "block" if text in {"block", "veto", "deny", "阻断", "否决"} else "reduce"
 
+    def _normalize_position_tier(self, value: Any) -> str | None:
+        text = str(value or "").strip().lower()
+        aliases = {
+            "0": "block",
+            "0%": "block",
+            "block": "block",
+            "blocked": "block",
+            "阻断": "block",
+            "25": "weak",
+            "25%": "weak",
+            "weak": "weak",
+            "弱仓": "weak",
+            "50": "normal",
+            "50%": "normal",
+            "normal": "normal",
+            "standard": "normal",
+            "标准仓": "normal",
+            "75": "strong",
+            "75%": "strong",
+            "strong": "strong",
+            "强仓": "strong",
+            "100": "full",
+            "100%": "full",
+            "full": "full",
+            "满仓": "full",
+        }
+        return aliases.get(text)
+
     def _normalize_optional_float(self, value: Any) -> float | None:
         if value is None:
             return None
@@ -460,6 +499,15 @@ class DeepSeekBrain:
         except (TypeError, ValueError):
             return None
         return number if number > 0 else None
+
+    def _clip_optional_float(self, value: Any, low: float, high: float) -> float | None:
+        if value is None:
+            return None
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        return max(low, min(high, number))
 
     def _clip_float(self, value: Any, low: float, high: float, default: float) -> float:
         try:
@@ -527,6 +575,8 @@ class DeepSeekBrain:
                 "confidence": "0..1",
                 "multiplier": "0.5..1.5",
                 "veto_action": "allow|reduce|block",
+                "subjective_position_tier": "block|weak|normal|strong|full, AI主观五档提案，最终仍由本地RiskManager裁剪",
+                "subjective_position_confidence": "0..1, 对主观五档提案的置信度",
                 "action_suggestion": "open_long|open_short|reduce|close|hold|block",
                 "trend_confirmation_score": "0..1, 趋势确认分，越高越支持本地趋势信号",
                 "range_risk_score": "0..1, 震荡/假突破风险分，越高越危险",

@@ -84,20 +84,23 @@ eth_btc_rotation_score         1%
 
 ## 2026-06-27 受控校准仓位模型上线合同
 
-以后以本节为准：小资金测试阶段允许 `calibrated_v1_controlled` 成为实盘主用仓位模型，但禁止裸切。忽略之前“未留旧五档对照、无回滚脚本、无单档限幅就直接替换实盘五档”的方案。
+以后以本节为准：小资金测试阶段允许 `hybrid_subjective_guarded_v2` 成为实盘主用仓位模型。忽略之前“当前实盘只使用 `calibrated_v1_controlled`”以及“直接让旧 DeepSeek 主观五档接管最终仓位”的方案。
 
-当前两套仓位模型：
+当前仓位模型：
 
 - `legacy_factor_ranked`：旧版因子排序五档，作为回滚基线和对照组长期保留。
-- `calibrated_v1_controlled`：DeepSeek 输出结构化因子，本地 deterministic calibration 将质量因子与尾部风险合成 `calibrated_edge_score` 后映射档位。
+- `calibrated_v1_controlled`：上一版小资金校准模型。保留用于对照和回滚研究。
+- `calibrated_v2_loss_aware`：v2 减亏基准模型。它在 v1 基础上要求订单流、形态、密集区和趋势结构确认，降低明显亏损风险场景的升档概率。
+- `hybrid_subjective_guarded_v2`：当前主用模型。以 `calibrated_v2_loss_aware` 为基准，额外接收 DeepSeek 的 `subjective_position_tier` 主观五档提案；主观提案可以更快降档，升档最多只能比 v2 基准高一档，并且必须通过订单流、形态、密集区、趋势、新闻和 BTC 风向标约束。
 
 上线保护：
 
-- 新模型最终档位相对 `legacy_factor_ranked` 最多上调 `calibrated_max_tier_lift=1` 档。
-- 新模型可以比旧模型更低，遇到尾部风险、数据缺失、弱订单流、弱形态时必须降档或回退。
+- `hybrid_subjective_guarded_v2` 不允许从 v2 的 `block` 复活为开仓。
+- `hybrid_subjective_guarded_v2` 最多只允许在 v2 基准上调一档；如果 DeepSeek 主观五档高出两档以上，只记录提案，不直接照单执行。
+- `hybrid_subjective_guarded_v2` 可以比 v2 基准更低，遇到尾部风险、数据缺失、弱订单流、弱形态时必须降档或回退。
 - 结构化核心因子覆盖率低于 `calibrated_min_factor_coverage` 时自动回退旧五档。
 - RiskManager 原有硬阻断、新闻冲突、极端风险、BTC 冲突、订单流弱、密集区弱、同向持仓禁止加仓、readiness、账户杠杆上限继续优先。
-- 订单生命周期元数据必须记录 `risk_sizing_policy`、`legacy_position_tier`、`calibrated_position_tier`、`calibrated_edge_score`，用于事后审计。
+- 订单生命周期元数据必须记录 `risk_sizing_policy`、`legacy_position_tier`、`calibrated_position_tier`、`calibrated_edge_score`、`subjective_position_tier` 和 `subjective_position_confidence`，用于事后审计。
 
 回滚命令：
 
@@ -108,10 +111,46 @@ python scripts/ai_sizing_policy_control.py --policy legacy_factor_ranked
 上线命令：
 
 ```powershell
-python scripts/ai_sizing_policy_control.py --policy calibrated_v1_controlled --max-tier-lift 1 --min-factor-coverage 0.7
+python scripts/ai_sizing_policy_control.py --policy hybrid_subjective_guarded_v2 --max-tier-lift 1 --min-factor-coverage 0.7
 ```
 
 本合同不是对新模型收益的承诺。新模型仍需通过真实交易后的 AI 仓位分档效果审计，验证是否真正减少亏损、保留盈利、提高盈利因子和夏普率。
+
+## 2026-06-27 持仓闭 K 复评合同
+
+以后以本节为准：当前版本允许开启“持仓 1h 闭 K 复评”模块，但默认只允许 `shadow` 模式。忽略之前“开仓时直接允许 DeepSeek 裸 +2 档”以及“盈利后无条件加仓”的方案。
+
+复评模块定位：
+
+- 首仓仍由本地趋势策略信号、DeepSeek 主观五档、`calibrated_v2_loss_aware` 和 `hybrid_subjective_guarded_v2` 决定。
+- 持仓复评是持仓管理层，只在已经存在 Gate 持仓和本地 `state_trend.json` 趋势状态时运行。
+- 第一版只写入 `position_reviews` 审计表和 readiness，不提交加仓订单。
+- 复评不替代 KC 中轨退出，不取消 ATR 固定止损，不修改原生止损。
+
+加仓候选硬条件：
+
+```text
+1. 只在 1h 已收盘 K 线后评估。
+2. 持仓浮盈已经被验证：>= 0.5R 或 >= 0.5 ATR。
+3. 多单仍在 KC 中轨上方；空单仍在 KC 中轨下方。
+4. Gate/readiness 数据状态允许开新仓。
+5. Gate 原生止损必须存在并可验证。
+6. 订单流、形态、密集区三项中至少两项继续同向。
+7. 新闻不得与策略方向冲突，新闻风险不得超过阈值。
+8. BTC 风向标不得构成高影响反向冲突。
+```
+
+当前云端建议配置：
+
+```yaml
+risk:
+  position_review:
+    enabled: true
+    mode: shadow
+    max_add_fraction: 0.25
+```
+
+`mode=live_addon` 目前不是大资金无人值守配置。只有当 `position_reviews` 的 shadow 记录证明复评候选能稳定提高盈利因子、降低回撤并且不增加尾部风险后，才允许单独做实盘加仓版本。
 
 ## 3. 多账户执行模型
 

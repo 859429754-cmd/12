@@ -36,6 +36,7 @@ class SizingPolicyResult:
     warnings: list[str] = field(default_factory=list)
     coverage: float = 1.0
     loss_risk_score: float | None = None
+    profit_expansion_score: float | None = None
 
 
 def tier_index(tier: str) -> int:
@@ -192,6 +193,34 @@ def loss_risk_score(score_inputs: dict[str, float]) -> float:
     return min(max(weak_structure + hostile_context + late_breakout_divergence, 0.0), 1.0)
 
 
+def profit_expansion_score(score_inputs: dict[str, float]) -> float:
+    technical = float(score_inputs.get("technical_signal_score", 0.0))
+    orderflow = float(score_inputs.get("orderflow_confirmation_score", 0.0))
+    pattern = float(score_inputs.get("pattern_confirmation_score", 0.0))
+    dense = float(score_inputs.get("dense_zone_breakout_score", 0.0))
+    trend = float(score_inputs.get("trend_confirmation_score", 0.0))
+    range_safety = float(score_inputs.get("range_safety_score", 0.0))
+    news_direction = float(score_inputs.get("news_direction_alignment_score", 0.0))
+    btc = float(score_inputs.get("btc_leader_score", 0.0))
+    rotation = float(score_inputs.get("eth_btc_rotation_score", 0.0))
+
+    return min(
+        max(
+            technical * 0.10
+            + orderflow * 0.28
+            + pattern * 0.18
+            + dense * 0.16
+            + trend * 0.13
+            + range_safety * 0.08
+            + news_direction * 0.04
+            + btc * 0.02
+            + rotation * 0.01,
+            0.0,
+        ),
+        1.0,
+    )
+
+
 def calibrated_v2_loss_aware_policy(
     score_inputs: dict[str, float],
     *,
@@ -259,4 +288,96 @@ def calibrated_v2_loss_aware_policy(
         warnings=warnings,
         coverage=base.coverage,
         loss_risk_score=risk,
+    )
+
+
+def calibrated_v21_profit_loss_policy(
+    score_inputs: dict[str, float],
+    *,
+    min_trade_score: float,
+    min_factor_coverage: float,
+) -> SizingPolicyResult:
+    """Profit/loss channel upgrade for the v2 research candidate.
+
+    v2 reduced obvious tail-risk promotions but still lifted too many
+    historical losers. v2.1 separates the decision into a profit-expansion
+    channel and a loss-risk channel. It only permits promotion when the
+    expansion channel is high and the loss-risk channel is low, then applies
+    deterministic caps for weak orderflow/structure regimes.
+    """
+
+    base = calibrated_v2_loss_aware_policy(
+        score_inputs,
+        min_trade_score=min_trade_score,
+        min_factor_coverage=min_factor_coverage,
+    )
+    legacy = factor_ranked_policy(score_inputs, min_trade_score=min_trade_score)
+    risk = loss_risk_score(score_inputs)
+    profit = profit_expansion_score(score_inputs)
+
+    if "calibrated_factor_coverage_low_fallback_legacy" in base.warnings:
+        return SizingPolicyResult(
+            policy="calibrated_v21_profit_loss",
+            score=base.score,
+            tier=base.tier,
+            warnings=[*base.warnings],
+            coverage=base.coverage,
+            loss_risk_score=risk,
+            profit_expansion_score=profit,
+        )
+
+    orderflow = float(score_inputs.get("orderflow_confirmation_score", 0.0))
+    pattern = float(score_inputs.get("pattern_confirmation_score", 0.0))
+    dense = float(score_inputs.get("dense_zone_breakout_score", 0.0))
+    range_safety = float(score_inputs.get("range_safety_score", 0.0))
+    trend = float(score_inputs.get("trend_confirmation_score", 0.0))
+
+    tier = base.tier
+    warnings = [*base.warnings]
+
+    if risk >= 0.50:
+        tier = min_tier(tier, "weak")
+        warnings.append("profit_loss_loss_risk_extreme_caps_weak")
+    elif risk >= 0.38:
+        tier = min_tier(tier, "normal")
+        warnings.append("profit_loss_loss_risk_high_caps_normal")
+    elif risk >= 0.30 and tier_index(tier) > tier_index(legacy.tier):
+        tier = legacy.tier
+        warnings.append("profit_loss_loss_risk_blocks_promotion")
+
+    if profit < 0.62 and tier_index(tier) > tier_index(legacy.tier):
+        tier = legacy.tier
+        warnings.append("profit_loss_profit_channel_weak_blocks_promotion")
+
+    if tier_index(tier) >= tier_index("full") and not (
+        profit >= 0.80
+        and risk <= 0.16
+        and orderflow >= 0.82
+        and pattern >= 0.82
+        and dense >= 0.55
+        and range_safety >= 0.66
+        and trend >= 0.58
+    ):
+        tier = "strong"
+        warnings.append("profit_loss_full_requires_expansion_quality")
+
+    if tier_index(tier) >= tier_index("strong") and not (
+        profit >= 0.72
+        and risk <= 0.24
+        and orderflow >= 0.74
+        and (pattern >= 0.72 or dense >= 0.50)
+        and range_safety >= 0.55
+        and trend >= 0.50
+    ):
+        tier = "normal"
+        warnings.append("profit_loss_strong_requires_clean_context")
+
+    return SizingPolicyResult(
+        policy="calibrated_v21_profit_loss",
+        score=base.score,
+        tier=tier,
+        warnings=warnings,
+        coverage=base.coverage,
+        loss_risk_score=risk,
+        profit_expansion_score=profit,
     )

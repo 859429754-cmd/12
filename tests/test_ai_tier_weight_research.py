@@ -4,10 +4,14 @@ import pytest
 
 from scripts.ai_tier_weight_research import (
     ResearchRow,
+    balanced_entry_score,
     balanced_policy,
+    balanced_volume_dedup_policy,
+    balanced_volume_dedup_score,
     build_rows,
     calibrated_v1_controlled_research_policy,
     calibrated_v2_loss_aware_research_policy,
+    calibrated_v21_profit_loss_research_policy,
     current_factor_policy,
     evaluate_walk_forward,
     evaluate_policy,
@@ -17,6 +21,8 @@ from scripts.ai_tier_weight_research import (
     parse_walk_forward_periods,
     rows_before,
     rows_between,
+    structure_context_policy,
+    structure_context_score,
     weighted_policy,
 )
 
@@ -79,6 +85,22 @@ def test_balanced_policy_blocks_failed_breakout_before_score() -> None:
     assert balanced_policy(row) == "block"
 
 
+def test_volume_dedup_candidate_does_not_double_count_extra_volume() -> None:
+    base = _row(raw={"volume_multiple": 2.6}, scores={"volume_score": 0.05, "technical_signal_score": 0.78})
+    high_volume = _row(raw={"volume_multiple": 5.0}, scores={"volume_score": 1.0, "technical_signal_score": 0.78})
+
+    assert balanced_entry_score(high_volume) > balanced_entry_score(base)
+    assert balanced_volume_dedup_score(high_volume) == pytest.approx(balanced_volume_dedup_score(base))
+    assert structure_context_score(high_volume) == pytest.approx(structure_context_score(base))
+
+
+def test_dedup_candidates_still_block_failed_breakouts() -> None:
+    row = _row(raw={"dense_breakout_status": "failed_breakout"}, scores={"volume_score": 1.0})
+
+    assert balanced_volume_dedup_policy(row) == "block"
+    assert structure_context_policy(row) == "block"
+
+
 def test_current_factor_policy_does_not_use_missing_news_as_positive_confirmation() -> None:
     row = _row(scores={"news_direction_alignment_score": 0.0})
 
@@ -113,6 +135,58 @@ def test_loss_aware_candidate_reduces_high_risk_promotion() -> None:
 
     assert legacy_scale[v2] <= legacy_scale[v1]
     assert v2 in {"block", "weak", "normal"}
+
+
+def test_profit_loss_upgrade_is_not_more_aggressive_on_high_loss_risk() -> None:
+    row = _row(
+        scores={
+            "technical_signal_score": 0.94,
+            "orderflow_confirmation_score": 0.46,
+            "pattern_confirmation_score": 0.34,
+            "dense_zone_breakout_score": 0.32,
+            "range_safety_score": 0.30,
+            "trend_confirmation_score": 0.62,
+            "news_safety_score": 0.45,
+        },
+        raw={
+            "regime_range_score": 0.70,
+            "regime_risk_score": 0.52,
+            "regime_trend_score": 0.62,
+            "dense_trend_score": 0.32,
+        },
+    )
+    scale = {"block": 0.0, "weak": 0.25, "normal": 0.50, "strong": 0.75, "full": 1.0}
+
+    v2 = calibrated_v2_loss_aware_research_policy(row)
+    v21 = calibrated_v21_profit_loss_research_policy(row)
+
+    assert scale[v21] <= scale[v2]
+    assert v21 in {"block", "weak", "normal"}
+
+
+def test_profit_loss_upgrade_still_allows_clean_expansion_setups() -> None:
+    row = _row(
+        scores={
+            "technical_signal_score": 0.96,
+            "orderflow_confirmation_score": 0.92,
+            "pattern_confirmation_score": 0.92,
+            "dense_zone_breakout_score": 0.76,
+            "range_safety_score": 0.86,
+            "trend_confirmation_score": 0.82,
+            "news_direction_alignment_score": 0.70,
+            "news_safety_score": 0.80,
+            "btc_leader_score": 0.70,
+            "eth_btc_rotation_score": 0.65,
+        },
+        raw={
+            "regime_range_score": 0.14,
+            "regime_risk_score": 0.16,
+            "regime_trend_score": 0.82,
+            "dense_trend_score": 0.76,
+        },
+    )
+
+    assert calibrated_v21_profit_loss_research_policy(row) in {"strong", "full"}
 
 
 def test_weighted_policy_can_promote_high_orderflow_quality_without_directional_cvd() -> None:
@@ -242,6 +316,73 @@ def test_build_rows_uses_train_orderflow_distribution_for_percentiles() -> None:
 
     assert rows[0].scores["orderflow_confirmation_score"] == pytest.approx(1.0)
     assert rows[1].scores["orderflow_confirmation_score"] == pytest.approx(1.0)
+
+
+def test_build_rows_treats_missing_orderflow_as_neutral_not_low_quality() -> None:
+    features_payload = {
+        "features": [
+            {
+                "signal_idx": 1,
+                "signal_time": "2023-01-01T00:00:00+00:00",
+                "entry_time": "2023-01-01T01:00:00+00:00",
+                "side": "long",
+                "pnl": 5,
+                "signal_strength": 0.8,
+                "breakout_atr": 0.7,
+                "volume_multiple": 3.4,
+                "pattern_aligned_score": 0.7,
+                "regime_range_score": 0.2,
+                "regime_risk_score": 0.2,
+                "regime_trend_score": 0.7,
+                "dense_trend_score": 0.7,
+                "htf_alignment_score": 0.6,
+            },
+            {
+                "signal_idx": 2,
+                "signal_time": "2025-01-01T00:00:00+00:00",
+                "entry_time": "2025-01-01T01:00:00+00:00",
+                "side": "long",
+                "pnl": -5,
+                "signal_strength": 0.8,
+                "breakout_atr": 0.7,
+                "volume_multiple": 3.4,
+                "pattern_aligned_score": 0.7,
+                "regime_range_score": 0.2,
+                "regime_risk_score": 0.2,
+                "regime_trend_score": 0.7,
+                "dense_trend_score": 0.7,
+                "htf_alignment_score": 0.6,
+            },
+        ]
+    }
+    orderflow_payload = {
+        "rows": {
+            "60": [
+                {
+                    "signal_idx": 1,
+                    "trade_count": 0,
+                    "total_quote": 0,
+                    "large_trade_quote": 0,
+                    "max_trade_quote": 0,
+                    "missing_days": ["2023-01-01"],
+                },
+                {
+                    "signal_idx": 2,
+                    "trade_count": 100,
+                    "total_quote": 100,
+                    "large_trade_quote": 10,
+                    "max_trade_quote": 5,
+                    "missing_days": [],
+                },
+            ]
+        }
+    }
+
+    rows = build_rows(features_payload, orderflow_payload, "2024-01-01")
+
+    assert rows[0].scores["orderflow_confirmation_score"] == pytest.approx(0.5)
+    assert rows[0].scores["orderflow_direction_score"] == pytest.approx(0.0)
+    assert rows[1].scores["orderflow_confirmation_score"] == pytest.approx(0.5)
 
 
 def test_parse_walk_forward_periods_rejects_invalid_order() -> None:

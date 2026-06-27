@@ -8,7 +8,12 @@ from typing import Any
 
 import yaml
 
-POLICIES = {"legacy_factor_ranked", "calibrated_v1_controlled"}
+POLICIES = {
+    "legacy_factor_ranked",
+    "calibrated_v1_controlled",
+    "calibrated_v2_loss_aware",
+    "hybrid_subjective_guarded_v2",
+}
 
 
 def load_yaml(path: Path) -> dict[str, Any]:
