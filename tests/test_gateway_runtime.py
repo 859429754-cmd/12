@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from ai_quant_trader.api.server import create_app
 from ai_quant_trader.app import TradingApp
-from ai_quant_trader.core.models import OrderRequest, OrderResult, PositionSnapshot, Side, SignalAction, StrategySignal
+from ai_quant_trader.core.models import HealthStatus, OrderRequest, OrderResult, PositionSnapshot, Side, SignalAction, StrategySignal
 from ai_quant_trader.execution import gateio as gateio_module
 from ai_quant_trader.execution.gateio import GateExecutionClient
 from ai_quant_trader.execution.gateway.factory import create_exchange_gateway
@@ -399,6 +399,10 @@ async def test_live_position_fetch_failure_blocks_trading_cycle(tmp_path: Path) 
 
     config_path = tmp_path / "config.yaml"
     write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl", ["ETH/USDT:USDT"])
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace("  dry_run: true", "  dry_run: false\n  execution_mode: live"),
+        encoding="utf-8",
+    )
     app = TradingApp(str(config_path))
     app.config.runtime.execution_mode = "live"
     app.config.runtime.dry_run = False
@@ -487,6 +491,71 @@ async def test_hourly_trading_loop_runs_startup_cycle_before_sleep(tmp_path: Pat
         await app._hourly_trading_loop(equity=1000.0, live_news=False)
 
     assert calls == ["trading_startup_cycle_ok"]
+    await app.close()
+
+
+@pytest.mark.asyncio
+async def test_live_trading_cycle_failure_blocks_without_crashing_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl", ["ETH/USDT:USDT"])
+    app = TradingApp(str(config_path))
+    app.config.runtime.execution_mode = "live"
+    app.config.runtime.dry_run = False
+
+    async def fail_once(*, equity: float, live_news: bool) -> None:
+        raise RuntimeError("live_position_fetch_failed_blocking_trading_cycle")
+
+    monkeypatch.setattr(app, "run_once", fail_once)
+
+    await app._run_trading_cycle_with_heartbeat(
+        equity=1000.0,
+        live_news=False,
+        heartbeat_reason="trading_cycle_ok",
+    )
+
+    latest = app.store.fetch_latest("worker_heartbeats", "trading_worker")
+    payload = latest["payload"]
+    assert payload["status"] == HealthStatus.BLOCK.value
+    assert payload["reason"] == "trading_cycle_failed"
+    assert payload["details"]["error_type"] == "RuntimeError"
+    await app.close()
+
+
+@pytest.mark.asyncio
+async def test_live_price_monitor_failure_blocks_without_crashing_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl", ["ETH/USDT:USDT"])
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace("  dry_run: true", "  dry_run: false\n  execution_mode: live"),
+        encoding="utf-8",
+    )
+    app = TradingApp(str(config_path))
+    app.config.runtime.execution_mode = "live"
+    app.config.runtime.dry_run = False
+
+    async def fail_stop_check(symbol: str, timeframe: str) -> None:
+        raise RuntimeError("live_position_fetch_failed_blocking_trading_cycle")
+
+    async def cancel_sleep(seconds: float) -> None:
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(app.state, "should_report", lambda symbol: True)
+    monkeypatch.setattr(app, "_enforce_fixed_atr_stop_once", fail_stop_check)
+    monkeypatch.setattr(asyncio, "sleep", cancel_sleep)
+
+    with pytest.raises(asyncio.CancelledError):
+        await app._price_wakeup_loop(equity=1000.0)
+
+    latest = app.store.fetch_latest("worker_heartbeats", "price_monitor_worker")
+    payload = latest["payload"]
+    assert payload["status"] == HealthStatus.BLOCK.value
+    assert payload["reason"] == "price_monitor_failed"
+    assert payload["details"]["symbol"] == "ETH/USDT:USDT"
+    monkeypatch.undo()
     await app.close()
 
 

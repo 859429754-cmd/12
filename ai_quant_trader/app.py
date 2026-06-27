@@ -457,8 +457,6 @@ class TradingApp:
                 details={"error_type": type(exc).__name__},
             )
             logger.exception("trading_worker_failed")
-            if execution_mode_from_config(self.config) == "live":
-                raise
 
     async def _news_refresh_loop(self) -> None:
         while True:
@@ -501,8 +499,6 @@ class TradingApp:
                         interval_seconds=interval,
                         details={"symbol": symbol_cfg.symbol},
                     )
-                    if execution_mode_from_config(self.config) == "live":
-                        raise
             if not failures:
                 self.heartbeat.ok(
                     "price_monitor_worker",
