@@ -12,6 +12,7 @@ import pytest
 
 from scripts.historical_orderflow_backfill import (
     BinanceAggTradeArchive,
+    evaluate_coverage,
     feature_orderflow_windows,
     run_backfill,
     summarize_alignment,
@@ -175,4 +176,21 @@ def test_backfill_outputs_coverage_without_downloading_missing_days(tmp_path: Pa
 
     assert summary["coverage"]["60"]["missing"] == 1
     assert summary["coverage"]["60"]["usable"] == 0
+    assert summary["coverage_verdict"]["status"] == "incomplete"
+    assert summary["coverage_verdict"]["research_gate"] == "blocked_until_backfill_complete"
     assert summary["limits"]
+
+
+def test_coverage_verdict_requires_minimum_usable_ratio() -> None:
+    verdict = evaluate_coverage(
+        {
+            "60": {"total": 10, "usable": 8, "missing": 1, "empty": 1, "usable_ratio": 0.8},
+            "240": {"total": 10, "usable": 6, "missing": 4, "empty": 0, "usable_ratio": 0.6},
+        },
+        min_usable_ratio=0.75,
+    )
+
+    assert verdict["status"] == "incomplete"
+    assert verdict["windows"]["60"]["status"] == "ok"
+    assert verdict["windows"]["240"]["status"] == "incomplete"
+    assert verdict["research_gate"] == "blocked_until_backfill_complete"

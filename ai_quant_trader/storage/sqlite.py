@@ -33,6 +33,7 @@ class SQLiteStore:
             "trades",
             "positions_snapshot",
             "ai_decisions",
+            "live_factor_snapshots",
             "hourly_reports",
             "orderflow_summaries",
             "dense_zones",

@@ -555,6 +555,23 @@ class AiDecision(BaseModel):
         return self
 
 
+class LiveFactorSnapshot(BaseModel):
+    model_config = ConfigDict(use_enum_values=True)
+
+    symbol: str
+    signal_action: SignalAction
+    signal_strength: float = Field(default=0.0, ge=0, le=1)
+    position_tier: Literal["block", "weak", "normal", "strong", "full"] = "block"
+    position_scale: float = Field(default=0.0, ge=0, le=1)
+    sizing_policy: str = "legacy_factor_ranked"
+    score_breakdown: dict[str, float] = Field(default_factory=dict)
+    live_factors: dict[str, Any] = Field(default_factory=dict)
+    archive_status: Literal["shadow_only", "usable_after_close", "invalid"] = "shadow_only"
+    source: Literal["trading_cycle", "major_news_review", "manual_drill"] = "trading_cycle"
+    warnings: list[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=utc_now)
+
+
 class AiCandidateTradePlan(BaseModel):
     model_config = ConfigDict(use_enum_values=True)
 

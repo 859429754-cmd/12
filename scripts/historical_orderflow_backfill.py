@@ -100,6 +100,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--large-trade-usdt", type=float, default=250_000.0)
     parser.add_argument("--progress-every", type=int, default=25)
     parser.add_argument("--checkpoint-every", type=int, default=10)
+    parser.add_argument(
+        "--min-usable-ratio",
+        type=float,
+        default=0.80,
+        help="Minimum usable ratio per window before orderflow is eligible for research weighting.",
+    )
+    parser.add_argument(
+        "--strict-coverage",
+        action="store_true",
+        help="Exit non-zero when any requested window is below --min-usable-ratio.",
+    )
     parser.add_argument("--no-resume", action="store_true", help="Ignore existing output checkpoints.")
     return parser.parse_args()
 
@@ -478,11 +489,14 @@ def summarize_rows(
             "usable": len(usable),
             "missing": len(missing),
             "empty": len(empty),
+            "usable_ratio": round(len(usable) / len(rows), 6) if rows else 0.0,
         }
         window_stats[str(window)] = {
             "numeric": summarize_numeric(rows),
             "alignment": summarize_alignment(rows),
         }
+    min_usable_ratio = float(getattr(args, "min_usable_ratio", 0.80) or 0.80)
+    coverage_verdict = evaluate_coverage(coverage, min_usable_ratio=min_usable_ratio)
 
     return {
         "created_at": datetime.now(UTC).isoformat(),
@@ -494,6 +508,7 @@ def summarize_rows(
         "processed_feature_windows": sum(len(rows) for rows in rows_by_window.values()),
         "lookahead_guard": "Each window ends at entry_time exclusive; trades with timestamp >= entry_time raise an error.",
         "coverage": coverage,
+        "coverage_verdict": coverage_verdict,
         "windows": window_stats,
         "rows": {str(window): [asdict(row) | {"total_quote": row.total_quote} for row in rows] for window, rows in rows_by_window.items()},
         "limits": [
@@ -501,6 +516,40 @@ def summarize_rows(
             "Missing daily archives are reported as missing, never interpreted as bearish or bullish evidence.",
             "This output is research-only and must pass walk-forward validation before changing live RiskManager weights.",
         ],
+    }
+
+
+def evaluate_coverage(coverage: dict[str, Any], *, min_usable_ratio: float) -> dict[str, Any]:
+    windows: dict[str, Any] = {}
+    status = "ok"
+    warnings: list[str] = []
+    for window, stats in coverage.items():
+        total = int(stats.get("total") or 0)
+        usable = int(stats.get("usable") or 0)
+        missing = int(stats.get("missing") or 0)
+        empty = int(stats.get("empty") or 0)
+        usable_ratio = float(stats.get("usable_ratio") if stats.get("usable_ratio") is not None else 0.0)
+        window_status = "ok" if total > 0 and usable_ratio >= min_usable_ratio else "incomplete"
+        if window_status != "ok":
+            status = "incomplete"
+            warnings.append(
+                f"{window}m usable_ratio={usable_ratio:.3f} below required {min_usable_ratio:.3f}; "
+                f"missing={missing}, empty={empty}, total={total}"
+            )
+        windows[str(window)] = {
+            "status": window_status,
+            "total": total,
+            "usable": usable,
+            "missing": missing,
+            "empty": empty,
+            "usable_ratio": usable_ratio,
+        }
+    return {
+        "status": status,
+        "min_usable_ratio": min_usable_ratio,
+        "windows": windows,
+        "warnings": warnings,
+        "research_gate": "eligible" if status == "ok" else "blocked_until_backfill_complete",
     }
 
 
@@ -572,11 +621,14 @@ def main() -> None:
                 "report": str(report),
                 "feature_count": summary["feature_count"],
                 "coverage": summary["coverage"],
+                "coverage_verdict": summary["coverage_verdict"],
             },
             ensure_ascii=False,
             indent=2,
         )
     )
+    if bool(getattr(args, "strict_coverage", False)) and summary["coverage_verdict"]["status"] != "ok":
+        raise SystemExit(2)
 
 
 if __name__ == "__main__":

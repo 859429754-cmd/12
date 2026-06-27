@@ -53,6 +53,7 @@ from ai_quant_trader.monitoring.price import PriceWakeupMonitor
 from ai_quant_trader.ops.systemd import SystemdNotifier
 from ai_quant_trader.optimizer.proposals import StrategyOptimizer
 from ai_quant_trader.reporting.hourly import HourlyReportBuilder
+from ai_quant_trader.research.live_factor_archive import build_live_factor_snapshot
 from ai_quant_trader.risk.manager import RiskManager
 from ai_quant_trader.storage.sqlite import SQLiteStore
 from ai_quant_trader.strategy.lab import StrategyCodeError, generate_custom_signal, get_active_strategy
@@ -224,6 +225,18 @@ class TradingApp:
             self.store.insert("data_health", data_health, symbol_cfg.symbol)
             self.store.insert("ai_drift_checks", drift, symbol_cfg.symbol)
             self.store.insert("ai_decisions", ai, symbol_cfg.symbol)
+            if signal.action != SignalAction.HOLD:
+                self.store.insert(
+                    "live_factor_snapshots",
+                    build_live_factor_snapshot(
+                        signal=signal,
+                        ai=ai,
+                        risk=risk,
+                        orderflow=aggregated,
+                        source="trading_cycle",
+                    ),
+                    symbol_cfg.symbol,
+                )
 
             if not risk.allowed and signal.action in {SignalAction.LONG, SignalAction.SHORT}:
                 self.store.insert(
