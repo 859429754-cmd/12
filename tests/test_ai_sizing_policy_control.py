@@ -33,3 +33,4 @@ def test_ai_sizing_policy_control_switches_policy_and_creates_backup(tmp_path: P
     assert updated["risk"]["calibrated_max_tier_lift"] == 1
     assert updated["risk"]["calibrated_min_factor_coverage"] == 0.7
     assert "legacy_factor_ranked" in result["rollback_command"]
+    assert result["legacy_rollback_command"].endswith("--policy legacy_factor_ranked")

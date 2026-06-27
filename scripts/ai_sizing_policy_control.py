@@ -61,6 +61,7 @@ def set_policy(
         "new_policy": policy,
         "backup": backup_path,
         "rollback_command": f"python scripts/ai_sizing_policy_control.py --policy {previous}",
+        "legacy_rollback_command": "python scripts/ai_sizing_policy_control.py --policy legacy_factor_ranked",
     }
 
 
