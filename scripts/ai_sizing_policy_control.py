@@ -32,7 +32,14 @@ def backup_config(path: Path) -> Path:
     return backup
 
 
-def set_policy(path: Path, policy: str, *, max_tier_lift: int | None = None, backup: bool = True) -> dict[str, Any]:
+def set_policy(
+    path: Path,
+    policy: str,
+    *,
+    max_tier_lift: int | None = None,
+    min_factor_coverage: float | None = None,
+    backup: bool = True,
+) -> dict[str, Any]:
     if policy not in POLICIES:
         raise ValueError(f"unsupported_ai_sizing_policy:{policy}")
     data = load_yaml(path)
@@ -44,6 +51,8 @@ def set_policy(path: Path, policy: str, *, max_tier_lift: int | None = None, bac
     risk["ai_sizing_policy"] = policy
     if max_tier_lift is not None:
         risk["calibrated_max_tier_lift"] = int(max_tier_lift)
+    if min_factor_coverage is not None:
+        risk["calibrated_min_factor_coverage"] = float(min_factor_coverage)
     write_yaml(path, data)
     return {
         "ok": True,
@@ -60,12 +69,14 @@ def main() -> int:
     parser.add_argument("--config", default="config/config.yaml")
     parser.add_argument("--policy", choices=sorted(POLICIES), required=True)
     parser.add_argument("--max-tier-lift", type=int, choices=[0, 1, 2], default=None)
+    parser.add_argument("--min-factor-coverage", type=float, default=None)
     parser.add_argument("--no-backup", action="store_true")
     args = parser.parse_args()
     result = set_policy(
         Path(args.config),
         args.policy,
         max_tier_lift=args.max_tier_lift,
+        min_factor_coverage=args.min_factor_coverage,
         backup=not args.no_backup,
     )
     print(yaml.safe_dump(result, allow_unicode=True, sort_keys=False).strip())

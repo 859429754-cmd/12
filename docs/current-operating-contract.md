@@ -108,7 +108,7 @@ python scripts/ai_sizing_policy_control.py --policy legacy_factor_ranked
 上线命令：
 
 ```powershell
-python scripts/ai_sizing_policy_control.py --policy calibrated_v1_controlled --max-tier-lift 1
+python scripts/ai_sizing_policy_control.py --policy calibrated_v1_controlled --max-tier-lift 1 --min-factor-coverage 0.7
 ```
 
 本合同不是对新模型收益的承诺。新模型仍需通过真实交易后的 AI 仓位分档效果审计，验证是否真正减少亏损、保留盈利、提高盈利因子和夏普率。

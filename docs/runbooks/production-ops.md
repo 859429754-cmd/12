@@ -40,7 +40,8 @@ cd /root/ai-quant-trader
 .venv/bin/python current/scripts/ai_sizing_policy_control.py \
   --config config/config.yaml \
   --policy calibrated_v1_controlled \
-  --max-tier-lift 1
+  --max-tier-lift 1 \
+  --min-factor-coverage 0.7
 systemctl restart ai-quant-trader.service ai-quant-console.service
 ```
 

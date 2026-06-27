@@ -23,7 +23,7 @@ def test_ai_sizing_policy_control_switches_policy_and_creates_backup(tmp_path: P
         encoding="utf-8",
     )
 
-    result = set_policy(config, "calibrated_v1_controlled", max_tier_lift=1)
+    result = set_policy(config, "calibrated_v1_controlled", max_tier_lift=1, min_factor_coverage=0.7)
 
     updated = yaml.safe_load(config.read_text(encoding="utf-8"))
     assert result["previous_policy"] == "legacy_factor_ranked"
@@ -31,4 +31,5 @@ def test_ai_sizing_policy_control_switches_policy_and_creates_backup(tmp_path: P
     assert Path(result["backup"]).exists()
     assert updated["risk"]["ai_sizing_policy"] == "calibrated_v1_controlled"
     assert updated["risk"]["calibrated_max_tier_lift"] == 1
+    assert updated["risk"]["calibrated_min_factor_coverage"] == 0.7
     assert "legacy_factor_ranked" in result["rollback_command"]
