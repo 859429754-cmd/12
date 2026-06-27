@@ -4,6 +4,7 @@ import argparse
 import json
 import sqlite3
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,7 @@ class TradeAudit:
     entry_price: float
     entry_qty: float
     entry_row_id: int
+    entry_created_at: str = ""
     exit_client_order_id: str | None = None
     exit_price: float | None = None
     exit_row_id: int | None = None
@@ -47,6 +49,10 @@ class TradeAudit:
     reason: str = ""
     warnings: list[str] = field(default_factory=list)
     shadow_tiers: dict[str, dict[str, float]] = field(default_factory=dict)
+    factor_snapshot_id: int | None = None
+    factor_snapshot_created_at: str | None = None
+    factor_archive_status: str | None = None
+    factor_inputs: dict[str, Any] = field(default_factory=dict)
 
     @property
     def closed(self) -> bool:
@@ -92,6 +98,19 @@ def _order_price(payload: dict[str, Any]) -> float | None:
             if value and value > 0:
                 return value
     return None
+
+
+def _parse_timestamp(value: Any) -> datetime | None:
+    if not value:
+        return None
+    text = str(value).replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def _event_qty(payload: dict[str, Any]) -> float | None:
@@ -157,7 +176,11 @@ def _tier_from_metadata_or_reason(metadata: dict[str, Any], reason: str) -> tupl
     return tier, scale
 
 
-def build_trade_audit(rows: list[dict[str, Any]], account_slot: str | None = None) -> list[TradeAudit]:
+def build_trade_audit(
+    rows: list[dict[str, Any]],
+    account_slot: str | None = None,
+    factor_snapshot_rows: list[dict[str, Any]] | None = None,
+) -> list[TradeAudit]:
     trades: list[TradeAudit] = []
     open_by_key: dict[tuple[str, str], TradeAudit] = {}
     for row in _final_fill_events(rows):
@@ -183,6 +206,7 @@ def build_trade_audit(rows: list[dict[str, Any]], account_slot: str | None = Non
                 entry_price=entry_price,
                 entry_qty=entry_qty,
                 entry_row_id=int(row["id"]),
+                entry_created_at=str(row.get("created_at") or ""),
                 strategy_baseline_notional=_as_float(metadata.get("strategy_baseline_notional")),
                 ai_desired_notional=_as_float(metadata.get("ai_desired_notional")),
                 decision_score=_as_float(metadata.get("risk_decision_score")),
@@ -237,7 +261,71 @@ def build_trade_audit(rows: list[dict[str, Any]], account_slot: str | None = Non
         trade.baseline_pnl_usdt = baseline_pnl
         trade.ai_delta_pnl_usdt = ai_delta
         open_by_key.pop(key, None)
+    if factor_snapshot_rows is not None:
+        attach_factor_snapshots(trades, factor_snapshot_rows)
     return trades
+
+
+def attach_factor_snapshots(
+    trades: list[TradeAudit],
+    snapshot_rows: list[dict[str, Any]],
+    *,
+    max_age_minutes: int = 180,
+) -> None:
+    snapshots: list[dict[str, Any]] = []
+    for row in snapshot_rows:
+        payload = row.get("payload") or {}
+        created_at = _parse_timestamp(row.get("created_at") or payload.get("created_at"))
+        if created_at is None:
+            continue
+        snapshots.append(
+            {
+                "id": int(row.get("id") or 0),
+                "created_at": created_at,
+                "created_at_raw": str(row.get("created_at") or payload.get("created_at") or ""),
+                "symbol": str(row.get("symbol") or payload.get("symbol") or ""),
+                "signal_action": str(payload.get("signal_action") or ""),
+                "payload": payload,
+            }
+        )
+    for trade in trades:
+        entry_time = _parse_timestamp(trade.entry_created_at)
+        if entry_time is None:
+            trade.warnings.append("factor_snapshot_not_matched_missing_entry_time")
+            continue
+        candidates: list[tuple[float, dict[str, Any]]] = []
+        for snapshot in snapshots:
+            if snapshot["symbol"] != trade.symbol:
+                continue
+            if not _snapshot_action_matches_trade(snapshot["signal_action"], trade.side):
+                continue
+            age_seconds = (entry_time - snapshot["created_at"]).total_seconds()
+            if 0 <= age_seconds <= max_age_minutes * 60:
+                candidates.append((age_seconds, snapshot))
+        if not candidates:
+            trade.warnings.append("factor_snapshot_not_matched")
+            continue
+        _, snapshot = min(candidates, key=lambda item: item[0])
+        payload = snapshot["payload"]
+        trade.factor_snapshot_id = int(snapshot["id"])
+        trade.factor_snapshot_created_at = snapshot["created_at_raw"]
+        trade.factor_archive_status = str(payload.get("archive_status") or "")
+        trade.factor_inputs = {
+            "position_tier": payload.get("position_tier"),
+            "position_scale": payload.get("position_scale"),
+            "sizing_policy": payload.get("sizing_policy"),
+            "score_breakdown": payload.get("score_breakdown") or {},
+            "live_factors": payload.get("live_factors") or {},
+        }
+
+
+def _snapshot_action_matches_trade(signal_action: str, side: str) -> bool:
+    normalized = signal_action.lower()
+    if side == "long":
+        return normalized in {"long", "open_long"}
+    if side == "short":
+        return normalized in {"short", "open_short"}
+    return False
 
 
 def _baseline_notional_for_shadow(trade: TradeAudit) -> float | None:
@@ -331,14 +419,75 @@ def summarize_trades(trades: list[TradeAudit], min_sample_warning: int = 30) -> 
         _finish_stats(stats, scale_values[tier], score_values[tier], confidence_values[tier])
     _finish_stats(overall, overall_scales, overall_scores, overall_confidences)
     _finish_shadow_summary(shadow_summary)
+    live_factor_coverage = _summarize_live_factor_coverage(trades, min_sample_warning=min_sample_warning)
+    live_factor_effects = _summarize_live_factor_effects(trades)
     return {
         "sample_warning": overall["closed"] < min_sample_warning,
         "min_closed_trades_for_reliable_read": min_sample_warning,
         "overall": overall,
         "by_tier": by_tier,
         "shadow_by_tier": shadow_summary,
+        "live_factor_coverage": live_factor_coverage,
+        "live_factor_effects": live_factor_effects,
         "trades": [trade.__dict__ for trade in trades],
     }
+
+
+def _summarize_live_factor_coverage(trades: list[TradeAudit], *, min_sample_warning: int) -> dict[str, Any]:
+    entries = len(trades)
+    closed = len([trade for trade in trades if trade.closed])
+    entries_with_snapshot = len([trade for trade in trades if trade.factor_snapshot_id is not None])
+    closed_with_snapshot = len([trade for trade in trades if trade.closed and trade.factor_snapshot_id is not None])
+    return {
+        "entries": entries,
+        "closed": closed,
+        "entries_with_snapshot": entries_with_snapshot,
+        "closed_with_snapshot": closed_with_snapshot,
+        "entry_coverage_rate": round(entries_with_snapshot / entries, 8) if entries else None,
+        "closed_coverage_rate": round(closed_with_snapshot / closed, 8) if closed else None,
+        "min_closed_snapshots_for_reliable_read": min_sample_warning,
+        "sample_warning": closed_with_snapshot < min_sample_warning,
+    }
+
+
+def _summarize_live_factor_effects(trades: list[TradeAudit]) -> dict[str, Any]:
+    values: dict[str, dict[str, list[float]]] = {}
+    for trade in trades:
+        if not trade.closed or trade.actual_pnl_usdt is None or trade.factor_snapshot_id is None:
+            continue
+        flat = _flatten_numeric_factors(trade.factor_inputs.get("live_factors") or {})
+        bucket = "wins" if trade.actual_pnl_usdt > 0 else "losses"
+        for name, value in flat.items():
+            values.setdefault(name, {"wins": [], "losses": []})[bucket].append(value)
+    output: dict[str, Any] = {}
+    for name, grouped in sorted(values.items()):
+        wins = grouped["wins"]
+        losses = grouped["losses"]
+        win_avg = sum(wins) / len(wins) if wins else None
+        loss_avg = sum(losses) / len(losses) if losses else None
+        output[name] = {
+            "winner_count": len(wins),
+            "loser_count": len(losses),
+            "winner_avg": round(win_avg, 8) if win_avg is not None else None,
+            "loser_avg": round(loss_avg, 8) if loss_avg is not None else None,
+            "winner_minus_loser": round(win_avg - loss_avg, 8) if win_avg is not None and loss_avg is not None else None,
+        }
+    return output
+
+
+def _flatten_numeric_factors(value: Any, prefix: str = "") -> dict[str, float]:
+    output: dict[str, float] = {}
+    if isinstance(value, dict):
+        for key, item in value.items():
+            name = f"{prefix}.{key}" if prefix else str(key)
+            output.update(_flatten_numeric_factors(item, name))
+    elif isinstance(value, list):
+        return output
+    else:
+        parsed = _as_float(value)
+        if parsed is not None:
+            output[prefix] = parsed
+    return output
 
 
 def _empty_shadow_summary() -> dict[str, Any]:
@@ -459,6 +608,36 @@ def render_markdown(summary: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
+            "## Live Factor Snapshot Coverage",
+            "",
+            f"- Entries with snapshot: {summary['live_factor_coverage']['entries_with_snapshot']} / {summary['live_factor_coverage']['entries']}",
+            f"- Closed with snapshot: {summary['live_factor_coverage']['closed_with_snapshot']} / {summary['live_factor_coverage']['closed']}",
+            f"- Closed coverage rate: {_pct(summary['live_factor_coverage']['closed_coverage_rate'])}",
+            "",
+            "## Live Factor Effects",
+            "",
+            "| Factor | Winner avg | Loser avg | Winner - loser | Winner count | Loser count |",
+            "|---|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for name, stats in list(summary["live_factor_effects"].items())[:30]:
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    name,
+                    _number(stats["winner_avg"]),
+                    _number(stats["loser_avg"]),
+                    _number(stats["winner_minus_loser"]),
+                    str(stats["winner_count"]),
+                    str(stats["loser_count"]),
+                ]
+            )
+            + " |"
+        )
+    lines.extend(
+        [
+            "",
             "## Shadow Ledger By Tier",
             "",
             "| Shadow tier | Closed | Win rate | Total PnL | Avg PnL |",
@@ -489,6 +668,12 @@ def _money(value: Any) -> str:
     return f"{float(value):.4f}"
 
 
+def _number(value: Any) -> str:
+    if value is None:
+        return "--"
+    return f"{float(value):.4f}"
+
+
 def _pct(value: Any) -> str:
     if value is None:
         return "--"
@@ -504,9 +689,13 @@ def run_audit(
     conn = sqlite3.connect(db_path)
     try:
         rows = _load_rows(conn, "order_lifecycle", symbol)
+        snapshot_rows = _load_rows(conn, "live_factor_snapshots", symbol)
     finally:
         conn.close()
-    return summarize_trades(build_trade_audit(rows, account_slot=account_slot), min_sample_warning=min_sample_warning)
+    return summarize_trades(
+        build_trade_audit(rows, account_slot=account_slot, factor_snapshot_rows=snapshot_rows),
+        min_sample_warning=min_sample_warning,
+    )
 
 
 def main() -> int:

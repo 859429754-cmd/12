@@ -186,3 +186,70 @@ def test_ai_position_tier_audit_recovers_legacy_tier_from_reason() -> None:
     assert summary["by_tier"]["weak"]["avg_position_scale"] == pytest.approx(0.25)
     assert summary["trades"][0]["warnings"] == ["strategy_baseline_notional_estimated_from_actual_qty_and_tier"]
     assert summary["shadow_by_tier"]["full"]["total_pnl_usdt"] == pytest.approx(40.0)
+
+
+def test_ai_position_tier_audit_joins_live_factor_snapshots() -> None:
+    rows = [
+        {
+            "id": 1,
+            "created_at": "2026-01-01 00:00:20",
+            "symbol": SYMBOL,
+            "payload": _entry(client_order_id="winner_e", tier="strong", scale=0.75, side="buy", qty=7.5, price=100, baseline_notional=1000),
+        },
+        {
+            "id": 2,
+            "created_at": "2026-01-01 01:00:00",
+            "symbol": SYMBOL,
+            "payload": _exit(client_order_id="winner_x", side="sell", qty=7.5, price=110),
+        },
+        {
+            "id": 3,
+            "created_at": "2026-01-01 02:00:20",
+            "symbol": SYMBOL,
+            "payload": _entry(client_order_id="loser_e", tier="weak", scale=0.25, side="buy", qty=2.5, price=100, baseline_notional=1000),
+        },
+        {
+            "id": 4,
+            "created_at": "2026-01-01 03:00:00",
+            "symbol": SYMBOL,
+            "payload": _exit(client_order_id="loser_x", side="sell", qty=2.5, price=90),
+        },
+    ]
+    snapshots = [
+        {
+            "id": 10,
+            "created_at": "2026-01-01 00:00:10",
+            "symbol": SYMBOL,
+            "payload": {
+                "symbol": SYMBOL,
+                "signal_action": "long",
+                "position_tier": "strong",
+                "position_scale": 0.75,
+                "archive_status": "shadow_only",
+                "live_factors": {"news_risk_score": 0.2, "orderflow_confirmation_score": 0.8},
+            },
+        },
+        {
+            "id": 11,
+            "created_at": "2026-01-01 02:00:10",
+            "symbol": SYMBOL,
+            "payload": {
+                "symbol": SYMBOL,
+                "signal_action": "long",
+                "position_tier": "weak",
+                "position_scale": 0.25,
+                "archive_status": "shadow_only",
+                "live_factors": {"news_risk_score": 0.9, "orderflow_confirmation_score": 0.3},
+            },
+        },
+    ]
+
+    trades = build_trade_audit(rows, factor_snapshot_rows=snapshots)
+    summary = summarize_trades(trades, min_sample_warning=1)
+
+    assert summary["live_factor_coverage"]["closed_with_snapshot"] == 2
+    assert summary["live_factor_coverage"]["closed_coverage_rate"] == pytest.approx(1.0)
+    assert summary["live_factor_effects"]["news_risk_score"]["winner_minus_loser"] == pytest.approx(-0.7)
+    assert summary["live_factor_effects"]["orderflow_confirmation_score"]["winner_minus_loser"] == pytest.approx(0.5)
+    assert summary["trades"][0]["factor_snapshot_id"] == 10
+    assert summary["trades"][1]["factor_snapshot_id"] == 11
