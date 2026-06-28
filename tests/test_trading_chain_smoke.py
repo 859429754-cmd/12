@@ -361,7 +361,7 @@ async def test_trading_cycle_records_shadow_position_review_without_addon_order(
 
 
 @pytest.mark.asyncio
-async def test_trading_cycle_executes_live_addon_with_separate_stop_once(
+async def test_trading_cycle_replaces_net_position_stop_after_live_addon_once(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -395,6 +395,27 @@ async def test_trading_cycle_executes_live_addon_with_separate_stop_once(
         atr_value=10.0,
         atr_stop_multiple=1.5,
         native_stop_order_id="mock_stop_verified",
+    )
+    app.store.insert(
+        "orders",
+        {
+            "symbol": "ETH/USDT:USDT",
+            "side": "sell",
+            "amount": 0.25,
+            "price": 85.0,
+            "status": "mock_stop_created",
+            "dry_run": True,
+            "exchange_order_id": "legacy_addon_stop",
+            "role": "position_review_addon_stop",
+            "account_slot": "trend",
+            "raw": {
+                "metadata": {
+                    "role": "position_review_addon_stop",
+                    "position_review_key": "legacy",
+                }
+            },
+        },
+        "ETH/USDT:USDT",
     )
     await app.execution.create_market_order(
         OrderRequest(
@@ -484,16 +505,20 @@ async def test_trading_cycle_executes_live_addon_with_separate_stop_once(
             if (row["payload"].get("metadata") or {}).get("role") == "position_review_addon"
             and row["payload"].get("order_type") == "market"
         }
-        addon_stop_ids = {
-            row["payload"]["client_order_id"]
+        net_stop_events_by_id = {
+            row["payload"]["client_order_id"]: row["payload"]
             for row in lifecycle
-            if (row["payload"].get("metadata") or {}).get("role") == "position_review_addon_stop"
+            if (row["payload"].get("metadata") or {}).get("role") == "net_position_stop"
             and row["payload"].get("order_type") == "stop_loss"
         }
+        net_stop_events = list(net_stop_events_by_id.values())
         assert len(addon_market_ids) == 1
-        assert len(addon_stop_ids) == 1
+        assert len(net_stop_events) == 1
+        assert net_stop_events[0]["amount"] == pytest.approx(1.25)
         assert position.qty == pytest.approx(1.25)
-        assert app.trend_state.get("ETH/USDT:USDT").native_stop_order_id == "mock_stop_verified"
+        assert app.trend_state.get("ETH/USDT:USDT").native_stop_order_id != "mock_stop_verified"
+        cancelled = {row["order_id"] for row in mock_state.get("cancelled_orders", [])}
+        assert {"mock_stop_verified", "legacy_addon_stop"}.issubset(cancelled)
         assert len([row for row in mock_state["orders"] if row.get("status") == "mock_created"]) == 2
         assert len([row for row in mock_state["orders"] if row.get("status") == "mock_stop_created"]) == 1
     finally:

@@ -41,6 +41,7 @@ from ai_quant_trader.data.news_memory import DailyNewsFlashStore, NewsMemoryStor
 from ai_quant_trader.data.orderflow import MultiExchangeOrderflowClient
 from ai_quant_trader.execution.gateway import create_exchange_gateway, execution_mode_from_config
 from ai_quant_trader.execution.lifecycle import OrderLifecycleManager, OrderRejected, OrderSubmissionUncertain
+from ai_quant_trader.execution.position_stop import PositionStopManager
 from ai_quant_trader.execution.reconciliation import run_read_only_reconciliation
 from ai_quant_trader.execution.safety import ExchangeSafetyMonitor
 from ai_quant_trader.features.dense_zone import DenseZoneAnalyzer
@@ -1289,8 +1290,24 @@ class TradingApp:
         self.store.insert("orders", {**order.model_dump(mode="json"), "role": "position_review_addon", "account_slot": TREND_ACCOUNT_SLOT}, symbol)
 
         try:
-            stop_order = await self._place_position_review_addon_stop_loss(symbol, state, qty, decision, order.exchange_order_id)
+            stop_order = await self._primary_position_stop_manager().replace_for_net_position(
+                self.execution,
+                symbol=symbol,
+                state=state,
+                reason="position_review_addon_net_position_stop_replace",
+                metadata={
+                    "position_review_key": decision.review_key,
+                    "addon_exchange_order_id": order.exchange_order_id,
+                    "add_fraction": float(decision.add_fraction),
+                },
+            )
         except (OrderRejected, OrderSubmissionUncertain) as exc:
+            if execution_mode_from_config(self.config) == "live":
+                safety = self.exchange_safety.mark_failure(f"position_review_addon_stop_{type(exc).__name__.lower()}", [symbol])
+                self.store.insert("exchange_health", safety.model_dump(mode="json"))
+                raise RuntimeError("position_review_addon_stop_state_unknown_manual_gate_required") from exc
+            raise
+        except Exception as exc:  # noqa: BLE001
             if execution_mode_from_config(self.config) == "live":
                 safety = self.exchange_safety.mark_failure(f"position_review_addon_stop_{type(exc).__name__.lower()}", [symbol])
                 self.store.insert("exchange_health", safety.model_dump(mode="json"))
@@ -1311,37 +1328,6 @@ class TradingApp:
             symbol,
         )
         await self._mirror_addon_to_followers(symbol, signal, ai, decision, order)
-        return order
-
-    async def _place_position_review_addon_stop_loss(
-        self,
-        symbol: str,
-        state: TrendPositionState,
-        amount: float,
-        decision: PositionReviewDecision,
-        addon_exchange_order_id: str | None,
-    ):
-        stop_side = "sell" if state.side == Side.LONG.value else "buy"
-        request = OrderRequest(
-            symbol=symbol,
-            side=stop_side,
-            amount=abs(float(amount)),
-            reduce_only=True,
-            client_order_id=f"aiq_addon_stop_{uuid.uuid4().hex[:12]}",
-            reason="position_review_addon_native_stop",
-            metadata={
-                "role": "position_review_addon_stop",
-                "position_review_key": decision.review_key,
-                "addon_exchange_order_id": addon_exchange_order_id,
-                "native_stop_price": float(state.stop_loss_price),
-            },
-        )
-        order = await self.order_lifecycle.submit_stop_loss_order(
-            self.execution,
-            request,
-            state.stop_loss_price,
-        )
-        self.store.insert("orders", {**order.model_dump(mode="json"), "role": "position_review_addon_stop", "account_slot": TREND_ACCOUNT_SLOT}, symbol)
         return order
 
     def _record_position_review_execution_block(self, decision: PositionReviewDecision, reason: str) -> None:
@@ -1457,22 +1443,14 @@ class TradingApp:
         state: TrendPositionState,
         amount: float,
     ) -> None:
-        stop_side = "sell" if state.side == Side.LONG.value else "buy"
         try:
-            request = OrderRequest(
-                symbol=symbol,
-                side=stop_side,
-                amount=abs(float(amount)),
-                reduce_only=True,
-                client_order_id=f"aiq_stop_{uuid.uuid4().hex[:17]}",
-                reason="native_fixed_atr_stop",
-            )
-            order = await self.order_lifecycle.submit_stop_loss_order(
+            order = await self._primary_position_stop_manager().replace_for_net_position(
                 self.execution,
-                request,
-                state.stop_loss_price,
+                symbol=symbol,
+                state=state,
+                reason="native_fixed_atr_net_position_stop",
+                metadata={"entry_stop_amount_hint": abs(float(amount))},
             )
-            self.store.insert("orders", order, symbol)
             if order.exchange_order_id:
                 self.trend_state.set_native_stop_order_id(symbol, order.exchange_order_id)
         except (OrderRejected, OrderSubmissionUncertain) as exc:
@@ -1491,6 +1469,10 @@ class TradingApp:
             self.trend_state.clear(symbol)
             raise RuntimeError("native_stop_loss_submit_failed") from exc
         except Exception as exc:  # noqa: BLE001
+            if execution_mode_from_config(self.config) == "live":
+                safety = self.exchange_safety.mark_failure(f"native_stop_submit_{type(exc).__name__.lower()}", [symbol])
+                self.store.insert("exchange_health", safety.model_dump(mode="json"))
+                raise RuntimeError("native_stop_loss_state_unknown_manual_gate_required") from exc
             logger.exception("native_stop_loss_submit_failed_emergency_close", extra={"symbol": symbol})
             close_order = await self.order_lifecycle.close_position(
                 self.execution,
@@ -1503,22 +1485,31 @@ class TradingApp:
             raise RuntimeError("native_stop_loss_submit_failed") from exc
 
     async def _cancel_native_stop_order(self, symbol: str) -> None:
-        state = self.trend_state.get(symbol)
-        if state is None or not state.native_stop_order_id:
-            return
-        try:
-            await self.order_lifecycle.cancel_order(
-                self.execution,
-                symbol=symbol,
-                order_id=state.native_stop_order_id,
-                client_order_id=f"aiq_cancel_{uuid.uuid4().hex[:16]}",
-                trigger=True,
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "native_stop_loss_cancel_failed",
-                extra={"symbol": symbol, "order_id": state.native_stop_order_id, "error": type(exc).__name__},
-            )
+        await self._primary_position_stop_manager().cancel_all_managed_stops(
+            self.execution,
+            symbol,
+            reason="primary_position_exit_or_reverse",
+        )
+
+    def _primary_position_stop_manager(self) -> PositionStopManager:
+        return PositionStopManager(
+            self.store,
+            self.order_lifecycle,
+            self.trend_state,
+            account_slot=TREND_ACCOUNT_SLOT,
+            stop_role="net_position_stop",
+            legacy_stop_roles={"position_review_addon_stop"},
+        )
+
+    def _follower_position_stop_manager(self) -> PositionStopManager:
+        return PositionStopManager(
+            self.store,
+            self.follower_order_lifecycle,
+            self.follower_trend_state,
+            account_slot=FOLLOWER_ACCOUNT_SLOT,
+            stop_role="follower_net_position_stop",
+            legacy_stop_roles={"follower_position_review_addon_stop"},
+        )
 
     def _active_followers(self) -> list[FollowerAccountConfig]:
         return [follower for follower in self.config.followers if follower.enabled and self._follower_route_configured(follower)]
@@ -1691,26 +1682,17 @@ class TradingApp:
             )
             order = await self.follower_order_lifecycle.submit_market_order(self.follower_execution, entry_request)
             self.store.insert("orders", {**order.model_dump(mode="json"), "account_slot": account_slot, "role": "follower_position_review_addon"}, symbol)
-            stop_request = OrderRequest(
+            stop_order = await self._follower_position_stop_manager().replace_for_net_position(
+                self.follower_execution,
                 symbol=symbol,
-                side="sell" if side_value == Side.LONG.value else "buy",
-                amount=qty,
-                reduce_only=True,
-                client_order_id=f"aiq_fol_addstop_{uuid.uuid4().hex[:10]}",
-                reason="follower_position_review_addon_native_stop",
+                state=follower_state,
+                reason="follower_position_review_addon_net_position_stop_replace",
                 metadata={
-                    "role": "follower_position_review_addon_stop",
                     "position_review_key": decision.review_key,
                     "addon_exchange_order_id": order.exchange_order_id,
-                    "native_stop_price": float(follower_state.stop_loss_price),
+                    "add_fraction": float(decision.add_fraction),
                 },
             )
-            stop_order = await self.follower_order_lifecycle.submit_stop_loss_order(
-                self.follower_execution,
-                stop_request,
-                follower_state.stop_loss_price,
-            )
-            self.store.insert("orders", {**stop_order.model_dump(mode="json"), "account_slot": account_slot, "role": "follower_position_review_addon_stop"}, symbol)
             self._record_follower_execution(
                 status="addon_mirrored",
                 account_slot=account_slot,
@@ -1898,41 +1880,22 @@ class TradingApp:
         state: TrendPositionState,
         amount: float,
     ) -> None:
-        stop_side = "sell" if state.side == Side.LONG.value else "buy"
-        request = OrderRequest(
-            symbol=symbol,
-            side=stop_side,
-            amount=abs(float(amount)),
-            reduce_only=True,
-            client_order_id=f"aiq_fstop_{uuid.uuid4().hex[:15]}",
-            reason="follower_native_fixed_atr_stop",
-        )
-        order = await self.follower_order_lifecycle.submit_stop_loss_order(
+        order = await self._follower_position_stop_manager().replace_for_net_position(
             self.follower_execution,
-            request,
-            state.stop_loss_price,
+            symbol=symbol,
+            state=state,
+            reason="follower_native_fixed_atr_net_position_stop",
+            metadata={"entry_stop_amount_hint": abs(float(amount))},
         )
-        self.store.insert("orders", {**order.model_dump(mode="json"), "account_slot": FOLLOWER_ACCOUNT_SLOT, "role": "follower"}, symbol)
         if order.exchange_order_id:
             self.follower_trend_state.set_native_stop_order_id(symbol, order.exchange_order_id)
 
     async def _cancel_follower_native_stop_order(self, symbol: str) -> None:
-        state = self.follower_trend_state.get(symbol)
-        if state is None or not state.native_stop_order_id:
-            return
-        try:
-            await self.follower_order_lifecycle.cancel_order(
-                self.follower_execution,
-                symbol=symbol,
-                order_id=state.native_stop_order_id,
-                client_order_id=f"aiq_fcancel_{uuid.uuid4().hex[:14]}",
-                trigger=True,
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "follower_native_stop_cancel_failed",
-                extra={"symbol": symbol, "order_id": state.native_stop_order_id, "error": type(exc).__name__},
-            )
+        await self._follower_position_stop_manager().cancel_all_managed_stops(
+            self.follower_execution,
+            symbol,
+            reason="follower_position_exit_or_reverse",
+        )
 
     def _same_direction_position_from_signal(
         self,

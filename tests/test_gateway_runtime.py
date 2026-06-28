@@ -565,6 +565,17 @@ async def test_trading_app_places_native_stop_after_entry_state(tmp_path: Path) 
         def __init__(self):
             self.stop_request = None
 
+        async def fetch_positions(self, symbols):
+            return [
+                PositionSnapshot(
+                    symbol=symbols[0],
+                    side=Side.LONG,
+                    qty=0.02,
+                    entry_price=2200.0,
+                    mark_price=2200.0,
+                )
+            ]
+
         async def create_stop_loss_order(self, request, stop_price, price_type=1):
             self.stop_request = {"request": request, "stop_price": stop_price, "price_type": price_type}
             return OrderResult(
@@ -647,6 +658,17 @@ async def test_live_native_stop_unknown_requires_manual_gate_without_auto_close(
 
         def __init__(self):
             self.closed = False
+
+        async def fetch_positions(self, symbols):
+            return [
+                PositionSnapshot(
+                    symbol=symbols[0],
+                    side=Side.LONG,
+                    qty=0.02,
+                    entry_price=2200.0,
+                    mark_price=2200.0,
+                )
+            ]
 
         async def create_stop_loss_order(self, request, stop_price, price_type=1):
             raise TimeoutError("stop_submit_timeout")

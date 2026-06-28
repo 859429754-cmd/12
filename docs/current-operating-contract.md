@@ -125,8 +125,9 @@ python scripts/ai_sizing_policy_control.py --policy hybrid_subjective_guarded_v2
 - 首仓仍由本地趋势策略信号、DeepSeek 主观五档、`calibrated_v2_loss_aware` 和 `hybrid_subjective_guarded_v2` 决定。
 - 持仓复评是持仓管理层，只在已经存在 Gate 持仓和本地 `state_trend.json` 趋势状态时运行。
 - `shadow` 只写入 `position_reviews` 审计表和 readiness，不提交加仓订单。
-- `live_addon` 可以提交一次加仓订单，但必须走订单生命周期、幂等 `client_order_id` 和独立原生止损。
-- 复评不替代 KC 中轨退出，不取消 ATR 固定止损，不移动原主仓止损。
+- `live_addon` 可以提交一次加仓订单，但必须走订单生命周期、幂等 `client_order_id` 和净仓级原生止损。
+- Gate.io 同向加仓是合仓净持仓，不是独立子仓。以后以净仓级止损为准：加仓后必须取消本系统管理的旧主仓止损和遗留加仓止损，并重新挂一张覆盖当前 Gate 真实净仓数量的 reduce-only 原生止损。忽略之前“加仓数量单独挂一张止损”的方案。
+- 复评不替代 KC 中轨退出，不取消 ATR 固定止损口径，不放宽原趋势失效止损价。
 
 加仓候选硬条件：
 

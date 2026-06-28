@@ -131,7 +131,7 @@ Position review:
 - `PositionReviewEngine` is a separate holding-management module, not part of first-entry sizing.
 - It evaluates existing trend positions after a closed 1h candle and writes `position_reviews`.
 - Current small-capital live-test mode is `risk.position_review.mode = live_addon`.
-- `live_addon` may submit at most one add-on per trend position, and must place a separate reduce-only native stop for the added quantity. It is not approved as a large-capital unattended mode.
+- `live_addon` may submit at most one add-on per trend position. Because Gate.io merges same-side additions into one net position, add-ons must replace the strategy-managed native stop with one reduce-only net-position stop covering the full current exchange position. Older separate add-on stop logic is deprecated and must only be treated as legacy cleanup input. It is not approved as a large-capital unattended mode.
 - Add-on candidates require validated profit, intact KC middle structure, verified native stop, healthy readiness, and at least two continuing confirmations from orderflow/pattern/dense-zone.
 - Position review does not replace Keltner middle exit, ATR fixed stop, or same-direction duplicate-entry protection.
 
