@@ -116,16 +116,17 @@ python scripts/ai_sizing_policy_control.py --policy hybrid_subjective_guarded_v2
 
 本合同不是对新模型收益的承诺。新模型仍需通过真实交易后的 AI 仓位分档效果审计，验证是否真正减少亏损、保留盈利、提高盈利因子和夏普率。
 
-## 2026-06-27 持仓闭 K 复评合同
+## 2026-06-28 持仓闭 K 实盘复评合同
 
-以后以本节为准：当前版本允许开启“持仓 1h 闭 K 复评”模块，但默认只允许 `shadow` 模式。忽略之前“开仓时直接允许 DeepSeek 裸 +2 档”以及“盈利后无条件加仓”的方案。
+以后以本节为准：当前小资金实盘测试允许开启“持仓 1h 闭 K 复评 live_addon”。忽略之前“复评模块只能 shadow-only”的方案，也继续忽略“开仓时直接允许 DeepSeek 裸 +2 档”以及“盈利后无条件加仓”的方案。
 
 复评模块定位：
 
 - 首仓仍由本地趋势策略信号、DeepSeek 主观五档、`calibrated_v2_loss_aware` 和 `hybrid_subjective_guarded_v2` 决定。
 - 持仓复评是持仓管理层，只在已经存在 Gate 持仓和本地 `state_trend.json` 趋势状态时运行。
-- 第一版只写入 `position_reviews` 审计表和 readiness，不提交加仓订单。
-- 复评不替代 KC 中轨退出，不取消 ATR 固定止损，不修改原生止损。
+- `shadow` 只写入 `position_reviews` 审计表和 readiness，不提交加仓订单。
+- `live_addon` 可以提交一次加仓订单，但必须走订单生命周期、幂等 `client_order_id` 和独立原生止损。
+- 复评不替代 KC 中轨退出，不取消 ATR 固定止损，不移动原主仓止损。
 
 加仓候选硬条件：
 
@@ -146,11 +147,17 @@ python scripts/ai_sizing_policy_control.py --policy hybrid_subjective_guarded_v2
 risk:
   position_review:
     enabled: true
-    mode: shadow
+    mode: live_addon
+    max_additions_per_position: 1
     max_add_fraction: 0.25
 ```
 
-`mode=live_addon` 目前不是大资金无人值守配置。只有当 `position_reviews` 的 shadow 记录证明复评候选能稳定提高盈利因子、降低回撤并且不增加尾部风险后，才允许单独做实盘加仓版本。
+`mode=live_addon` 仍然不是大资金无人值守配置。它只允许当前小资金实盘灰度使用，且必须满足：
+
+- 同一趋势持仓最多加仓一次。
+- 新增加仓数量必须立刻提交独立 reduce-only 原生止损。
+- 如果加仓订单或加仓止损状态未知，readiness 必须阻断新开仓并要求人工检查 Gate 官方端。
+- 账户2如启用跟随，只在账户2已有同向持仓且有可验证 follower 止损状态时按同等比例跟随加仓。
 
 ## 3. 多账户执行模型
 

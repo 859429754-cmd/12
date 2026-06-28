@@ -45,11 +45,11 @@ cd /root/ai-quant-trader
 systemctl restart ai-quant-trader.service ai-quant-console.service
 ```
 
-开启持仓复评 shadow 记录：
+开启持仓复评 live_addon 小资金灰度：
 
 ```bash
 cd /root/ai-quant-trader
-.venv/bin/python - <<'PY'
+PYTHONPATH=/root/ai-quant-trader/current .venv/bin/python - <<'PY'
 from ai_quant_trader.core.control import RuntimeControlManager
 from ai_quant_trader.storage.sqlite import SQLiteStore
 
@@ -57,7 +57,8 @@ store = SQLiteStore("data/trader.sqlite3", "logs/audit.jsonl")
 control = RuntimeControlManager(store, "config/config.yaml")
 config = control.read_config()
 control.set_config_value(config, "risk.position_review.enabled", True)
-control.set_config_value(config, "risk.position_review.mode", "shadow")
+control.set_config_value(config, "risk.position_review.mode", "live_addon")
+control.set_config_value(config, "risk.position_review.max_additions_per_position", 1)
 control.set_config_value(config, "risk.position_review.max_add_fraction", 0.25)
 control.write_config(config)
 store.close()
@@ -65,7 +66,23 @@ PY
 systemctl restart ai-quant-trader.service ai-quant-console.service
 ```
 
-不要在云端直接把 `risk.position_review.mode` 切到 `live_addon`。该模式必须先有 shadow 审计样本证明有效，再单独上线。
+如果要回退到只审计不加仓：
+
+```bash
+cd /root/ai-quant-trader
+PYTHONPATH=/root/ai-quant-trader/current .venv/bin/python - <<'PY'
+from ai_quant_trader.core.control import RuntimeControlManager
+from ai_quant_trader.storage.sqlite import SQLiteStore
+
+store = SQLiteStore("data/trader.sqlite3", "logs/audit.jsonl")
+control = RuntimeControlManager(store, "config/config.yaml")
+config = control.read_config()
+control.set_config_value(config, "risk.position_review.mode", "shadow")
+control.write_config(config)
+store.close()
+PY
+systemctl restart ai-quant-trader.service ai-quant-console.service
+```
 
 退回 v2 减亏基准但不使用 DeepSeek 主观五档融合：
 

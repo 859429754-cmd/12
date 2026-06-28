@@ -130,7 +130,8 @@ Position review:
 
 - `PositionReviewEngine` is a separate holding-management module, not part of first-entry sizing.
 - It evaluates existing trend positions after a closed 1h candle and writes `position_reviews`.
-- Current production-safe mode is `risk.position_review.mode = shadow`; this records add-on candidates but submits no orders.
+- Current small-capital live-test mode is `risk.position_review.mode = live_addon`.
+- `live_addon` may submit at most one add-on per trend position, and must place a separate reduce-only native stop for the added quantity. It is not approved as a large-capital unattended mode.
 - Add-on candidates require validated profit, intact KC middle structure, verified native stop, healthy readiness, and at least two continuing confirmations from orderflow/pattern/dense-zone.
 - Position review does not replace Keltner middle exit, ATR fixed stop, or same-direction duplicate-entry protection.
 

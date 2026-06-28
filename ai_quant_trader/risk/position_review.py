@@ -63,6 +63,10 @@ class PositionReviewEngine:
                 reason="trend_state_position_side_mismatch",
                 reason_codes=["trend_state_position_side_mismatch"],
             )
+        review_key = (
+            f"{trend_state.symbol}|{trend_state.side}|{trend_state.opened_at}|"
+            f"{trend_state.entry_price:.8f}|{trend_state.stop_loss_price:.8f}"
+        )
 
         evidence = signal.technical_evidence or {}
         kcm = _float_or_none(evidence.get("kc_mid"))
@@ -95,6 +99,8 @@ class PositionReviewEngine:
         blockers: list[str] = []
         if signal.action in {SignalAction.EXIT_LONG, SignalAction.EXIT_SHORT}:
             blockers.append("exit_signal_present")
+        if signal.action in {SignalAction.LONG, SignalAction.SHORT}:
+            blockers.append("entry_signal_present")
         if not exchange_safety.can_open_new_entries:
             blockers.append("exchange_safety_blocks_review")
         if data_health_status == HealthStatus.BLOCK:
@@ -118,6 +124,7 @@ class PositionReviewEngine:
 
         payload = {
             **base,
+            "review_key": review_key,
             "stop_loss_price": stop,
             "kc_mid": kcm,
             "kc_upper": kcu,

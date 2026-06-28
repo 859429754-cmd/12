@@ -124,6 +124,7 @@ class FollowerAccountConfig(BaseModel):
 class PositionReviewConfig(BaseModel):
     enabled: bool = True
     mode: Literal["disabled", "shadow", "live_addon"] = "shadow"
+    max_additions_per_position: int = Field(default=1, ge=0, le=3)
     min_profit_r: float = Field(default=0.5, ge=0, le=5)
     min_profit_atr: float = Field(default=0.5, ge=0, le=5)
     min_orderflow_confirmation: float = Field(default=0.75, ge=0, le=1)
@@ -691,13 +692,16 @@ class PositionReviewDecision(BaseModel):
     model_config = ConfigDict(use_enum_values=True)
 
     symbol: str
+    review_key: str = ""
     side: Side = Side.FLAT
     mode: Literal["disabled", "shadow", "live_addon"] = "shadow"
-    action: Literal["disabled", "no_position", "hold", "add_candidate", "blocked"] = "hold"
+    action: Literal["disabled", "no_position", "hold", "add_candidate", "add_executed", "blocked"] = "hold"
     shadow_only: bool = True
     can_add: bool = False
     add_fraction: float = Field(default=0.0, ge=0, le=1)
     add_qty: float = Field(default=0.0, ge=0)
+    addon_order_id: str | None = None
+    addon_stop_order_id: str | None = None
     r_multiple: float = 0.0
     atr_profit_multiple: float = 0.0
     unrealized_pnl: float = 0.0

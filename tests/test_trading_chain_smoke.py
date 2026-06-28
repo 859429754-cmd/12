@@ -361,6 +361,146 @@ async def test_trading_cycle_records_shadow_position_review_without_addon_order(
 
 
 @pytest.mark.asyncio
+async def test_trading_cycle_executes_live_addon_with_separate_stop_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    db_path = tmp_path / "trader.sqlite3"
+    audit_path = tmp_path / "audit.jsonl"
+    _write_config(config_path, db_path, audit_path)
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace(
+            "  min_confidence_to_trade: 0.55",
+            "  min_confidence_to_trade: 0.55\n"
+            "  position_review:\n"
+            "    enabled: true\n"
+            "    mode: live_addon\n"
+            "    max_additions_per_position: 1\n"
+            "    max_add_fraction: 0.25\n"
+            "    require_native_stop_verified: true",
+        ),
+        encoding="utf-8",
+    )
+
+    app = TradingApp(str(config_path))
+    app.execution = MockExchangeGateway(str(tmp_path / "mock_exchange.json"))
+    app.trend_state = TrendStateStore(str(tmp_path / "state_trend.json"))
+    app.order_lifecycle.gateway_mode = "mock"
+    app.control.enable_symbol_report(app.state, ["ETH/USDT:USDT"], operator_id="test")
+    app.trend_state.record_entry(
+        "ETH/USDT:USDT",
+        Side.LONG,
+        entry_price=100.0,
+        atr_value=10.0,
+        atr_stop_multiple=1.5,
+        native_stop_order_id="mock_stop_verified",
+    )
+    await app.execution.create_market_order(
+        OrderRequest(
+            symbol="ETH/USDT:USDT",
+            side="buy",
+            amount=1.0,
+            reduce_only=False,
+            client_order_id="seed_position",
+            reason="seed_existing_position",
+            metadata={"signal_current_price": 100.0},
+        )
+    )
+
+    async def fake_news(live_news: bool):  # noqa: ANN001
+        from ai_quant_trader.core.models import NewsDigest
+
+        return NewsDigest(summary="mock aligned news", crypto_sentiment=Alignment.ALIGNED)
+
+    async def fake_fetch_ohlcv(*args, **kwargs):  # noqa: ANN002, ANN003
+        frame = _candles()
+        frame.loc[frame.index[-1], "close"] = 110.0
+        frame.loc[frame.index[-1], "high"] = 112.0
+        frame.loc[frame.index[-1], "low"] = 108.0
+        return frame
+
+    async def fake_fetch_summaries(*args, **kwargs):  # noqa: ANN002, ANN003
+        return []
+
+    async def fake_analyze(call_type, signal, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        return _ai_for_symbol(signal.symbol, SignalAction.LONG)
+
+    def fake_regime(symbol, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        return RegimePattern(
+            symbol=symbol,
+            regime_candidate="trend",
+            strategy_allowed="trend",
+            trend_score=0.9,
+            range_score=0.1,
+            reason_codes=["mock_trend_allowed"],
+        )
+
+    def fake_signal(symbol, timeframe, candles, position, equity):  # noqa: ANN001
+        position.mark_price = 110.0
+        position.unrealized_pnl = 10.0
+        return StrategySignal(
+            symbol=symbol,
+            timeframe=timeframe,
+            action=SignalAction.HOLD,
+            current_price=110.0,
+            suggested_qty=0.0,
+            signal_strength=0.0,
+            technical_evidence={
+                "strategy_allowed": "trend",
+                "kc_mid": 102.0,
+                "kc_upper": 108.0,
+                "kc_lower": 96.0,
+                "exit_long": False,
+                "exit_short": False,
+            },
+        )
+
+    monkeypatch.setattr(app, "_news_for_trading_cycle", fake_news)
+    monkeypatch.setattr(app.market, "fetch_ohlcv", fake_fetch_ohlcv)
+    monkeypatch.setattr(app.orderflow_client, "fetch_summaries", fake_fetch_summaries)
+    monkeypatch.setattr(app, "_analyze_with_deepseek_budget", fake_analyze)
+    monkeypatch.setattr(app.regime_patterns, "analyze", fake_regime)
+    monkeypatch.setattr(app, "_generate_local_signal", fake_signal)
+    monkeypatch.setattr(
+        app.data_health,
+        "evaluate_symbol",
+        lambda symbol, **kwargs: DataHealthReport(symbol=symbol, status=HealthStatus.OK, can_open_new_entries=True),
+    )
+
+    try:
+        await app.run_once(equity=1000.0, live_news=False)
+        await app.run_once(equity=1000.0, live_news=False)
+
+        reviews = app.store.fetch_payloads("position_reviews", symbol="ETH/USDT:USDT", limit=10)
+        lifecycle = app.store.fetch_payloads("order_lifecycle", symbol="ETH/USDT:USDT", limit=50)
+        mock_state = json.loads((tmp_path / "mock_exchange.json").read_text(encoding="utf-8"))
+        position = (await app.execution.fetch_positions(["ETH/USDT:USDT"]))[0]
+
+        assert any(row["payload"]["action"] == "add_executed" for row in reviews)
+        addon_market_ids = {
+            row["payload"]["client_order_id"]
+            for row in lifecycle
+            if (row["payload"].get("metadata") or {}).get("role") == "position_review_addon"
+            and row["payload"].get("order_type") == "market"
+        }
+        addon_stop_ids = {
+            row["payload"]["client_order_id"]
+            for row in lifecycle
+            if (row["payload"].get("metadata") or {}).get("role") == "position_review_addon_stop"
+            and row["payload"].get("order_type") == "stop_loss"
+        }
+        assert len(addon_market_ids) == 1
+        assert len(addon_stop_ids) == 1
+        assert position.qty == pytest.approx(1.25)
+        assert app.trend_state.get("ETH/USDT:USDT").native_stop_order_id == "mock_stop_verified"
+        assert len([row for row in mock_state["orders"] if row.get("status") == "mock_created"]) == 2
+        assert len([row for row in mock_state["orders"] if row.get("status") == "mock_stop_created"]) == 1
+    finally:
+        await app.close()
+
+
+@pytest.mark.asyncio
 async def test_run_once_refreshes_positions_after_entry_before_next_symbol_risk(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

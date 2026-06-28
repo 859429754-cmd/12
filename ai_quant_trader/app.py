@@ -26,6 +26,7 @@ from ai_quant_trader.core.models import (
     NewsDirection,
     OrderRequest,
     PatternCandidate,
+    PositionReviewDecision,
     PositionSnapshot,
     RegimePattern,
     RiskDecision,
@@ -238,6 +239,14 @@ class TradingApp:
             self.store.insert("ai_decisions", ai, symbol_cfg.symbol)
             if position_review is not None:
                 self.store.insert("position_reviews", position_review, symbol_cfg.symbol)
+                addon_order = await self._maybe_execute_position_review_addon(
+                    symbol_cfg.symbol,
+                    signal,
+                    position_review,
+                    ai,
+                )
+                if addon_order is not None:
+                    positions = await self._fetch_positions(risk_symbols)
             if signal.action != SignalAction.HOLD:
                 self.store.insert(
                     "live_factor_snapshots",
@@ -1218,6 +1227,164 @@ class TradingApp:
             data_health_status=data_health_status,
         )
 
+    async def _maybe_execute_position_review_addon(
+        self,
+        symbol: str,
+        signal: StrategySignal,
+        decision: PositionReviewDecision,
+        ai: AiDecision,
+    ):
+        cfg = self.config.risk.position_review
+        if decision.action != "add_candidate" or not decision.can_add or cfg.mode != "live_addon":
+            return None
+        if cfg.max_additions_per_position <= 0:
+            self._record_position_review_execution_block(decision, "max_additions_disabled")
+            return None
+        if self._position_review_addon_count(symbol, decision.review_key) >= cfg.max_additions_per_position:
+            self._record_position_review_execution_block(decision, "max_additions_per_position_reached")
+            return None
+        state = self.trend_state.get(symbol)
+        if state is None:
+            self._record_position_review_execution_block(decision, "missing_trend_state_at_execution")
+            return None
+        side_value = decision.side.value if isinstance(decision.side, Side) else str(decision.side)
+        if state.side != side_value:
+            self._record_position_review_execution_block(decision, "trend_state_side_changed")
+            return None
+        qty = float(decision.add_qty)
+        if qty <= 0:
+            self._record_position_review_execution_block(decision, "addon_qty_zero")
+            return None
+        if not await self._qty_meets_exchange_minimum(self.execution, symbol, qty, float(decision.current_price or signal.current_price)):
+            self._record_position_review_execution_block(decision, "addon_qty_below_exchange_minimum")
+            return None
+
+        order_side = "buy" if side_value == Side.LONG.value else "sell"
+        metadata = {
+            "role": "position_review_addon",
+            "position_review_key": decision.review_key,
+            "position_review_created_at": decision.created_at.isoformat(),
+            "add_fraction": float(decision.add_fraction),
+            "r_multiple": float(decision.r_multiple),
+            "atr_profit_multiple": float(decision.atr_profit_multiple),
+            "native_stop_price": float(state.stop_loss_price),
+            "signal_current_price": float(decision.current_price or signal.current_price),
+        }
+        request = OrderRequest(
+            symbol=symbol,
+            side=order_side,
+            amount=qty,
+            reduce_only=False,
+            client_order_id=f"aiq_addon_{uuid.uuid4().hex[:16]}",
+            reason=decision.reason or "position_review_live_addon",
+            metadata=metadata,
+        )
+        try:
+            order = await self.order_lifecycle.submit_market_order(self.execution, request)
+        except (OrderRejected, OrderSubmissionUncertain) as exc:
+            if execution_mode_from_config(self.config) == "live":
+                safety = self.exchange_safety.mark_failure(f"position_review_addon_{type(exc).__name__.lower()}", [symbol])
+                self.store.insert("exchange_health", safety.model_dump(mode="json"))
+            raise RuntimeError("position_review_addon_submit_state_unknown") from exc
+        self.store.insert("orders", {**order.model_dump(mode="json"), "role": "position_review_addon", "account_slot": TREND_ACCOUNT_SLOT}, symbol)
+
+        try:
+            stop_order = await self._place_position_review_addon_stop_loss(symbol, state, qty, decision, order.exchange_order_id)
+        except (OrderRejected, OrderSubmissionUncertain) as exc:
+            if execution_mode_from_config(self.config) == "live":
+                safety = self.exchange_safety.mark_failure(f"position_review_addon_stop_{type(exc).__name__.lower()}", [symbol])
+                self.store.insert("exchange_health", safety.model_dump(mode="json"))
+                raise RuntimeError("position_review_addon_stop_state_unknown_manual_gate_required") from exc
+            raise
+        self.store.insert(
+            "position_reviews",
+            decision.model_copy(
+                update={
+                    "action": "add_executed",
+                    "can_add": True,
+                    "shadow_only": False,
+                    "addon_order_id": order.exchange_order_id or request.client_order_id,
+                    "addon_stop_order_id": stop_order.exchange_order_id,
+                    "reason": "position_review_live_addon_executed",
+                }
+            ),
+            symbol,
+        )
+        await self._mirror_addon_to_followers(symbol, signal, ai, decision, order)
+        return order
+
+    async def _place_position_review_addon_stop_loss(
+        self,
+        symbol: str,
+        state: TrendPositionState,
+        amount: float,
+        decision: PositionReviewDecision,
+        addon_exchange_order_id: str | None,
+    ):
+        stop_side = "sell" if state.side == Side.LONG.value else "buy"
+        request = OrderRequest(
+            symbol=symbol,
+            side=stop_side,
+            amount=abs(float(amount)),
+            reduce_only=True,
+            client_order_id=f"aiq_addon_stop_{uuid.uuid4().hex[:12]}",
+            reason="position_review_addon_native_stop",
+            metadata={
+                "role": "position_review_addon_stop",
+                "position_review_key": decision.review_key,
+                "addon_exchange_order_id": addon_exchange_order_id,
+                "native_stop_price": float(state.stop_loss_price),
+            },
+        )
+        order = await self.order_lifecycle.submit_stop_loss_order(
+            self.execution,
+            request,
+            state.stop_loss_price,
+        )
+        self.store.insert("orders", {**order.model_dump(mode="json"), "role": "position_review_addon_stop", "account_slot": TREND_ACCOUNT_SLOT}, symbol)
+        return order
+
+    def _record_position_review_execution_block(self, decision: PositionReviewDecision, reason: str) -> None:
+        self.store.insert(
+            "position_reviews",
+            decision.model_copy(
+                update={
+                    "action": "blocked",
+                    "can_add": False,
+                    "shadow_only": False,
+                    "reason": f"position_review_execution_blocked:{reason}",
+                    "reason_codes": [*decision.reason_codes, reason],
+                }
+            ),
+            decision.symbol,
+        )
+
+    def _position_review_addon_count(self, symbol: str, review_key: str) -> int:
+        if not review_key:
+            return 0
+        client_order_ids: set[str] = set()
+        for row in self.store.fetch_payloads("order_lifecycle", symbol=symbol, limit=500):
+            payload = row.get("payload") or {}
+            metadata = payload.get("metadata") or {}
+            if payload.get("order_type") != "market":
+                continue
+            if payload.get("account_slot") != TREND_ACCOUNT_SLOT:
+                continue
+            if metadata.get("role") != "position_review_addon":
+                continue
+            if metadata.get("position_review_key") != review_key:
+                continue
+            client_order_id = payload.get("client_order_id")
+            if client_order_id:
+                client_order_ids.add(str(client_order_id))
+        return len(client_order_ids)
+
+    async def _qty_meets_exchange_minimum(self, gateway, symbol: str, qty: float, price: float) -> bool:
+        min_amount = await gateway.minimum_order_amount(symbol, price)
+        contract_size = await gateway.contract_size(symbol)
+        min_base_qty = float(min_amount) * max(float(contract_size or 1.0), 1e-12)
+        return float(qty) >= min_base_qty
+
     def _fixed_atr_stop_signal(
         self,
         symbol: str,
@@ -1431,6 +1598,141 @@ class TradingApp:
             if not follower.mirror_entries:
                 continue
             await self._mirror_entry_to_follower(follower, symbol, signal, ai, risk, primary_order)
+
+    async def _mirror_addon_to_followers(
+        self,
+        symbol: str,
+        signal: StrategySignal,
+        ai: AiDecision,
+        decision: PositionReviewDecision,
+        primary_order,
+    ) -> None:
+        for follower in self._active_followers():
+            if not follower.mirror_entries:
+                continue
+            await self._mirror_addon_to_follower(follower, symbol, signal, ai, decision, primary_order)
+
+    async def _mirror_addon_to_follower(
+        self,
+        follower: FollowerAccountConfig,
+        symbol: str,
+        signal: StrategySignal,
+        ai: AiDecision,
+        decision: PositionReviewDecision,
+        primary_order,
+    ) -> None:
+        account_slot = self._canonical_follower_slot(follower.account_slot)
+        try:
+            side_value = decision.side.value if isinstance(decision.side, Side) else str(decision.side)
+            positions = await self.follower_execution.fetch_positions([symbol])
+            same = next(
+                (
+                    item
+                    for item in positions
+                    if item.symbol == symbol
+                    and (item.side.value if isinstance(item.side, Side) else str(item.side)) == side_value
+                    and abs(item.qty) > 0
+                ),
+                None,
+            )
+            if same is None:
+                self._record_follower_execution(
+                    status="addon_skipped_no_same_direction_position",
+                    account_slot=account_slot,
+                    symbol=symbol,
+                    signal=signal,
+                    ai=ai,
+                    reason="follower_no_same_direction_position_for_addon",
+                    primary_order=primary_order.model_dump(mode="json") if hasattr(primary_order, "model_dump") else None,
+                )
+                return
+            follower_state = self.follower_trend_state.get(symbol)
+            if follower_state is None or follower_state.side != side_value or not follower_state.native_stop_order_id:
+                self._record_follower_execution(
+                    status="addon_blocked_missing_follower_stop_state",
+                    account_slot=account_slot,
+                    symbol=symbol,
+                    signal=signal,
+                    ai=ai,
+                    reason="follower_addon_requires_verified_native_stop",
+                    primary_order=primary_order.model_dump(mode="json") if hasattr(primary_order, "model_dump") else None,
+                )
+                return
+            qty = abs(float(same.qty)) * float(decision.add_fraction)
+            if qty <= 0 or not await self._qty_meets_exchange_minimum(
+                self.follower_execution,
+                symbol,
+                qty,
+                float(decision.current_price or signal.current_price),
+            ):
+                self._record_follower_execution(
+                    status="addon_blocked_by_follower_sizing",
+                    account_slot=account_slot,
+                    symbol=symbol,
+                    signal=signal,
+                    ai=ai,
+                    reason="follower_addon_qty_below_minimum",
+                    primary_order=primary_order.model_dump(mode="json") if hasattr(primary_order, "model_dump") else None,
+                )
+                return
+            order_side = "buy" if side_value == Side.LONG.value else "sell"
+            entry_request = OrderRequest(
+                symbol=symbol,
+                side=order_side,
+                amount=qty,
+                reduce_only=False,
+                client_order_id=f"aiq_fol_addon_{uuid.uuid4().hex[:12]}",
+                reason=f"follower_mirror_position_review_addon:{decision.reason}",
+                metadata={
+                    "role": "follower_position_review_addon",
+                    "position_review_key": decision.review_key,
+                    "add_fraction": float(decision.add_fraction),
+                },
+            )
+            order = await self.follower_order_lifecycle.submit_market_order(self.follower_execution, entry_request)
+            self.store.insert("orders", {**order.model_dump(mode="json"), "account_slot": account_slot, "role": "follower_position_review_addon"}, symbol)
+            stop_request = OrderRequest(
+                symbol=symbol,
+                side="sell" if side_value == Side.LONG.value else "buy",
+                amount=qty,
+                reduce_only=True,
+                client_order_id=f"aiq_fol_addstop_{uuid.uuid4().hex[:10]}",
+                reason="follower_position_review_addon_native_stop",
+                metadata={
+                    "role": "follower_position_review_addon_stop",
+                    "position_review_key": decision.review_key,
+                    "addon_exchange_order_id": order.exchange_order_id,
+                    "native_stop_price": float(follower_state.stop_loss_price),
+                },
+            )
+            stop_order = await self.follower_order_lifecycle.submit_stop_loss_order(
+                self.follower_execution,
+                stop_request,
+                follower_state.stop_loss_price,
+            )
+            self.store.insert("orders", {**stop_order.model_dump(mode="json"), "account_slot": account_slot, "role": "follower_position_review_addon_stop"}, symbol)
+            self._record_follower_execution(
+                status="addon_mirrored",
+                account_slot=account_slot,
+                symbol=symbol,
+                signal=signal,
+                ai=ai,
+                reason="follower_mirrored_position_review_addon",
+                order=order.model_dump(mode="json"),
+                primary_order=primary_order.model_dump(mode="json") if hasattr(primary_order, "model_dump") else None,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("follower_addon_failed", extra={"symbol": symbol, "account_slot": account_slot})
+            self._record_follower_execution(
+                status="addon_failed",
+                account_slot=account_slot,
+                symbol=symbol,
+                signal=signal,
+                ai=ai,
+                reason="follower_addon_exception",
+                error_type=type(exc).__name__,
+                primary_order=primary_order.model_dump(mode="json") if hasattr(primary_order, "model_dump") else None,
+            )
 
     def _order_risk_metadata(
         self,
