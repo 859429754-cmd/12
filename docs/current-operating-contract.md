@@ -78,6 +78,24 @@ eth_btc_rotation_score         1%
 - 高周期/BTC 风向标只参与限仓、缩放和解释，不得生成方向。
 - 当前研究是全样本结果，仍需 walk-forward / 样本外验证后才能进一步放松档位。
 
+## 2026-06-28 订单流公共数据源合同
+
+以后以本节为准，忽略之前“live 公共订单流采集失败时用随机 synthetic 订单流补位”的方案。
+
+订单流数据只作为 AI/RiskManager 的确认与风控输入，不得生成交易方向。当前公共数据源规则：
+
+- Binance、Bybit 仍可通过 ccxt 公共接口读取盘口和成交。
+- OKX 订单流使用 OKX 原生公共 REST：`/api/v5/market/books` 与 `/api/v5/market/trades`，不再通过 `ccxt.okx.load_markets()`，避免上游市场表出现 `None` id 时触发排序异常。
+- 实盘模式下，任一公共数据源失败时只能生成中性 degraded summary：`bid_ask_imbalance=0`、`active_buy_sell_ratio=1`、`cvd_delta=0`、`data_quality=0.25`。
+- 失败源不得注入随机方向、随机深度或随机主动买卖比；否则会污染 AI 仓位分档。
+- 聚合后若订单流质量不足，`DataHealthMonitor` 和 `RiskManager` 必须继续降级、限仓或阻断。
+
+相关实现：
+
+- `ai_quant_trader/data/orderflow.py::MultiExchangeOrderflowClient`
+- `tests/test_orderflow.py::test_okx_orderflow_uses_public_rest_without_ccxt_market_loading`
+- `tests/test_orderflow.py::test_failed_live_orderflow_source_is_neutral_degraded`
+
 以后以本版本为准，忽略之前“AI 只能降仓或否决，不能升档”的方案。AI 不能发明交易方向，但在本地策略已经触发 `LONG/SHORT` 后，可以在 RiskManager 硬风控、账户杠杆上限、readiness、订单流、密集区、形态、新闻和 BTC/ETH 风向标约束内，把仓位档位动态上调、维持、下调或阻断。
 
 仓位百分比默认按账户当前风险上限解释，而不是只按策略原始建议数量解释。策略层仍会生成 `strategy_baseline_notional`，RiskManager 会生成 `ai_desired_notional` 和 `sizing_basis`，用于审计 AI 是放大、维持还是降仓。若策略建议数量为 0，AI 不允许凭空生成开仓数量。

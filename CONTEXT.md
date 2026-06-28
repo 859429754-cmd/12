@@ -22,6 +22,7 @@ The system is an AI-assisted crypto quant trading system.
 - Default symbols: `ETH/USDT:USDT`, `BTC/USDT:USDT`, `SOL/USDT:USDT`
 - Default timeframe: 1h
 - Orderflow data: Binance, OKX, Bybit, Gate public read-only sources
+- Orderflow failure contract: live public source failures must degrade to neutral low-quality summaries, never random directional synthetic data. OKX orderflow uses native public REST (`/api/v5/market/books` and `/api/v5/market/trades`) to avoid ccxt OKX market-table sorting failures.
 - News data: free public sources first, covering macro finance, politics, central banks, Fed, USD, oil, geopolitics, crypto industry
 - Interaction priority: Web console first; legacy DingTalk command/push paths are disabled and must not be reintroduced without an explicit decision.
 - Storage: SQLite WAL + JSONL audit logs
