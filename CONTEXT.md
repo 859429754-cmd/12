@@ -135,6 +135,7 @@ Position review:
 - `live_addon` may submit at most one add-on per trend position. Because Gate.io merges same-side additions into one net position, add-ons must replace the strategy-managed native stop with one reduce-only net-position stop covering the full current exchange position. Older separate add-on stop logic is deprecated and must only be treated as legacy cleanup input. It is not approved as a large-capital unattended mode.
 - Add-on candidates require validated profit, intact KC middle structure, verified native stop, healthy readiness, and at least two continuing confirmations from orderflow/pattern/dense-zone.
 - Position review does not replace Keltner middle exit, ATR fixed stop, or same-direction duplicate-entry protection.
+- Console switching is admin-only through `/api/control/position-review`; account1/account2/range users can only view the current mode. Switching to `live_addon` requires explicit confirmation and is audited in `runtime_state(symbol=position_review_control)`.
 - Reconciliation recovery: if local trend state exists but Gate confirms the symbol is flat, the system may clear `state_trend.json` only when the bound native stop order has a terminal order-lifecycle status (`filled`, `not_found`, or `cancelled`). Otherwise the exchange safety gate must remain fail-closed.
 
 Full-position conditions are strict:

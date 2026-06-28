@@ -177,6 +177,7 @@ export type ConsoleSession = {
     capabilities: {
       manage_runtime: boolean;
       manage_strategy_parameters: boolean;
+      manage_position_review?: boolean;
       manage_api_keys: boolean;
       execute_manual_orders: boolean;
       edit_own_leverage: boolean;

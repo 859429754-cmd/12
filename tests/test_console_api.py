@@ -1089,6 +1089,60 @@ def test_console_account_rbac_replaces_operation_code_for_mutating_requests(tmp_
     assert ok.status_code == 200
 
 
+def test_position_review_mode_control_is_admin_only_and_audited(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("CONSOLE_AUTH_DISABLED", "0")
+    monkeypatch.setenv("CONSOLE_ADMIN_PASSWORD", "admin-secret")
+    monkeypatch.setenv("CONSOLE_ACCOUNT1_PASSWORD", "account-secret")
+    config_path = tmp_path / "config.yaml"
+    db_path = tmp_path / "trader.sqlite3"
+    audit_path = tmp_path / "audit.jsonl"
+    write_config(config_path, db_path, audit_path, ["ETH/USDT:USDT"])
+    client = TestClient(create_app(str(config_path)))
+
+    account_login = client.post("/api/auth/login", json={"username": "account1", "password": "account-secret"})
+    assert account_login.status_code == 200
+    account_blocked = client.post(
+        "/api/control/position-review",
+        json={"operator_id": "account1", "mode": "shadow"},
+    )
+    assert account_blocked.status_code == 403
+    assert account_blocked.json()["detail"] == "permission_denied"
+
+    client.post("/api/auth/logout", json={})
+    admin_login = client.post("/api/auth/login", json={"username": "admin", "password": "admin-secret"})
+    assert admin_login.status_code == 200
+    unsafe_live = client.post(
+        "/api/control/position-review",
+        json={"operator_id": "admin", "mode": "live_addon"},
+    )
+    assert unsafe_live.status_code == 400
+    assert "必须显式确认" in unsafe_live.json()["detail"]
+
+    shadow = client.post(
+        "/api/control/position-review",
+        json={"operator_id": "admin", "mode": "shadow"},
+    )
+    assert shadow.status_code == 200
+    assert shadow.json()["enabled"] is True
+    assert shadow.json()["mode"] == "shadow"
+    status = client.get("/api/status").json()
+    review_cfg = status["risk"]["position_review"]
+    assert review_cfg["enabled"] is True
+    assert review_cfg["mode"] == "shadow"
+
+    live = client.post(
+        "/api/control/position-review",
+        json={"operator_id": "admin", "mode": "live_addon", "confirm_live_addon": True},
+    )
+    assert live.status_code == 200
+    assert live.json()["mode"] == "live_addon"
+    latest = SQLiteStore(str(db_path), str(audit_path)).fetch_latest("runtime_state", "position_review_control")
+    assert latest is not None
+    assert latest["payload"]["old_mode"] == "shadow"
+    assert latest["payload"]["new_mode"] == "live_addon"
+    assert latest["payload"]["confirm_live_addon"] is True
+
+
 def test_console_auth_fails_closed_when_enabled_without_users(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("CONSOLE_AUTH_DISABLED", "0")
     config_path = tmp_path / "config.yaml"

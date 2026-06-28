@@ -99,6 +99,12 @@ class RuntimeModeRequest(BaseModel):
     dry_run: bool
 
 
+class PositionReviewModeRequest(BaseModel):
+    operator_id: str = Field(default="console")
+    mode: Literal["disabled", "shadow", "live_addon"]
+    confirm_live_addon: bool = False
+
+
 class ConsoleLoginRequest(BaseModel):
     username: str = Field(min_length=1, max_length=64)
     password: str = Field(min_length=1, max_length=256)
@@ -1649,6 +1655,59 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         warning = "" if target_mode == "mock" else "；真实订单仍必须满足账号登录权限、逐标的授权、允许开仓、AI否决和配置的杠杆硬风控"
         return {"ok": True, "message": f"已切换为{mode_text}{warning}"}
 
+    @app.post("/api/control/position-review")
+    def set_position_review_mode(body: PositionReviewModeRequest, request: Request) -> dict[str, Any]:
+        ctx = _ctx(app)
+        ctx.reload()
+        user = _current_console_user(request)
+        if str(user.get("role")) != "admin":
+            raise HTTPException(status_code=403, detail="只有管理员可以切换持仓复评模式。")
+        if body.mode == "live_addon" and not body.confirm_live_addon:
+            raise HTTPException(status_code=400, detail="live_addon 模式会允许实盘复评加仓，必须显式确认。")
+
+        config = ctx.control.read_config()
+        old_risk = config.get("risk", {}) if isinstance(config.get("risk"), dict) else {}
+        old_review = old_risk.get("position_review", {}) if isinstance(old_risk.get("position_review"), dict) else {}
+        old_mode = old_review.get("mode", "shadow")
+        old_enabled = bool(old_review.get("enabled", False))
+
+        review = dict(old_review)
+        review["mode"] = body.mode
+        review["enabled"] = body.mode != "disabled"
+        risk = dict(old_risk)
+        risk["position_review"] = review
+        config["risk"] = risk
+        ctx.control.write_config(config)
+
+        if ctx.store is not None:
+            ctx.store.insert(
+                "runtime_state",
+                {
+                    "type": "position_review_control",
+                    "operator_id": body.operator_id,
+                    "console_user": user.get("username"),
+                    "old_mode": old_mode,
+                    "new_mode": body.mode,
+                    "old_enabled": old_enabled,
+                    "new_enabled": review["enabled"],
+                    "confirm_live_addon": body.confirm_live_addon,
+                    "risk_note": (
+                        "live_addon permits one guarded add-on per trend position and still requires "
+                        "readiness, native stop verification, profit validation and net-position stop replacement."
+                    ),
+                    "source": "console",
+                },
+                symbol="position_review_control",
+            )
+        ctx.reload(force=True)
+        labels = {"disabled": "关闭复评", "shadow": "仅审计 shadow", "live_addon": "实盘复评加仓 live_addon"}
+        return {
+            "ok": True,
+            "mode": body.mode,
+            "enabled": body.mode != "disabled",
+            "message": f"持仓闭K复评已切换为：{labels[body.mode]}。",
+        }
+
     @app.post("/api/control/pause")
     def pause(body: ConsoleAction) -> dict[str, Any]:
         ctx = _ctx(app)
@@ -3190,6 +3249,7 @@ def _console_capabilities(user: dict[str, Any]) -> dict[str, bool]:
     return {
         "manage_runtime": is_admin,
         "manage_strategy_parameters": is_admin,
+        "manage_position_review": is_admin,
         "manage_api_keys": is_admin,
         "execute_manual_orders": is_admin,
         "edit_own_leverage": bool(is_admin or user.get("account_slot")),

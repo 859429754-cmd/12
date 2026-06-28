@@ -131,7 +131,7 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const capabilities = session?.user?.capabilities;
   const visibleSlots = session?.user?.visible_account_slots || ["trend", "follower", "range"];
-  const isAdmin = Boolean(capabilities?.manage_strategy_parameters);
+  const isAdmin = Boolean(capabilities?.manage_strategy_parameters || capabilities?.manage_position_review);
 
   const symbols = useMemo(() => {
     const fromMarkets = markets.items.map((item) => item.symbol);
@@ -4008,7 +4008,10 @@ function ExecutionWorkspace({
             当前按你的要求采用“一次策略信号 + 一次 DeepSeek 决策 + 多账户独立裁剪”：账号1先执行，账号2跟随复制同一订单意图。每个 Gate 账户按自己的余额、杠杆上限和跟随比例单独计算仓位。
           </div>
         </Surface>
-        <RuntimeModePanel executionMode={executionMode} isAdmin={isAdmin} busy={busy} postAction={postAction} />
+        <div className="grid gap-5">
+          <RuntimeModePanel executionMode={executionMode} isAdmin={isAdmin} busy={busy} postAction={postAction} />
+          <PositionReviewControlPanel status={status} isAdmin={isAdmin} busy={busy} postAction={postAction} />
+        </div>
       </div>
 
       <AccountSlotManager accountSlots={accountSlots} visibleSlots={visibleSlots} isAdmin={isAdmin} busy={busy} postAction={postAction} />
@@ -4176,6 +4179,81 @@ function RuntimeModePanel({
       </div>
     </Surface>
   );
+}
+
+function PositionReviewControlPanel({
+  status,
+  isAdmin,
+  busy,
+  postAction,
+}: {
+  status: StatusResponse | null;
+  isAdmin: boolean;
+  busy: boolean;
+  postAction: (path: string, body: Record<string, unknown>) => Promise<void>;
+}) {
+  const review = objectPayload(status?.risk?.position_review);
+  const enabled = review.enabled !== false;
+  const mode = String(review.mode || (enabled ? "shadow" : "disabled"));
+  const maxAdditions = Number(review.max_additions_per_position ?? 1);
+  const maxAddFraction = Number(review.max_add_fraction ?? 0.25);
+  const nativeStopRequired = review.require_native_stop_verified !== false;
+  const switchMode = async (nextMode: "disabled" | "shadow" | "live_addon") => {
+    if (nextMode === "live_addon") {
+      const ok = window.confirm("live_addon 会允许持仓闭K复评后实盘加仓一次。确认当前只用于小资金灰度，并且接受净仓止损替换风险？");
+      if (!ok) return;
+    }
+    await postAction("/api/control/position-review", {
+      operator_id: "console",
+      mode: nextMode,
+      confirm_live_addon: nextMode === "live_addon",
+    });
+  };
+  return (
+    <Surface title={<><ShieldCheck size={13} /> 持仓闭K复评</>}>
+      <div className="grid grid-cols-2 gap-2">
+        <Metric label="当前模式" value={positionReviewModeLabel(mode)} tone={mode === "live_addon" ? "warn" : mode === "shadow" ? "good" : "bad"} />
+        <Metric label="单次加仓" value={`${pct(maxAddFraction * 100)} / 最多${num(maxAdditions, 0)}次`} />
+        <Metric label="原生止损" value={nativeStopRequired ? "必须验证" : "未强制"} tone={nativeStopRequired ? "good" : "warn"} />
+        <Metric label="权限" value={isAdmin ? "管理员可切换" : "只读"} tone={isAdmin ? "good" : "warn"} />
+      </div>
+      <div className="mt-3 grid grid-cols-3 gap-2">
+        {(["disabled", "shadow", "live_addon"] as const).map((item) => (
+          <button
+            key={item}
+            className={`${button} justify-center text-[11px] ${
+              mode === item
+                ? item === "live_addon"
+                  ? "border-[#facc15] bg-[#241806] text-[#facc15]"
+                  : item === "shadow"
+                    ? "border-[#22c55e] bg-[#052e1a] text-[#86efac]"
+                    : "border-[#7f1d1d] bg-[#241016] text-[#fecdd3]"
+                : ""
+            }`}
+            disabled={busy || !isAdmin || mode === item}
+            onClick={() => void switchMode(item)}
+          >
+            {positionReviewModeLabel(item)}
+          </button>
+        ))}
+      </div>
+      <div className="mt-3 rounded-xl border border-[#263246] bg-[#101a2d] p-3 text-[11px] leading-5 text-[#94a3b8]">
+        复评只管理已有趋势仓位，不替代 KC 中轨退出和 ATR 止损。`live_addon` 仍是小资金灰度：加仓后必须替换为覆盖 Gate 净仓的 reduce-only 原生止损。
+      </div>
+      {!isAdmin ? (
+        <div className="mt-2 rounded-lg border border-[#854d0e] bg-[#241806] px-2 py-1.5 text-[11px] leading-5 text-[#facc15]">
+          普通账户只能查看复评模式，不能切换 disabled / shadow / live_addon。
+        </div>
+      ) : null}
+    </Surface>
+  );
+}
+
+function positionReviewModeLabel(value: string) {
+  if (value === "disabled") return "关闭";
+  if (value === "shadow") return "只审计";
+  if (value === "live_addon") return "实盘复评";
+  return value || "--";
 }
 
 function AccountSlotManager({

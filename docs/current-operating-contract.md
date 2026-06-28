@@ -178,6 +178,13 @@ risk:
 - 如果加仓订单或加仓止损状态未知，readiness 必须阻断新开仓并要求人工检查 Gate 官方端。
 - 账户2如启用跟随，只在账户2已有同向持仓且有可验证 follower 止损状态时按同等比例跟随加仓。
 
+控制台权限：
+
+- `/api/control/position-review` 是管理员专用实盘风险开关。
+- 账户1、账户2和震荡账户只能查看当前复评模式，不能切换 `disabled` / `shadow` / `live_addon`。
+- 切换到 `live_addon` 必须显式提交 `confirm_live_addon=true`，防止误触开启实盘复评加仓。
+- 每次切换必须写入 `runtime_state(symbol=position_review_control)` 和 JSONL audit，保留操作者、旧模式、新模式和确认状态。
+
 ## 2026-06-28 对账恢复合同：终态止损 + 交易所空仓
 
 以后以本节为准：本地趋势状态和 Gate 实仓不一致时，默认继续 fail-closed；只有证据链闭合才允许自动修复本地状态。
