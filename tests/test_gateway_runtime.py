@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from ai_quant_trader.api.server import create_app
 from ai_quant_trader.app import TradingApp
-from ai_quant_trader.core.models import HealthStatus, OrderRequest, OrderResult, PositionSnapshot, Side, SignalAction, StrategySignal
+from ai_quant_trader.core.models import HealthStatus, OrderLifecycleStatus, OrderRequest, OrderResult, PositionSnapshot, Side, SignalAction, StrategySignal
 from ai_quant_trader.execution import gateio as gateio_module
 from ai_quant_trader.execution.gateio import GateExecutionClient
 from ai_quant_trader.execution.gateway.factory import create_exchange_gateway
@@ -768,6 +768,62 @@ async def test_order_status_worker_refreshes_live_reconciliation(tmp_path: Path)
     assert reconciliation["status"] == "ok"
     assert exchange_health["reason"] == "exchange_reconciliation_ok"
     assert state.can_open_new_entries is True
+    await app.close()
+
+
+@pytest.mark.asyncio
+async def test_terminal_stop_with_flat_exchange_position_repairs_stale_trend_state(tmp_path: Path) -> None:
+    class FlatGateway:
+        mode = "live"
+
+        async def fetch_balance_summary(self):
+            return {"ok": True, "usdt_total": 1000.0}
+
+        async def fetch_positions(self, symbols):
+            return [PositionSnapshot(symbol=symbol, side=Side.FLAT, qty=0.0, mark_price=0.0) for symbol in symbols]
+
+        async def fetch_open_orders(self, symbols):
+            return []
+
+        async def fetch_order_by_exchange_id(self, symbol: str, exchange_order_id: str):
+            return None
+
+        async def close(self):
+            return None
+
+    config_path = tmp_path / "config.yaml"
+    write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl", ["ETH/USDT:USDT"])
+    app = TradingApp(str(config_path))
+    app.config.runtime.execution_mode = "live"
+    app.config.runtime.dry_run = False
+    app.execution = FlatGateway()
+    app.trend_state = TrendStateStore(str(tmp_path / "state_trend.json"))
+    app.trend_state.record_entry("ETH/USDT:USDT", Side.SHORT, 1548.0, 23.1, 1.5, native_stop_order_id="stop_123")
+    app.store.insert(
+        "order_lifecycle",
+        {
+            "client_order_id": "stop_client_1",
+            "symbol": "ETH/USDT:USDT",
+            "status": OrderLifecycleStatus.ACCEPTED.value,
+            "account_slot": "trend",
+            "order_type": "stop_loss",
+            "side": "buy",
+            "amount": 0.25,
+            "reduce_only": True,
+            "gateway_mode": "live",
+            "reason": "native_fixed_atr_stop",
+            "exchange_order_id": "stop_123",
+        },
+        "ETH/USDT:USDT",
+    )
+
+    state = await app._refresh_reconciliation_and_order_status_once(["ETH/USDT:USDT"])  # noqa: SLF001
+
+    assert app.trend_state.get("ETH/USDT:USDT") is None
+    assert state.can_open_new_entries is True
+    assert app.store.fetch_latest("reconciliation_runs")["payload"]["status"] == "ok"
+    repairs = [row["payload"] for row in app.store.fetch_payloads("reconciliation_runs", limit=5)]
+    assert any(row.get("status") == "local_state_repaired" for row in repairs)
     await app.close()
 
 

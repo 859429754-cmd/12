@@ -174,9 +174,33 @@ risk:
 `mode=live_addon` 仍然不是大资金无人值守配置。它只允许当前小资金实盘灰度使用，且必须满足：
 
 - 同一趋势持仓最多加仓一次。
-- 新增加仓数量必须立刻提交独立 reduce-only 原生止损。
+- 复评加仓后必须立刻替换为一张覆盖 Gate 当前真实净仓数量的 reduce-only 原生止损；不得再使用独立加仓止损。
 - 如果加仓订单或加仓止损状态未知，readiness 必须阻断新开仓并要求人工检查 Gate 官方端。
 - 账户2如启用跟随，只在账户2已有同向持仓且有可验证 follower 止损状态时按同等比例跟随加仓。
+
+## 2026-06-28 对账恢复合同：终态止损 + 交易所空仓
+
+以后以本节为准：本地趋势状态和 Gate 实仓不一致时，默认继续 fail-closed；只有证据链闭合才允许自动修复本地状态。
+
+允许自动归档本地 `state_trend.json` 的唯一恢复场景：
+
+```text
+本地存在 trend state
+  + 该 state 绑定的 native_stop_order_id 在 order_lifecycle 中已有终态
+    filled / not_found / cancelled
+  + Gate 当前 fetch_positions 明确返回该 symbol 空仓
+= 清理本地 trend state，写入 reconciliation_runs 审计，并重新执行只读对账
+```
+
+禁止自动清理的场景：
+
+- Gate 持仓读取失败或超时。
+- Gate 返回仍有同向/反向持仓。
+- 本地 state 没有 native stop id。
+- 订单生命周期没有对应终态止损记录。
+- 对账仍存在非 reduce-only 挂单或其他人工检查项。
+
+这条规则用于修复“交易所已平仓但本地趋势 state 未清理”造成的 `local_trend_state_without_exchange_position` 阻断，不允许绕过真实持仓确认。
 
 ## 3. 多账户执行模型
 

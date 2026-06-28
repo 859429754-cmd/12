@@ -24,6 +24,8 @@ from ai_quant_trader.core.models import (
     MarketLeaderContext,
     NewsDigest,
     NewsDirection,
+    OrderLifecycleEvent,
+    OrderLifecycleStatus,
     OrderRequest,
     PatternCandidate,
     PositionReviewDecision,
@@ -984,6 +986,16 @@ class TradingApp:
             live=True,
         )
         await self._refresh_order_status_once(symbols)
+        if not self.exchange_safety.state.can_open_new_entries:
+            await run_read_only_reconciliation(
+                gateway=self.execution,
+                store=self.store,
+                symbols=symbols,
+                trend_state=self.trend_state,
+                monitor=self.exchange_safety,
+                stale_after_seconds=self.config.risk.stale_data_seconds,
+                live=True,
+            )
         return self.exchange_safety.state
 
     async def _refresh_order_status_once(self, symbols: list[str]):
@@ -994,6 +1006,8 @@ class TradingApp:
                 gateway_mode=execution_mode_from_config(self.config),
             )
             await self._mirror_primary_native_stop_fills_to_followers(primary_updates)
+            if execution_mode_from_config(self.config) == "live":
+                await self._repair_stale_trend_state_after_terminal_stop(symbols)
             updates = list(primary_updates)
             if self._active_followers():
                 try:
@@ -1031,69 +1045,138 @@ class TradingApp:
                 continue
             if str(getattr(event, "status", "")) not in {"filled", "OrderLifecycleStatus.FILLED"}:
                 continue
-            symbol = str(getattr(event, "symbol", "") or "")
-            if not symbol:
-                continue
-            client_order_id = str(getattr(event, "client_order_id", "") or "")
-            if client_order_id and self.store.fetch_latest_payload_by_value(
-                "follower_executions",
-                "primary_stop_client_order_id",
-                client_order_id,
-                symbol=symbol,
-                limit=500,
-            ):
-                continue
-            side = str(getattr(event, "side", "") or "").lower()
-            action = SignalAction.EXIT_LONG if side == "sell" else SignalAction.EXIT_SHORT
-            order_payload = getattr(event, "order", None) or {}
-            price = float(order_payload.get("price") or order_payload.get("stop_price") or 0.0)
-            signal = StrategySignal(
-                symbol=symbol,
-                timeframe="1h",
-                action=action,
-                current_price=price,
-                suggested_qty=0.0,
-                signal_strength=1.0,
-                technical_evidence={
-                    "strategy_allowed": "trend",
-                    "reason": "primary_native_stop_filled",
-                    "primary_stop_client_order_id": client_order_id,
-                    "primary_stop_exchange_order_id": getattr(event, "exchange_order_id", None),
-                },
-            )
-            ai = AiDecision(
-                symbol=symbol,
-                regime="trend",
-                direction=Side.FLAT,
-                confidence=1.0,
-                multiplier=1.0,
-                news_alignment="neutral",
-                orderflow_alignment="neutral",
-                dense_zone_position="primary_native_stop_filled",
-                pattern_type="stop_loss_exit",
-                trend_confirmation_score=1.0,
-                range_risk_score=0.0,
-                news_risk_score=0.0,
-                orderflow_confirmation_score=0.0,
-                dense_zone_breakout_score=0.0,
-                action_suggestion="close",
-                veto_action="allow",
+            await self._record_primary_stop_terminal_exit(
+                event,
+                reason_code="primary_native_stop_filled",
                 brief_reason="账户1 Gate 原生止损成交，账户2按账户1退出动作同步平仓。",
-                reason_codes=["primary_native_stop_filled", "follower_exit_mirror"],
             )
-            await self._mirror_exit_to_followers(symbol, signal, ai, "primary_native_stop_filled")
+
+    async def _repair_stale_trend_state_after_terminal_stop(self, symbols: list[str]) -> None:
+        candidates: list[tuple[str, TrendPositionState, OrderLifecycleEvent]] = []
+        for symbol in symbols:
+            state = self.trend_state.get(symbol)
+            if state is None or not state.native_stop_order_id:
+                continue
+            terminal = self._latest_terminal_primary_stop_event(symbol, state.native_stop_order_id)
+            if terminal is not None:
+                candidates.append((symbol, state, terminal))
+        if not candidates:
+            return
+
+        positions = await self.execution.fetch_positions(symbols)
+        position_by_symbol = {position.symbol: position for position in positions}
+        for symbol, state, terminal in candidates:
+            position = position_by_symbol.get(symbol)
+            if position is not None and position.side != Side.FLAT and abs(float(position.qty)) > 0:
+                continue
+            await self._record_primary_stop_terminal_exit(
+                terminal,
+                reason_code="local_trend_state_repaired_after_terminal_stop_flat_position",
+                brief_reason="账户1 Gate 当前已无仓位，且本地原生止损订单已有终态，本地趋势状态已按对账结果归档。",
+            )
+            self.store.insert(
+                "reconciliation_runs",
+                {
+                    "status": "local_state_repaired",
+                    "symbol": symbol,
+                    "reason": "local_trend_state_repaired_after_terminal_stop_flat_position",
+                    "terminal_stop_status": terminal.status.value,
+                    "native_stop_order_id": state.native_stop_order_id,
+                    "checked_at": datetime.now(UTC).isoformat(),
+                },
+                symbol,
+            )
+
+    def _latest_terminal_primary_stop_event(self, symbol: str, native_stop_order_id: str) -> OrderLifecycleEvent | None:
+        terminal_statuses = {
+            OrderLifecycleStatus.FILLED.value,
+            OrderLifecycleStatus.NOT_FOUND.value,
+            OrderLifecycleStatus.CANCELLED.value,
+        }
+        for row in self.store.fetch_payloads("order_lifecycle", symbol=symbol, limit=1000):
+            payload = row.get("payload") or {}
+            if str(payload.get("account_slot") or TREND_ACCOUNT_SLOT) != TREND_ACCOUNT_SLOT:
+                continue
+            if str(payload.get("order_type") or "") != "stop_loss":
+                continue
+            if str(payload.get("exchange_order_id") or "") != native_stop_order_id:
+                continue
+            if str(payload.get("status") or "") not in terminal_statuses:
+                continue
+            return OrderLifecycleEvent.model_validate(payload)
+        return None
+
+    async def _record_primary_stop_terminal_exit(
+        self,
+        event: OrderLifecycleEvent,
+        *,
+        reason_code: str,
+        brief_reason: str,
+    ) -> None:
+        symbol = str(getattr(event, "symbol", "") or "")
+        if not symbol:
+            return
+        client_order_id = str(getattr(event, "client_order_id", "") or "")
+        if client_order_id and self.store.fetch_latest_payload_by_value(
+            "follower_executions",
+            "primary_stop_client_order_id",
+            client_order_id,
+            symbol=symbol,
+            limit=500,
+        ):
             self.trend_state.clear(symbol)
-            if client_order_id:
-                self.store.insert(
-                    "follower_executions",
-                    {
-                        "status": "primary_native_stop_fill_processed",
-                        "account_slot": FOLLOWER_ACCOUNT_SLOT,
-                        "symbol": symbol,
-                        "primary_stop_client_order_id": client_order_id,
-                    },
-                    symbol,
-                )
+            return
+        side = str(getattr(event, "side", "") or "").lower()
+        action = SignalAction.EXIT_LONG if side == "sell" else SignalAction.EXIT_SHORT
+        order_payload = getattr(event, "order", None) or {}
+        price = float(order_payload.get("price") or order_payload.get("stop_price") or 0.0)
+        signal = StrategySignal(
+            symbol=symbol,
+            timeframe="1h",
+            action=action,
+            current_price=price,
+            suggested_qty=0.0,
+            signal_strength=1.0,
+            technical_evidence={
+                "strategy_allowed": "trend",
+                "reason": reason_code,
+                "primary_stop_client_order_id": client_order_id,
+                "primary_stop_exchange_order_id": getattr(event, "exchange_order_id", None),
+            },
+        )
+        ai = AiDecision(
+            symbol=symbol,
+            regime="trend",
+            direction=Side.FLAT,
+            confidence=1.0,
+            multiplier=1.0,
+            news_alignment="neutral",
+            orderflow_alignment="neutral",
+            dense_zone_position=reason_code,
+            pattern_type="stop_loss_exit",
+            trend_confirmation_score=1.0,
+            range_risk_score=0.0,
+            news_risk_score=0.0,
+            orderflow_confirmation_score=0.0,
+            dense_zone_breakout_score=0.0,
+            action_suggestion="close",
+            veto_action="allow",
+            brief_reason=brief_reason,
+            reason_codes=[reason_code, "follower_exit_mirror"],
+        )
+        await self._mirror_exit_to_followers(symbol, signal, ai, reason_code)
+        self.trend_state.clear(symbol)
+        if client_order_id:
+            self.store.insert(
+                "follower_executions",
+                {
+                    "status": f"{reason_code}_processed",
+                    "account_slot": FOLLOWER_ACCOUNT_SLOT,
+                    "symbol": symbol,
+                    "primary_stop_client_order_id": client_order_id,
+                },
+                symbol,
+            )
 
     async def _fetch_positions(self, symbols: list[str]) -> list[PositionSnapshot]:
         try:
