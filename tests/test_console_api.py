@@ -1089,6 +1089,33 @@ def test_console_account_rbac_replaces_operation_code_for_mutating_requests(tmp_
     assert ok.status_code == 200
 
 
+def test_console_readonly_accounts_cannot_query_other_account_slots(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("CONSOLE_AUTH_DISABLED", "0")
+    monkeypatch.setenv("CONSOLE_ADMIN_PASSWORD", "admin-secret")
+    monkeypatch.setenv("CONSOLE_ACCOUNT1_PASSWORD", "account-secret")
+    config_path = tmp_path / "config.yaml"
+    db_path = tmp_path / "trader.sqlite3"
+    audit_path = tmp_path / "audit.jsonl"
+    write_config(config_path, db_path, audit_path, ["ETH/USDT:USDT"])
+    store = SQLiteStore(str(db_path), str(audit_path))
+    store.insert("orders", {"account_slot": "trend", "status": "filled"}, "ETH/USDT:USDT")
+    store.insert("orders", {"account_slot": "follower", "status": "filled"}, "ETH/USDT:USDT")
+    store.close()
+    client = TestClient(create_app(str(config_path)))
+
+    login = client.post("/api/auth/login", json={"username": "account1", "password": "account-secret"})
+    assert login.status_code == 200
+
+    assert client.get("/api/account/balance?account_slot=follower").status_code == 403
+    assert client.get("/api/positions?account_slot=follower").status_code == 403
+    assert client.get("/api/order-lifecycle?account_slot=follower").status_code == 403
+    assert client.get("/api/audits/ai-position-tiers?account_slot=follower").status_code == 403
+
+    own_orders = client.get("/api/orders").json()["items"]
+    assert len(own_orders) == 1
+    assert own_orders[0]["payload"]["account_slot"] == "trend"
+
+
 def test_position_review_mode_control_is_admin_only_and_audited(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("CONSOLE_AUTH_DISABLED", "0")
     monkeypatch.setenv("CONSOLE_ADMIN_PASSWORD", "admin-secret")

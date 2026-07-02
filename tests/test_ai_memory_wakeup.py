@@ -17,6 +17,7 @@ from ai_quant_trader.core.models import (
     MacroEntity,
     MarketRegime,
     NewsDigest,
+    NewsDirection,
     NewsItem,
     SignalAction,
     Side,
@@ -245,6 +246,8 @@ async def test_major_news_review_with_strategy_signal_stays_out_of_trade_decisio
         async def fake_analyze_symbol(signal, orderflow, dense_zone, pattern, news, regime_pattern=None, **kwargs):  # noqa: ANN001, ANN003
             assert signal.action == SignalAction.HOLD
             assert signal.technical_evidence["original_strategy_action"] == "short"
+            assert news.news_direction == NewsDirection.UNKNOWN
+            assert news.crypto_sentiment == Alignment.UNKNOWN
             return AiDecision(
                 symbol=signal.symbol,
                 regime=MarketRegime.TREND,

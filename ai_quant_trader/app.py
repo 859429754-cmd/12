@@ -757,7 +757,8 @@ class TradingApp:
         event_digest = NewsDigest(
             items=[],
             macro_risk_level="high",
-            crypto_sentiment=aggregated.alignment_hint,
+            news_direction=NewsDirection.UNKNOWN,
+            crypto_sentiment=Alignment.UNKNOWN,
             summary=f"{event.title}\n{event.summary}\n{self.daily_news.context_summary(limit=30)}\n{self.news_memory.context_summary(days=2, limit=20)}",
             warnings=["major_news_risk_review_only_no_order"],
         )
@@ -1696,6 +1697,7 @@ class TradingApp:
         primary_order,
     ) -> None:
         account_slot = self._canonical_follower_slot(follower.account_slot)
+        addon_order_submitted = False
         try:
             side_value = decision.side.value if isinstance(decision.side, Side) else str(decision.side)
             positions = await self.follower_execution.fetch_positions([symbol])
@@ -1764,6 +1766,7 @@ class TradingApp:
                 },
             )
             order = await self.follower_order_lifecycle.submit_market_order(self.follower_execution, entry_request)
+            addon_order_submitted = True
             self.store.insert("orders", {**order.model_dump(mode="json"), "account_slot": account_slot, "role": "follower_position_review_addon"}, symbol)
             stop_order = await self._follower_position_stop_manager().replace_for_net_position(
                 self.follower_execution,
@@ -1788,6 +1791,13 @@ class TradingApp:
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("follower_addon_failed", extra={"symbol": symbol, "account_slot": account_slot})
+            if addon_order_submitted:
+                self._mark_follower_execution_safety_failure(
+                    symbol,
+                    account_slot=account_slot,
+                    stage="follower_addon_after_order",
+                    exc=exc,
+                )
             self._record_follower_execution(
                 status="addon_failed",
                 account_slot=account_slot,
@@ -1845,6 +1855,7 @@ class TradingApp:
         primary_order,
     ) -> None:
         account_slot = self._canonical_follower_slot(follower.account_slot)
+        entry_order_submitted = False
         try:
             positions = await self.follower_execution.fetch_positions([symbol])
             same = self._same_direction_position_from_signal(signal, positions)
@@ -1895,6 +1906,7 @@ class TradingApp:
                 metadata=self._order_risk_metadata(signal, ai, risk, role="follower", sizing_reason=sizing_reason),
             )
             order = await self.follower_order_lifecycle.submit_market_order(self.follower_execution, entry_request)
+            entry_order_submitted = True
             self.store.insert("orders", {**order.model_dump(mode="json"), "account_slot": account_slot, "role": "follower"}, symbol)
             entry_state = self._record_trend_entry_state_for_store(
                 self.follower_trend_state,
@@ -1918,6 +1930,13 @@ class TradingApp:
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("follower_entry_failed", extra={"symbol": symbol, "account_slot": account_slot})
+            if entry_order_submitted:
+                self._mark_follower_execution_safety_failure(
+                    symbol,
+                    account_slot=account_slot,
+                    stage="follower_entry_after_order",
+                    exc=exc,
+                )
             self._record_follower_execution(
                 status="entry_failed",
                 account_slot=account_slot,
@@ -1928,6 +1947,22 @@ class TradingApp:
                 reason="follower_entry_exception",
                 error_type=type(exc).__name__,
             )
+
+    def _mark_follower_execution_safety_failure(
+        self,
+        symbol: str,
+        *,
+        account_slot: str,
+        stage: str,
+        exc: Exception,
+    ) -> None:
+        if execution_mode_from_config(self.config) != "live":
+            return
+        state = self.exchange_safety.mark_failure(
+            f"{stage}_{type(exc).__name__.lower()}",
+            [symbol, account_slot, type(exc).__name__],
+        )
+        self.store.insert("exchange_health", state.model_dump(mode="json"))
 
     async def _follower_entry_qty(
         self,

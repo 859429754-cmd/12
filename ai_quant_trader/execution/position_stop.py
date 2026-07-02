@@ -49,17 +49,8 @@ class PositionStopManager:
         if qty <= 0:
             raise PositionStopError("net_position_missing_for_stop_replacement")
 
-        old_stop_ids = self.managed_stop_order_ids(symbol)
-        for order_id in old_stop_ids:
-            await self.lifecycle.cancel_order(
-                gateway,
-                symbol=symbol,
-                order_id=order_id,
-                client_order_id=f"aiq_stop_repl_cancel_{uuid.uuid4().hex[:8]}",
-                trigger=True,
-            )
-
         stop_side = "sell" if state.side == Side.LONG.value else "buy"
+        old_stop_ids = self.managed_stop_order_ids(symbol)
         request = OrderRequest(
             symbol=symbol,
             side=stop_side,
@@ -84,6 +75,46 @@ class PositionStopManager:
         )
         if order.exchange_order_id:
             self.trend_state.set_native_stop_order_id(symbol, order.exchange_order_id)
+        failed_cancellations: list[dict[str, str]] = []
+        for order_id in old_stop_ids:
+            if order.exchange_order_id and order_id == order.exchange_order_id:
+                continue
+            try:
+                await self.lifecycle.cancel_order(
+                    gateway,
+                    symbol=symbol,
+                    order_id=order_id,
+                    client_order_id=f"aiq_stop_repl_cancel_{uuid.uuid4().hex[:8]}",
+                    trigger=True,
+                )
+            except Exception as exc:  # noqa: BLE001
+                failed_cancellations.append({"order_id": order_id, "error_type": type(exc).__name__})
+                logger.warning(
+                    "legacy_native_stop_cancel_failed_after_replacement",
+                    extra={
+                        "symbol": symbol,
+                        "order_id": order_id,
+                        "new_stop_order_id": order.exchange_order_id,
+                        "account_slot": self.account_slot,
+                        "reason": reason,
+                        "error": type(exc).__name__,
+                    },
+                )
+        if failed_cancellations:
+            self.store.insert(
+                "orders",
+                {
+                    "status": "legacy_stop_cancel_failed_after_replacement",
+                    "symbol": symbol,
+                    "role": self.stop_role,
+                    "account_slot": self.account_slot,
+                    "new_stop_order_id": order.exchange_order_id,
+                    "failed_cancellations": failed_cancellations,
+                    "reason": reason,
+                },
+                symbol,
+            )
+            raise PositionStopError("legacy_stop_cancel_failed_after_replacement")
         return order
 
     async def cancel_all_managed_stops(self, gateway: Any, symbol: str, *, reason: str) -> list[str]:

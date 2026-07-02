@@ -1294,13 +1294,27 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         }
 
     @app.get("/api/orders")
-    def orders(limit: int = Query(default=50, ge=1, le=200), symbol: str | None = None) -> dict[str, Any]:
+    def orders(
+        request: Request,
+        limit: int = Query(default=50, ge=1, le=200),
+        symbol: str | None = None,
+    ) -> dict[str, Any]:
         ctx = _ctx(app)
         ctx.reload()
-        return {"items": ctx.table("orders", limit=limit, symbol=symbol)}
+        rows = ctx.table("orders", limit=limit, symbol=symbol)
+        visible_slot = _optional_request_account_slot(request, None)
+        if visible_slot:
+            rows = [
+                row
+                for row in rows
+                if _canonical_account_slot(str((row.get("payload") or {}).get("account_slot") or "trend"))
+                == visible_slot
+            ]
+        return {"items": rows}
 
     @app.get("/api/order-lifecycle")
     def order_lifecycle(
+        request: Request,
         limit: int = Query(default=50, ge=1, le=200),
         symbol: str | None = None,
         account_slot: str | None = None,
@@ -1308,16 +1322,19 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         ctx = _ctx(app)
         ctx.reload()
         rows = ctx.table("order_lifecycle", limit=limit, symbol=symbol)
-        if account_slot:
+        visible_slot = _optional_request_account_slot(request, account_slot)
+        if visible_slot:
             rows = [
                 row
                 for row in rows
-                if str((row.get("payload") or {}).get("account_slot") or "default") == account_slot
+                if _canonical_account_slot(str((row.get("payload") or {}).get("account_slot") or "trend"))
+                == visible_slot
             ]
         return {"items": rows}
 
     @app.get("/api/audits/ai-position-tiers")
     def ai_position_tier_audit(
+        request: Request,
         symbol: str = Query(default="ETH/USDT:USDT"),
         account_slot: str | None = None,
         min_sample_warning: int = Query(default=30, ge=1, le=500),
@@ -1326,11 +1343,12 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         ctx.reload()
         if symbol:
             _validate_symbols([symbol], ctx.configured_symbols(), require_any=True)
+        visible_slot = _optional_request_account_slot(request, account_slot)
         try:
             summary = run_ai_position_tier_audit(
                 Path(ctx.config.runtime.database_path),
                 symbol=symbol or None,
-                account_slot=account_slot or None,
+                account_slot=visible_slot,
                 min_sample_warning=min_sample_warning,
             )
         except Exception as exc:
@@ -1866,13 +1884,38 @@ def _canonical_account_slot(slot: str) -> str:
 
 
 def _request_account_slot(request: Request, account_slot: str | None) -> str:
-    if account_slot:
-        return _canonical_account_slot(account_slot)
+    if not _console_auth_enabled():
+        return _canonical_account_slot(account_slot) if account_slot else "trend"
     user = _console_user_from_request(request)
+    role = str((user or {}).get("role") or "")
+    user_slot_raw = (user or {}).get("account_slot")
+    user_slot = _canonical_account_slot(str(user_slot_raw)) if user_slot_raw else None
+    requested = _canonical_account_slot(account_slot) if account_slot else None
+
+    if requested:
+        if role != "admin" and user_slot and requested != user_slot:
+            raise HTTPException(status_code=403, detail="当前账号不能查看其他账户数据。")
+        if role != "admin" and not user_slot:
+            raise HTTPException(status_code=403, detail="当前账号不能查看指定账户数据。")
+        return requested
+    if user_slot:
+        return user_slot
+    return "trend"
+
+
+def _optional_request_account_slot(request: Request, account_slot: str | None) -> str | None:
+    if not _console_auth_enabled():
+        return _canonical_account_slot(account_slot) if account_slot else None
+    user = _console_user_from_request(request)
+    role = str((user or {}).get("role") or "")
+    if account_slot:
+        return _request_account_slot(request, account_slot)
+    if role == "admin":
+        return None
     user_slot = (user or {}).get("account_slot")
     if user_slot:
         return _canonical_account_slot(str(user_slot))
-    return "trend"
+    return None
 
 
 def _account_slot_configured(slot: str) -> bool:

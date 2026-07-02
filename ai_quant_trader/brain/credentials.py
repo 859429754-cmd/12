@@ -52,9 +52,6 @@ class DeepSeekCredentialRouter:
         for label in ["primary", "backup"]:
             if label in available and label not in ordered and not self._is_disabled(state, label):
                 ordered.append(label)
-        for label in ["primary", "backup"]:
-            if label in available and label not in ordered:
-                ordered.append(label)
         return [(label, available[label]) for label in ordered]
 
     def record_success(self, label: str) -> None:

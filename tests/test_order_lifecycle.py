@@ -11,7 +11,9 @@ from ai_quant_trader.execution.lifecycle import (
     OrderRejected,
     OrderSubmissionUncertain,
 )
+from ai_quant_trader.execution.position_stop import PositionStopError, PositionStopManager
 from ai_quant_trader.storage.sqlite import SQLiteStore
+from ai_quant_trader.strategy.trend_state import TrendStateStore
 
 
 class RecordingGateway:
@@ -31,9 +33,11 @@ class RecordingGateway:
         self.fail_cancel = fail_cancel
         self.submits = 0
         self.fetch_order_calls = 0
+        self.operations: list[str] = []
 
     async def create_market_order(self, request: OrderRequest) -> OrderResult:
         self.submits += 1
+        self.operations.append(f"submit:{request.client_order_id}")
         if self.fail:
             raise TimeoutError("submit_timeout")
         return OrderResult(
@@ -57,6 +61,7 @@ class RecordingGateway:
         return self.recovered
 
     async def cancel_order(self, symbol: str, order_id: str, *, trigger: bool = False) -> bool:
+        self.operations.append(f"cancel:{order_id}")
         if self.fail_cancel:
             raise TimeoutError("cancel_timeout")
         return True
@@ -92,6 +97,46 @@ async def test_order_lifecycle_records_intent_before_submission(tmp_path: Path) 
     assert order.exchange_order_id == "ex_1"
     assert [event["payload"]["status"] for event in events] == ["intent_recorded", "submitting", "filled"]
     assert events[0]["payload"]["client_order_id"] == "client_1"
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_position_stop_replacement_submits_new_stop_before_cancelling_legacy_stop(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    lifecycle = OrderLifecycleManager(store)
+    trend_state = TrendStateStore(str(tmp_path / "state_trend.json"))
+    state = trend_state.record_entry(
+        "ETH/USDT:USDT",
+        Side.LONG,
+        entry_price=2000.0,
+        atr_value=10.0,
+        atr_stop_multiple=1.5,
+        native_stop_order_id="old_stop_1",
+    )
+    manager = PositionStopManager(
+        store,
+        lifecycle,
+        trend_state,
+        account_slot="trend",
+        stop_role="native_stop",
+    )
+    gateway = RecordingGateway(fail_cancel=True)
+
+    with pytest.raises(PositionStopError, match="legacy_stop_cancel_failed_after_replacement"):
+        await manager.replace_for_net_position(
+            gateway,
+            symbol="ETH/USDT:USDT",
+            state=state,
+            reason="pytest_net_stop_replace",
+        )
+
+    assert gateway.operations[0].startswith("submit:aiq_net_stop_")
+    assert "cancel:old_stop_1" in gateway.operations
+    updated = trend_state.get("ETH/USDT:USDT")
+    assert updated is not None
+    assert updated.native_stop_order_id == "ex_1"
+    latest_order = store.fetch_payloads("orders", limit=1, symbol="ETH/USDT:USDT")[0]["payload"]
+    assert latest_order["status"] == "legacy_stop_cancel_failed_after_replacement"
     store.close()
 
 

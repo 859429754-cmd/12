@@ -119,6 +119,7 @@ export function App() {
   const [orders, setOrders] = useState<Array<DbRow>>([]);
   const [orderLifecycle, setOrderLifecycle] = useState<Array<DbRow>>([]);
   const [positions, setPositions] = useState<Array<DbRow>>([]);
+  const [positionsMeta, setPositionsMeta] = useState<Record<string, unknown> | null>(null);
   const [decisions, setDecisions] = useState<Array<DbRow>>([]);
   const [riskSummary, setRiskSummary] = useState<Record<string, unknown> | null>(null);
   const [readiness, setReadiness] = useState<SystemReadiness | null>(null);
@@ -220,15 +221,9 @@ export function App() {
       )
         .then((payload) => {
           setBalance(payload);
-          if (primaryAccountSlot === "follower") {
-            setFollowerBalance(payload);
-          }
         })
         .catch(() => {
           setBalance((current) => balanceFallbackPayload(current, primaryAccountSlot, "余额刷新超时，控制台保留上一轮可信快照。"));
-          if (primaryAccountSlot === "follower") {
-            setFollowerBalance((current) => balanceFallbackPayload(current, "follower", "账号2余额刷新超时，控制台保留上一轮可信快照。"));
-          }
         });
       if (primaryAccountSlot !== "follower" && (activeSession?.user?.visible_account_slots || visibleSlots).includes("follower")) {
         void api<Record<string, unknown>>(
@@ -280,7 +275,16 @@ export function App() {
       setPlatform(nextPlatform);
       setReadiness(nextReadiness);
       setMarkets(nextMarkets);
-      setPositions(nextPositions.items || []);
+      setPositionsMeta({
+        ok: nextPositions.ok,
+        account_slot: nextPositions.account_slot,
+        source: nextPositions.source,
+        cached: nextPositions.cached,
+        stale: nextPositions.stale,
+        error_type: nextPositions.error_type,
+        message: nextPositions.message,
+      });
+      setPositions((current) => (nextPositions.ok === false && !(nextPositions.items || []).length ? current : nextPositions.items || []));
       setRiskSummary(nextRiskSummary);
       setAccountSlots(nextAccountSlots.items || []);
       setOrders(nextOrders.items || []);
@@ -420,26 +424,28 @@ export function App() {
           setTimeframe={setTimeframe}
           source={source}
           setSource={setSource}
-        candles={displayCandles}
-        ticker={ticker}
-        warning={warning}
-        runtimeStatus={status}
-        balance={balance}
-        followerBalance={followerBalance}
-        markets={markets}
-        news={news}
-        positions={positions}
-        orders={orders}
-        orderLifecycle={orderLifecycle}
-        aiTierAudit={aiTierAudit}
-        accountSlots={accountSlots}
-        denseZone={denseZone}
-        riskSummary={riskSummary}
-        readiness={readiness}
-        visibleSlots={visibleSlots}
-        isAdmin={isAdmin}
-        busy={busy}
-        postAction={postAction}
+          candles={displayCandles}
+          ticker={ticker}
+          warning={warning}
+          runtimeStatus={status}
+          balance={balance}
+          followerBalance={followerBalance}
+          markets={markets}
+          news={news}
+          positions={positions}
+          positionsMeta={positionsMeta}
+          orders={orders}
+          orderLifecycle={orderLifecycle}
+          aiTierAudit={aiTierAudit}
+          accountSlots={accountSlots}
+          denseZone={denseZone}
+          riskSummary={riskSummary}
+          readiness={readiness}
+          visibleSlots={visibleSlots}
+          activeAccountSlot={session?.user?.account_slot || "trend"}
+          isAdmin={isAdmin}
+          busy={busy}
+          postAction={postAction}
           decisions={decisions}
           platform={platform}
       />
@@ -998,6 +1004,7 @@ function WorkspaceBody({
   markets,
   news,
   positions,
+  positionsMeta,
   orders,
   orderLifecycle,
   aiTierAudit,
@@ -1006,6 +1013,7 @@ function WorkspaceBody({
   riskSummary,
   readiness,
   visibleSlots,
+  activeAccountSlot,
   isAdmin,
   busy,
   postAction,
@@ -1029,6 +1037,7 @@ function WorkspaceBody({
   markets: MarketSymbolsResponse;
   news: NewsResponse;
   positions: Array<DbRow>;
+  positionsMeta: Record<string, unknown> | null;
   orders: Array<DbRow>;
   orderLifecycle: Array<DbRow>;
   aiTierAudit: AiPositionTierAudit | null;
@@ -1037,6 +1046,7 @@ function WorkspaceBody({
   riskSummary: Record<string, unknown> | null;
   readiness: SystemReadiness | null;
   visibleSlots: Array<"trend" | "follower" | "range">;
+  activeAccountSlot: "trend" | "follower" | "range" | null;
   isAdmin: boolean;
   busy: boolean;
   postAction: (path: string, body: Record<string, unknown>) => Promise<void>;
@@ -1066,6 +1076,7 @@ function WorkspaceBody({
         runtimeStatus={runtimeStatus}
         balance={balance}
         positions={positions}
+        positionsMeta={positionsMeta}
         orders={orders}
         orderLifecycle={orderLifecycle}
         aiTierAudit={aiTierAudit}
@@ -1096,9 +1107,11 @@ function WorkspaceBody({
         balance={balance}
         followerBalance={followerBalance}
         positions={positions}
+        positionsMeta={positionsMeta}
         orders={orders}
         accountSlots={accountSlots}
         visibleSlots={visibleSlots}
+        activeAccountSlot={activeAccountSlot}
         riskSummary={riskSummary}
         isAdmin={isAdmin}
         busy={busy}
@@ -1692,6 +1705,7 @@ function DashboardWorkspace({
   runtimeStatus,
   balance,
   positions,
+  positionsMeta,
   orders,
   orderLifecycle,
   aiTierAudit,
@@ -1710,6 +1724,7 @@ function DashboardWorkspace({
   runtimeStatus: StatusResponse | null;
   balance: Record<string, unknown> | null;
   positions: Array<DbRow>;
+  positionsMeta: Record<string, unknown> | null;
   orders: Array<DbRow>;
   orderLifecycle: Array<DbRow>;
   aiTierAudit: AiPositionTierAudit | null;
@@ -1749,6 +1764,7 @@ function DashboardWorkspace({
   const realtimePrice = numberValue(ticker?.last, ticker?.mark);
   const latestPrice = realtimePrice != null ? num(realtimePrice) : latestCandle ? num(latestCandle.close) : "--";
   const latestPriceLabel = realtimePrice != null ? "实时价" : "K线收盘";
+  const positionsReadFailed = positionsMeta?.ok === false;
   return (
     <section className="min-h-0 space-y-3 overflow-auto sm:space-y-4 sm:pr-1">
       <div className="rounded-2xl border border-[#263246] bg-[#0b1220] p-3 shadow-[0_18px_44px_rgba(0,0,0,0.30)] sm:p-4">
@@ -1780,7 +1796,7 @@ function DashboardWorkspace({
         </div>
 
         <div className="mt-4 grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-3 2xl:grid-cols-6">
-          <HeroMetric label="持仓状态" value={position ? positionSideLabel(position.side) : "空仓"} tone={position ? "warn" : "good"} />
+          <HeroMetric label="持仓状态" value={position ? positionSideLabel(position.side) : positionsReadFailed ? "读取失败" : "空仓"} tone={position ? "warn" : positionsReadFailed ? "bad" : "good"} />
           <HeroMetric label="浮动盈亏" value={position ? `${num(position.pnl)} USDT` : "--"} tone={pnlTone(position?.pnl)} />
           <HeroMetric label="AI动作" value={dashboardActionLabel(latestDecision)} />
           <HeroMetric label="仓位档" value={`${currentSizing.label} / ${currentSizing.scale}`} tone={position ? "good" : "default"} />
@@ -1808,15 +1824,20 @@ function DashboardWorkspace({
                 <PlainKV label="余额来源" value={account.sourceLabel} />
               </div>
             </div>
+            {positionsReadFailed ? (
+              <div className="mt-3 rounded-xl border border-[#7f1d1d] bg-[#2a0f14] p-3 text-xs leading-5 text-[#fb7185]">
+                {String(positionsMeta?.message || "Gate.io 持仓读取失败，当前页面保留上一轮可信持仓快照；不要把空仓显示当成交易所真实状态。")}
+              </div>
+            ) : null}
             <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-[#263246] bg-[#101a2d] p-3">
               <div>
                 <div className="text-[11px] text-[#94a3b8]">标的 / 方向</div>
                 <div className="mt-1 text-xl font-semibold text-[#e5eefb]">
-                  {position ? `${shortSymbol(symbol)} ${positionSideLabel(position.side)}` : `${shortSymbol(symbol)} 空仓`}
+                  {position ? `${shortSymbol(symbol)} ${positionSideLabel(position.side)}` : positionsReadFailed ? `${shortSymbol(symbol)} 持仓读取失败` : `${shortSymbol(symbol)} 空仓`}
                 </div>
               </div>
-              <span className={`rounded-full px-3 py-1 text-[11px] font-medium ${position ? "bg-[#241806] text-[#facc15]" : "bg-[#052e1a] text-[#22c55e]"}`}>
-                {position ? "持仓中" : "无敞口"}
+              <span className={`rounded-full px-3 py-1 text-[11px] font-medium ${position ? "bg-[#241806] text-[#facc15]" : positionsReadFailed ? "bg-[#2a0f14] text-[#fb7185]" : "bg-[#052e1a] text-[#22c55e]"}`}>
+                {position ? "持仓中" : positionsReadFailed ? "读取失败" : "无敞口"}
               </span>
             </div>
             <div className="mt-3 grid grid-cols-2 gap-2">
@@ -3905,10 +3926,12 @@ function ExecutionWorkspace({
   balance,
   followerBalance,
   positions,
+  positionsMeta,
   orders,
   accountSlots,
   riskSummary,
   visibleSlots,
+  activeAccountSlot,
   isAdmin,
   busy,
   postAction,
@@ -3919,10 +3942,12 @@ function ExecutionWorkspace({
   balance: Record<string, unknown> | null;
   followerBalance: Record<string, unknown> | null;
   positions: Array<DbRow>;
+  positionsMeta: Record<string, unknown> | null;
   orders: Array<DbRow>;
   accountSlots: ExecutionAccountSlot[];
   riskSummary: Record<string, unknown> | null;
   visibleSlots: Array<"trend" | "follower" | "range">;
+  activeAccountSlot: "trend" | "follower" | "range" | null;
   isAdmin: boolean;
   busy: boolean;
   postAction: (path: string, body: Record<string, unknown>) => Promise<void>;
@@ -3940,6 +3965,9 @@ function ExecutionWorkspace({
   const trendChannel = channels.find((item) => item.channel === "trend");
   const followerChannel = channels.find((item) => item.channel === "follower");
   const rangeChannel = channels.find((item) => item.channel === "range");
+  const activeAccountLabel = activeAccountSlot === "follower" ? "账号2权益" : activeAccountSlot === "range" ? "震荡账户权益" : "账号1权益";
+  const showFollowerEquity = activeAccountSlot !== "follower" && visibleSlots.includes("follower");
+  const positionsReadFailed = positionsMeta?.ok === false;
   return (
     <section className="min-h-0 space-y-4 overflow-auto sm:space-y-5 sm:pr-1">
       <Surface title={<><ShieldCheck size={13} /> 实盘安全链路</>}>
@@ -3952,8 +3980,8 @@ function ExecutionWorkspace({
           <Metric label="交易模式" value={status?.trade_mode || platform?.platform.trade_mode || "--"} />
           <Metric label="开仓状态" value={status?.opening_paused ? "已暂停" : "允许"} tone={status?.opening_paused ? "warn" : "good"} />
           <Metric label="授权标的" value={`${enabled.length}`} />
-          <Metric label="账号1权益" value={totalEquity == null ? "--" : money(totalEquity)} />
-          <Metric label="账号2权益" value={followerBalance?.ok === false && followerEquity == null ? "未配置" : followerEquity == null ? "--" : money(followerEquity)} tone={followerBalance?.ok === false ? "warn" : undefined} />
+          <Metric label={activeAccountLabel} value={totalEquity == null ? "--" : money(totalEquity)} tone={balance?.ok === false ? "warn" : undefined} />
+          {showFollowerEquity ? <Metric label="账号2权益" value={followerBalance?.ok === false && followerEquity == null ? "未配置" : followerEquity == null ? "--" : money(followerEquity)} tone={followerBalance?.ok === false ? "warn" : undefined} /> : null}
           <Metric label="最大名义" value={money(maxNotional)} />
         </div>
         <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
@@ -4073,6 +4101,11 @@ function ExecutionWorkspace({
       <div className="grid grid-cols-1 gap-5 2xl:grid-cols-[minmax(0,1fr)_460px]">
         <Surface title={<><Wallet size={13} /> 持仓快照</>}>
           <div className="max-h-[440px] overflow-auto">
+            {positionsReadFailed ? (
+              <div className="mb-3 rounded-xl border border-[#7f1d1d] bg-[#2a0f14] p-3 text-xs text-[#fb7185]">
+                {String(positionsMeta?.message || "持仓读取失败，当前列表可能是缓存快照。")}
+              </div>
+            ) : null}
             {positions.length ? (
               <table className="min-w-[720px] w-full text-left text-xs">
                 <thead className="sticky top-0 bg-[#101a2d] text-[#94a3b8]">

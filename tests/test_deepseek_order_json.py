@@ -136,6 +136,35 @@ async def test_deepseek_transient_failure_uses_backup_once_but_keeps_primary(mon
     assert seen_keys == [primary_key, backup_key, primary_key]
 
 
+@pytest.mark.asyncio
+async def test_deepseek_rate_limited_primary_is_not_retried_after_backup_failure(monkeypatch) -> None:
+    primary_key = "primary-" + "test-key"
+    backup_key = "backup-" + "test-key"
+    brain = DeepSeekBrain(api_key=primary_key, model="deepseek-v4-flash")
+    brain.backup_api_key = backup_key
+    seen_keys: list[str] = []
+
+    def rate_limit_error() -> requests.HTTPError:
+        response = requests.Response()
+        response.status_code = 429
+        error = requests.HTTPError("rate limited")
+        error.response = response
+        return error
+
+    def fake_chat_json_sync(payload, timeout_seconds: int, api_key: str):  # noqa: ANN001
+        seen_keys.append(api_key)
+        if api_key == primary_key:
+            raise rate_limit_error()
+        raise requests.Timeout("backup timeout")
+
+    monkeypatch.setattr(brain, "_chat_json_sync", fake_chat_json_sync)
+
+    with pytest.raises(requests.Timeout):
+        await brain._chat_json({"messages": ["first"]}, timeout_seconds=1, retries=1)
+
+    assert seen_keys == [primary_key, backup_key]
+
+
 def test_deepseek_request_messages_keep_stable_contract_before_dynamic_context() -> None:
     brain = DeepSeekBrain(api_key="test-key", model="deepseek-v4-flash")
     messages = brain._request_messages({"technical_signal": {"action": "long", "current_price": 1234.56}})

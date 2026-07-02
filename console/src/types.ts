@@ -207,7 +207,16 @@ export type MarketTickerResponse = {
   timestamp?: string;
   warning?: string;
 };
-export type ApiList<T = Record<string, unknown>> = { items: Array<DbRow<T>> };
+export type ApiList<T = Record<string, unknown>> = {
+  ok?: boolean;
+  items: Array<DbRow<T>>;
+  account_slot?: string | null;
+  source?: string;
+  cached?: boolean;
+  stale?: boolean;
+  error_type?: string;
+  message?: string;
+};
 export type NewsResponse = ApiList & {
   ok?: boolean;
   source?: string;
