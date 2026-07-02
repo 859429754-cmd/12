@@ -3929,7 +3929,7 @@ function ExecutionWorkspace({
 }) {
   const usdt = balance?.USDT && typeof balance.USDT === "object" ? (balance.USDT as Record<string, unknown>) : {};
   const followerUsdt = followerBalance?.USDT && typeof followerBalance.USDT === "object" ? (followerBalance.USDT as Record<string, unknown>) : {};
-  const executionMode = status?.execution_mode || platform?.platform.execution_mode || "mock";
+  const executionMode = status?.execution_mode || platform?.platform.execution_mode || "unknown";
   const enabled = status?.enabled_symbols || [];
   const riskCap = Number(riskSummary?.max_total_leverage ?? status?.risk?.max_total_leverage ?? 4);
   const totalEquity = numberValue(balance?.total_usdt, balance?.usdt_total, usdt.total);
@@ -3944,7 +3944,11 @@ function ExecutionWorkspace({
     <section className="min-h-0 space-y-4 overflow-auto sm:space-y-5 sm:pr-1">
       <Surface title={<><ShieldCheck size={13} /> 实盘安全链路</>}>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 2xl:grid-cols-6">
-          <Metric label="执行模式" value={executionMode === "live" ? "真实网关" : "模拟网关"} tone={executionMode === "live" ? "warn" : "good"} />
+          <Metric
+            label="执行模式"
+            value={executionMode === "live" ? "真实网关" : executionMode === "mock" ? "模拟网关" : "读取中"}
+            tone={executionMode === "live" ? "warn" : executionMode === "mock" ? "good" : "warn"}
+          />
           <Metric label="交易模式" value={status?.trade_mode || platform?.platform.trade_mode || "--"} />
           <Metric label="开仓状态" value={status?.opening_paused ? "已暂停" : "允许"} tone={status?.opening_paused ? "warn" : "good"} />
           <Metric label="授权标的" value={`${enabled.length}`} />
@@ -3957,7 +3961,12 @@ function ExecutionWorkspace({
           <ExecutionStep title="策略信号" body="必须来自本地策略引擎，AI 不能凭空开仓。" done />
           <ExecutionStep title="AI 五档" body="只允许确认、降仓、阻断，不允许突破硬风控。" done />
           <ExecutionStep title="本地风控" body="授权、同向持仓、杠杆上限、置信度统一裁剪。" done />
-          <ExecutionStep title="交易网关" body={executionMode === "live" ? "Gate.io 真实网关" : "本地 Mock 网关"} done={executionMode === "mock"} warn={executionMode === "live"} />
+          <ExecutionStep
+            title="交易网关"
+            body={executionMode === "live" ? "Gate.io 真实网关" : executionMode === "mock" ? "本地 Mock 网关" : "等待后端运行状态"}
+            done={executionMode === "mock"}
+            warn={executionMode === "live" || executionMode === "unknown"}
+          />
         </div>
       </Surface>
 
@@ -4143,22 +4152,23 @@ function RuntimeModePanel({
 }) {
   const isLive = executionMode === "live";
   const isMock = executionMode === "mock";
+  const isUnknown = !isLive && !isMock;
   return (
     <Surface title={<><Power size={13} /> 模拟 / 实盘模式</>}>
       <div className="grid grid-cols-2 gap-2">
         <button
           className={`${button} justify-center ${isMock ? "border-[#22c55e] bg-[#052e1a] text-[#86efac]" : ""}`}
-          disabled={busy || isMock}
+          disabled={busy || !isAdmin || isMock || isUnknown}
           onClick={() => postAction("/api/control/runtime-mode", { operator_id: "console", dry_run: true })}
         >
-          {isMock ? "当前模拟" : "切回模拟"}
+          {isMock ? "当前模拟" : isUnknown ? "等待状态" : "切回模拟"}
         </button>
         <button
           className={`${button} justify-center ${isLive ? "border-[#facc15] bg-[#241806] text-[#facc15]" : ""}`}
-          disabled={busy || !isAdmin || isLive}
+          disabled={busy || !isAdmin || isLive || isUnknown}
           onClick={() => postAction("/api/control/runtime-mode", { operator_id: "console", dry_run: false })}
         >
-          {isLive ? "当前实盘" : "开启实盘"}
+          {isLive ? "当前实盘" : isUnknown ? "等待状态" : "开启实盘"}
         </button>
       </div>
       <div className="mt-2 text-[11px] leading-5 text-[#94a3b8]">
@@ -4173,8 +4183,8 @@ function RuntimeModePanel({
         <div className={`rounded-lg border px-2 py-1.5 ${isAdmin ? "border-[#14532d] bg-[#052e1a] text-[#86efac]" : "border-[#854d0e] bg-[#241806] text-[#facc15]"}`}>
           当前权限：{isAdmin ? "管理员" : "只读账户"}
         </div>
-        <div className={`rounded-lg border px-2 py-1.5 ${isLive ? "border-[#854d0e] bg-[#241806] text-[#facc15]" : "border-[#14532d] bg-[#052e1a] text-[#86efac]"}`}>
-          当前模式：{isLive ? "实盘" : "模拟"}
+        <div className={`rounded-lg border px-2 py-1.5 ${isLive || isUnknown ? "border-[#854d0e] bg-[#241806] text-[#facc15]" : "border-[#14532d] bg-[#052e1a] text-[#86efac]"}`}>
+          当前模式：{isLive ? "实盘" : isMock ? "模拟" : "读取中"}
         </div>
       </div>
     </Surface>

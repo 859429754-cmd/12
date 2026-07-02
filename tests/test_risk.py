@@ -562,7 +562,7 @@ def test_calibrated_v21_profit_loss_policy_separates_expansion_and_loss_risk() -
     assert noisy.tier in {"block", "weak", "normal"}
 
 
-def test_news_direction_score_cannot_override_conflict_hard_block() -> None:
+def test_high_impact_news_conflict_remains_hard_block() -> None:
     state = RuntimeState(opening_paused=False, enabled_symbols={"ETH/USDT:USDT"})
     manager = RiskManager(RiskConfig(max_total_leverage=4), state)
 
@@ -571,6 +571,8 @@ def test_news_direction_score_cannot_override_conflict_hard_block() -> None:
         _ai(
             news_alignment=Alignment.CONFLICT,
             news_direction_alignment_score=1.0,
+            crypto_market_impact_score=0.85,
+            symbol_news_impact_score=0.80,
             confidence=0.95,
             trend_confirmation_score=0.95,
             range_risk_score=0.05,
@@ -603,15 +605,61 @@ def test_major_news_without_strategy_signal_blocks_explicitly() -> None:
     assert decision.reason == "major_news_without_strategy_signal"
 
 
-def test_major_news_direction_conflict_is_hard_block() -> None:
+def test_major_news_direction_conflict_with_direct_crypto_impact_is_hard_block() -> None:
     state = RuntimeState(opening_paused=False, enabled_symbols={"ETH/USDT:USDT"})
     manager = RiskManager(RiskConfig(max_total_leverage=4), state)
     signal = _signal().model_copy(update={"technical_evidence": {"major_news_context": True}})
 
-    decision = manager.evaluate(signal, _ai(news_alignment=Alignment.CONFLICT), 1000, [])
+    decision = manager.evaluate(
+        signal,
+        _ai(
+            news_alignment=Alignment.CONFLICT,
+            crypto_market_impact_score=0.70,
+            symbol_news_impact_score=0.65,
+        ),
+        1000,
+        [],
+    )
 
     assert not decision.allowed
     assert decision.reason == "major_news_direction_conflict"
+
+
+def test_major_news_conflict_with_low_crypto_impact_caps_weak_instead_of_blocking() -> None:
+    state = RuntimeState(opening_paused=False, enabled_symbols={"ETH/USDT:USDT"})
+    manager = RiskManager(RiskConfig(max_total_leverage=4), state)
+    signal = _signal().model_copy(
+        update={
+            "signal_strength": 1.0,
+            "technical_evidence": {"major_news_context": True, "volume_multiple": 4.4, "breakout_atr": 1.3},
+        }
+    )
+
+    decision = manager.evaluate(
+        signal,
+        _ai(
+            news_alignment=Alignment.CONFLICT,
+            veto_action=VetoAction.REDUCE,
+            confidence=0.65,
+            trend_confirmation_score=0.80,
+            range_risk_score=0.07,
+            news_risk_score=0.90,
+            crypto_market_impact_score=0.0,
+            btc_leader_impact_score=0.0,
+            symbol_news_impact_score=0.0,
+            orderflow_alignment=Alignment.ALIGNED,
+            orderflow_confirmation_score=0.80,
+            dense_zone_breakout_score=0.75,
+            pattern_confirmation_score=0.50,
+        ),
+        386.94,
+        [],
+    )
+
+    assert decision.allowed
+    assert decision.position_tier == "weak"
+    assert decision.reason == "weak_size_by_partial_consensus"
+    assert "news_conflict_low_direct_impact_caps_weak" in decision.warnings
 
 
 def test_major_news_unknown_direction_caps_position_at_normal() -> None:

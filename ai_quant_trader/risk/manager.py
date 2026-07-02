@@ -99,7 +99,7 @@ class RiskManager:
             return self._blocked(signal, max_total_notional, remaining, "ai_veto_block")
         if ai.confidence < self.config.min_confidence_to_trade:
             return self._blocked(signal, max_total_notional, remaining, "ai_confidence_too_low")
-        if ai.news_alignment == Alignment.CONFLICT:
+        if ai.news_alignment == Alignment.CONFLICT and self._news_conflict_requires_hard_block(ai):
             reason = "major_news_direction_conflict" if major_news_context else "news_major_conflict"
             return self._blocked(signal, max_total_notional, remaining, reason)
         if ai.orderflow_alignment == Alignment.CONFLICT:
@@ -247,6 +247,26 @@ class RiskManager:
             or float(evidence.get("major_news_event_count") or 0) > 0
         )
 
+    def _news_conflict_requires_hard_block(self, ai: AiDecision) -> bool:
+        """Return True only when conflict news is directly relevant enough to veto.
+
+        Broad macro or geopolitical headlines can increase volatility without
+        being directionally decisive for crypto or ETH. If DeepSeek marks the
+        news as conflict but also scores crypto/BTC/ETH direct impact as low,
+        the safer production behavior is to cap size to weak instead of silently
+        missing a strong local strategy signal. Explicit `veto_action=block`
+        is handled earlier and remains a hard veto.
+        """
+
+        direct_impact = max(
+            ai.crypto_market_impact_score,
+            ai.btc_leader_impact_score,
+            ai.symbol_news_impact_score,
+        )
+        if direct_impact >= 0.55:
+            return True
+        return ai.news_risk_score >= 0.95 and direct_impact >= 0.35
+
     def _decision_score(self, signal: StrategySignal, ai: AiDecision) -> tuple[float, PositionTier, dict[str, float], list[str]]:
         technical = min(max(signal.signal_strength, 0.0), 1.0)
         trend = min(max(ai.trend_confirmation_score, 0.0), 1.0)
@@ -338,7 +358,10 @@ class RiskManager:
         elif ai.range_risk_score >= 0.55:
             tier = self._min_tier(tier, "normal")
             warnings.append("range_risk_elevated_caps_normal")
-        if ai.news_risk_score >= 0.85 and ai.news_alignment == Alignment.ALIGNED:
+        if ai.news_alignment == Alignment.CONFLICT and not self._news_conflict_requires_hard_block(ai):
+            tier = self._min_tier(tier, "weak")
+            warnings.append("news_conflict_low_direct_impact_caps_weak")
+        elif ai.news_risk_score >= 0.85 and ai.news_alignment == Alignment.ALIGNED:
             tier = self._min_tier(tier, "weak")
             warnings.append("aligned_major_news_extreme_risk_caps_weak")
         elif ai.news_risk_score >= 0.85:
@@ -566,7 +589,10 @@ class RiskManager:
             tier = self._min_tier(tier, "normal")
             warn_once("range_risk_elevated_caps_normal")
 
-        if ai.news_risk_score >= 0.85 and ai.news_alignment == Alignment.ALIGNED:
+        if ai.news_alignment == Alignment.CONFLICT and not self._news_conflict_requires_hard_block(ai):
+            tier = self._min_tier(tier, "weak")
+            warn_once("news_conflict_low_direct_impact_caps_weak")
+        elif ai.news_risk_score >= 0.85 and ai.news_alignment == Alignment.ALIGNED:
             tier = self._min_tier(tier, "weak")
             warn_once("aligned_major_news_extreme_risk_caps_weak")
         elif ai.news_risk_score >= 0.85:
