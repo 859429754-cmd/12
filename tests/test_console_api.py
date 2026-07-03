@@ -1575,6 +1575,76 @@ def test_readiness_warns_when_news_cache_exceeds_soft_window(tmp_path: Path) -> 
     assert any(alert["event"] == "news_stale" for alert in body["runtime_alerts"])
 
 
+def test_live_readiness_blocks_unresolved_order_lifecycle_even_after_newer_ok_event(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    db_path = tmp_path / "trader.sqlite3"
+    audit_path = tmp_path / "audit.jsonl"
+    write_config(config_path, db_path, audit_path, ["ETH/USDT:USDT"])
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace("  dry_run: true", "  dry_run: false\n  execution_mode: live"),
+        encoding="utf-8",
+    )
+    store = SQLiteStore(str(db_path), str(audit_path))
+    store.insert(
+        "order_lifecycle",
+        {
+            "client_order_id": "unknown_entry_1",
+            "symbol": "ETH/USDT:USDT",
+            "status": "unknown",
+            "order_type": "market",
+            "account_slot": "trend",
+            "reason": "exchange_submit_exception_state_unknown",
+        },
+        "ETH/USDT:USDT",
+    )
+    store.insert(
+        "order_lifecycle",
+        {
+            "client_order_id": "healthy_order_2",
+            "symbol": "ETH/USDT:USDT",
+            "status": "filled",
+            "order_type": "market",
+            "account_slot": "trend",
+            "reason": "later_normal_event",
+        },
+        "ETH/USDT:USDT",
+    )
+
+    body = TestClient(create_app(str(config_path))).get("/api/system/readiness").json()
+    order_check = next(item for item in body["checks"] if item["id"] == "order_lifecycle")
+
+    assert order_check["status"] == "block"
+    assert body["unresolved_order_lifecycle"][0]["client_order_id"] == "unknown_entry_1"
+    assert any(alert["event"] == "order_lifecycle_problem" for alert in body["runtime_alerts"])
+
+
+def test_order_lifecycle_issue_is_resolved_by_newer_same_client_terminal_event(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    db_path = tmp_path / "trader.sqlite3"
+    audit_path = tmp_path / "audit.jsonl"
+    write_config(config_path, db_path, audit_path, ["ETH/USDT:USDT"])
+    store = SQLiteStore(str(db_path), str(audit_path))
+    for status in ["unknown", "filled"]:
+        store.insert(
+            "order_lifecycle",
+            {
+                "client_order_id": "recoverable_order_1",
+                "symbol": "ETH/USDT:USDT",
+                "status": status,
+                "order_type": "market",
+                "account_slot": "trend",
+                "reason": f"pytest_{status}",
+            },
+            "ETH/USDT:USDT",
+        )
+
+    body = TestClient(create_app(str(config_path))).get("/api/system/readiness").json()
+    order_check = next(item for item in body["checks"] if item["id"] == "order_lifecycle")
+
+    assert order_check["status"] == "ok"
+    assert body["unresolved_order_lifecycle"] == []
+
+
 def test_live_readiness_blocks_when_news_cache_exceeds_hard_window(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
     db_path = tmp_path / "trader.sqlite3"

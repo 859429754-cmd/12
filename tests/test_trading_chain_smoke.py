@@ -19,8 +19,10 @@ from ai_quant_trader.core.models import (
     StrategySignal,
     VetoAction,
     OrderRequest,
+    OrderResult,
     OrderLifecycleEvent,
     OrderLifecycleStatus,
+    RiskDecision,
 )
 from ai_quant_trader.execution.gateway.mock import MockExchangeGateway
 from ai_quant_trader.strategy.trend_state import TrendStateStore
@@ -695,6 +697,156 @@ followers:
         follower_rows = app.store.fetch_payloads("follower_executions", symbol="ETH/USDT:USDT", limit=5)
         assert any(row["payload"].get("status") == "exit_mirrored" for row in follower_rows)
         assert any(row["payload"].get("reason") == "software_fixed_atr_stop" for row in follower_rows)
+    finally:
+        await app.close()
+
+
+@pytest.mark.asyncio
+async def test_live_follower_entry_failure_marks_exchange_safety_failed(tmp_path: Path) -> None:
+    class FailingFollowerGateway:
+        mode = "live"
+        account_slot = "follower"
+
+        async def fetch_positions(self, symbols):  # noqa: ANN001
+            raise RuntimeError("follower_positions_down")
+
+        async def close(self):
+            return None
+
+    config_path = tmp_path / "config.yaml"
+    db_path = tmp_path / "trader.sqlite3"
+    audit_path = tmp_path / "audit.jsonl"
+    _write_config(config_path, db_path, audit_path)
+    with config_path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            """
+followers:
+  - enabled: true
+    account_slot: "follower"
+    label: "账号2：趋势跟随账户"
+    follow_ratio: 1.0
+    max_leverage: 4.0
+    mirror_entries: true
+    mirror_exits: true
+"""
+        )
+
+    app = TradingApp(str(config_path))
+    app.config.runtime.execution_mode = "live"
+    app.config.runtime.dry_run = False
+    app.follower_execution = FailingFollowerGateway()
+    app.exchange_safety.mark_success("pytest_reconciliation_ok")
+    signal = StrategySignal(symbol="ETH/USDT:USDT", timeframe="1h", action=SignalAction.LONG, current_price=2000.0, suggested_qty=0.02)
+    ai = AiDecision(symbol="ETH/USDT:USDT", regime=MarketRegime.TREND, direction=Side.LONG, confidence=0.7, multiplier=1.0, veto_action=VetoAction.ALLOW)
+    risk = RiskDecision(allowed=True, action=SignalAction.LONG, symbol="ETH/USDT:USDT", clipped_qty=0.02, position_tier="normal", position_scale=0.5, reason="pytest")
+    primary_order = OrderResult(symbol="ETH/USDT:USDT", side="buy", amount=0.02, price=2000.0, status="filled", dry_run=False, exchange_order_id="primary_1")
+
+    try:
+        await app._mirror_entry_to_follower(app.config.followers[0], "ETH/USDT:USDT", signal, ai, risk, primary_order)
+
+        latest_health = app.store.fetch_latest("exchange_health")["payload"]
+        latest_follower = app.store.fetch_latest("follower_executions")["payload"]
+        assert app.exchange_safety.state.can_open_new_entries is False
+        assert latest_health["reason"].startswith("follower_entry_")
+        assert latest_follower["status"] == "entry_failed"
+    finally:
+        await app.close()
+
+
+@pytest.mark.asyncio
+async def test_live_follower_exit_failure_marks_exchange_safety_failed(tmp_path: Path) -> None:
+    class FailingFollowerGateway:
+        mode = "live"
+        account_slot = "follower"
+
+        async def fetch_positions(self, symbols):  # noqa: ANN001
+            raise RuntimeError("follower_positions_down")
+
+        async def close(self):
+            return None
+
+    config_path = tmp_path / "config.yaml"
+    db_path = tmp_path / "trader.sqlite3"
+    audit_path = tmp_path / "audit.jsonl"
+    _write_config(config_path, db_path, audit_path)
+    with config_path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            """
+followers:
+  - enabled: true
+    account_slot: "follower"
+    label: "账号2：趋势跟随账户"
+    follow_ratio: 1.0
+    max_leverage: 4.0
+    mirror_entries: true
+    mirror_exits: true
+"""
+        )
+
+    app = TradingApp(str(config_path))
+    app.config.runtime.execution_mode = "live"
+    app.config.runtime.dry_run = False
+    app.follower_execution = FailingFollowerGateway()
+    app.exchange_safety.mark_success("pytest_reconciliation_ok")
+    signal = StrategySignal(symbol="ETH/USDT:USDT", timeframe="1h", action=SignalAction.EXIT_LONG, current_price=1980.0)
+    ai = AiDecision(symbol="ETH/USDT:USDT", regime=MarketRegime.TREND, direction=Side.FLAT, confidence=1.0, multiplier=1.0, veto_action=VetoAction.ALLOW)
+
+    try:
+        await app._mirror_exit_to_follower(app.config.followers[0], "ETH/USDT:USDT", signal, ai, "pytest_exit")
+
+        latest_health = app.store.fetch_latest("exchange_health")["payload"]
+        latest_follower = app.store.fetch_latest("follower_executions")["payload"]
+        assert app.exchange_safety.state.can_open_new_entries is False
+        assert latest_health["reason"].startswith("follower_exit_")
+        assert latest_follower["status"] == "exit_failed"
+    finally:
+        await app.close()
+
+
+@pytest.mark.asyncio
+async def test_live_follower_order_status_refresh_failure_marks_exchange_safety_failed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    db_path = tmp_path / "trader.sqlite3"
+    audit_path = tmp_path / "audit.jsonl"
+    _write_config(config_path, db_path, audit_path)
+    with config_path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            """
+followers:
+  - enabled: true
+    account_slot: "follower"
+    label: "账号2：趋势跟随账户"
+    follow_ratio: 1.0
+    max_leverage: 4.0
+    mirror_entries: true
+    mirror_exits: true
+"""
+        )
+    monkeypatch.setenv("GATEIO_FOLLOWER_API_KEY", "test_follower_key")
+    monkeypatch.setenv("GATEIO_FOLLOWER_API_SECRET", "test_follower_secret")
+
+    app = TradingApp(str(config_path))
+    app.config.runtime.execution_mode = "live"
+    app.config.runtime.dry_run = False
+    app.exchange_safety.mark_success("pytest_reconciliation_ok")
+
+    async def fail_refresh(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise RuntimeError("follower_order_refresh_down")
+
+    monkeypatch.setattr(app.follower_order_lifecycle, "refresh_recent_orders", fail_refresh)
+
+    try:
+        updates = await app._refresh_order_status_once(["ETH/USDT:USDT"])
+
+        latest_health = app.store.fetch_latest("exchange_health")["payload"]
+        latest_follower = app.store.fetch_latest("follower_executions")["payload"]
+        assert updates == []
+        assert app.exchange_safety.state.can_open_new_entries is False
+        assert latest_health["reason"].startswith("follower_order_status_refresh_")
+        assert latest_follower["status"] == "order_status_refresh_failed"
     finally:
         await app.close()
 

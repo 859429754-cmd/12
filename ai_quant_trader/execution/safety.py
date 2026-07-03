@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from ai_quant_trader.core.models import ExchangeConnectionStatus, ExchangeSafetyState, PositionSnapshot, ReconciliationReport
+from ai_quant_trader.core.models import ExchangeConnectionStatus, ExchangeSafetyState, PositionSnapshot, ReconciliationReport, Side
 from ai_quant_trader.strategy.trend_state import TrendStateStore
 
 
@@ -121,6 +121,11 @@ class ExchangeSafetyMonitor:
                     elif not local.native_stop_order_id:
                         issues.append(f"native_stop_state_missing:{position.symbol}")
                         native_stops_ok = False
+                    else:
+                        stop_issues = await self._verify_native_stop_order(gateway, position, local.native_stop_order_id)
+                        if stop_issues:
+                            issues.extend(stop_issues)
+                            native_stops_ok = False
                 elif local is not None:
                     issues.append(f"local_trend_state_without_exchange_position:{position.symbol}")
                     local_state_ok = False
@@ -157,3 +162,29 @@ class ExchangeSafetyMonitor:
                 failures=issues,
             )
         return report
+
+    async def _verify_native_stop_order(
+        self,
+        gateway: Any,
+        position: PositionSnapshot,
+        native_stop_order_id: str,
+    ) -> list[str]:
+        fetcher = getattr(gateway, "fetch_order_by_exchange_id", None)
+        if not callable(fetcher):
+            return [f"native_stop_order_verification_not_supported:{position.symbol}"]
+        try:
+            order = await fetcher(position.symbol, native_stop_order_id)
+        except Exception as exc:  # noqa: BLE001
+            return [f"native_stop_order_verify_error:{position.symbol}:{type(exc).__name__}"]
+        if order is None:
+            return [f"native_stop_order_not_found_on_exchange:{position.symbol}"]
+        issues: list[str] = []
+        raw = getattr(order, "raw", {}) or {}
+        reduce_only = bool(raw.get("reduce_only") or raw.get("reduceOnly") or raw.get("reduce_only_order") or raw.get("close"))
+        if not reduce_only:
+            issues.append(f"native_stop_order_not_reduce_only:{position.symbol}")
+        expected_side = "sell" if position.side == Side.LONG else "buy"
+        actual_side = str(getattr(order, "side", "") or raw.get("side") or "").lower()
+        if actual_side and actual_side != expected_side:
+            issues.append(f"native_stop_order_side_mismatch:{position.symbol}:{actual_side}:{expected_side}")
+        return issues

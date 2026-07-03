@@ -447,6 +447,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         latest_exchange = ctx.store.fetch_latest("exchange_health")
         latest_reconciliation = ctx.store.fetch_latest("reconciliation_runs")
         latest_order_lifecycle = ctx.store.fetch_latest("order_lifecycle")
+        unresolved_order_lifecycle = _unresolved_order_lifecycle_issues(ctx)
         latest_data_health = ctx.store.fetch_latest("data_health")
         latest_ai_drift = ctx.store.fetch_latest("ai_drift_checks")
         latest_ai_decision = _latest_trade_ai_decision(ctx)
@@ -587,10 +588,16 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
             _readiness_check(
                 "order_lifecycle",
                 "Order lifecycle",
-                "ok",
-                _freshness_message(latest_order_lifecycle, "Latest order lifecycle event")
-                if latest_order_lifecycle
-                else "No order lifecycle event recorded yet; this is normal before the first submitted order.",
+                "block" if unresolved_order_lifecycle and execution_mode == "live" else ("warn" if unresolved_order_lifecycle else "ok"),
+                (
+                    f"{len(unresolved_order_lifecycle)} unresolved order lifecycle issue(s) require operator review."
+                    if unresolved_order_lifecycle
+                    else (
+                        _freshness_message(latest_order_lifecycle, "Latest order lifecycle event")
+                        if latest_order_lifecycle
+                        else "No order lifecycle event recorded yet; this is normal before the first submitted order."
+                    )
+                ),
                 age_minutes=_row_age_minutes(latest_order_lifecycle),
             ),
             _readiness_check(
@@ -616,6 +623,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
             "exchange_safety": latest_exchange,
             "latest_reconciliation": latest_reconciliation,
             "latest_order_lifecycle": latest_order_lifecycle,
+            "unresolved_order_lifecycle": unresolved_order_lifecycle,
             "latest_data_health": latest_data_health,
             "latest_ai_drift": latest_ai_drift,
             "latest_ai_decision": latest_ai_decision,
@@ -653,6 +661,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
             "exchange_safety": latest_exchange,
             "latest_reconciliation": latest_reconciliation,
             "latest_order_lifecycle": latest_order_lifecycle,
+            "unresolved_order_lifecycle": unresolved_order_lifecycle,
             "latest_data_health": latest_data_health,
             "latest_ai_drift": latest_ai_drift,
             "latest_ai_decision": latest_ai_decision,
@@ -2470,6 +2479,42 @@ def _freshness_message(row: dict[str, Any] | None, label: str) -> str:
     if age < 1:
         return f"{label} was updated less than 1 minute ago."
     return f"{label} was updated {age:.1f} minutes ago."
+
+
+def _unresolved_order_lifecycle_issues(ctx: ConsoleContext, *, limit: int = 1000) -> list[dict[str, Any]]:
+    latest_by_client_id: dict[str, dict[str, Any]] = {}
+    for row in ctx.store.fetch_payloads("order_lifecycle", limit=limit):
+        payload = row.get("payload") or {}
+        client_order_id = str(payload.get("client_order_id") or "")
+        if not client_order_id or client_order_id in latest_by_client_id:
+            continue
+        latest_by_client_id[client_order_id] = {**row, "payload": payload}
+
+    issues: list[dict[str, Any]] = []
+    for row in latest_by_client_id.values():
+        payload = row.get("payload") or {}
+        status = str(payload.get("status") or "").lower()
+        order_type = str(payload.get("order_type") or "").lower()
+        is_unresolved = status in {"unknown", "cancel_failed"} or (
+            order_type in {"stop_loss", "native_stop", "stop"} and status in {"rejected", "failed"}
+        )
+        if not is_unresolved:
+            continue
+        issues.append(
+            {
+                "id": row.get("id"),
+                "created_at": row.get("created_at"),
+                "symbol": row.get("symbol"),
+                "client_order_id": payload.get("client_order_id"),
+                "exchange_order_id": payload.get("exchange_order_id"),
+                "status": status,
+                "order_type": order_type or "unknown",
+                "account_slot": payload.get("account_slot"),
+                "reason": payload.get("reason"),
+                "error_type": payload.get("error_type"),
+            }
+        )
+    return issues
 
 
 def _news_readiness_status(

@@ -1021,6 +1021,12 @@ class TradingApp:
                     )
                 except Exception as exc:  # noqa: BLE001
                     logger.exception("follower_order_status_refresh_failed")
+                    self._mark_follower_execution_safety_failure(
+                        symbols[0] if symbols else "",
+                        account_slot=FOLLOWER_ACCOUNT_SLOT,
+                        stage="follower_order_status_refresh",
+                        exc=exc,
+                    )
                     self.store.insert(
                         "follower_executions",
                         {
@@ -1651,6 +1657,12 @@ class TradingApp:
                 self.store.insert("orders", {**order.model_dump(mode="json"), "account_slot": account_slot, "role": "follower"}, symbol)
         except Exception as exc:  # noqa: BLE001
             logger.exception("follower_exit_failed", extra={"symbol": symbol, "account_slot": account_slot})
+            self._mark_follower_execution_safety_failure(
+                symbol,
+                account_slot=account_slot,
+                stage="follower_exit",
+                exc=exc,
+            )
             self._record_follower_execution(
                 status="exit_failed",
                 account_slot=account_slot,
@@ -1930,13 +1942,12 @@ class TradingApp:
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("follower_entry_failed", extra={"symbol": symbol, "account_slot": account_slot})
-            if entry_order_submitted:
-                self._mark_follower_execution_safety_failure(
-                    symbol,
-                    account_slot=account_slot,
-                    stage="follower_entry_after_order",
-                    exc=exc,
-                )
+            self._mark_follower_execution_safety_failure(
+                symbol,
+                account_slot=account_slot,
+                stage="follower_entry_after_order" if entry_order_submitted else "follower_entry",
+                exc=exc,
+            )
             self._record_follower_execution(
                 status="entry_failed",
                 account_slot=account_slot,

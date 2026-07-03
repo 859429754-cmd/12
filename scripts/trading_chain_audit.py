@@ -62,6 +62,11 @@ CORE_CASES: tuple[AuditCase, ...] = (
         requirement="Cancel failure is persisted as cancel_failed for operator review.",
     ),
     AuditCase(
+        id="unresolved_order_lifecycle_blocks_readiness",
+        target="tests/test_console_api.py::test_live_readiness_blocks_unresolved_order_lifecycle_even_after_newer_ok_event",
+        requirement="Unresolved unknown/cancel_failed lifecycle events keep readiness blocked even after newer normal events for other orders.",
+    ),
+    AuditCase(
         id="live_position_fetch_failure_blocks_cycle",
         target="tests/test_gateway_runtime.py::test_live_position_fetch_failure_blocks_trading_cycle",
         requirement="Live position fetch failure blocks trading cycle instead of opening with unknown state.",
@@ -70,6 +75,11 @@ CORE_CASES: tuple[AuditCase, ...] = (
         id="native_stop_unknown_requires_manual_gate",
         target="tests/test_gateway_runtime.py::test_live_native_stop_unknown_requires_manual_gate_without_auto_close",
         requirement="Unknown live native stop submission requires manual Gate handling and does not auto-close through the app.",
+    ),
+    AuditCase(
+        id="native_stop_exchange_verification_required",
+        target="tests/test_execution_safety.py::test_reconciliation_blocks_when_native_stop_id_is_not_found_on_exchange",
+        requirement="Live reconciliation blocks when an open position has a local native stop id that cannot be verified on the exchange.",
     ),
     AuditCase(
         id="stale_trend_state_repair_requires_terminal_stop",
@@ -94,6 +104,21 @@ EXTENDED_CASES: tuple[AuditCase, ...] = (
         id="close_follower_execution",
         target="tests/test_gateway_runtime.py::test_trading_app_close_closes_follower_execution",
         requirement="TradingApp shutdown closes follower execution resources as well as primary resources.",
+    ),
+    AuditCase(
+        id="follower_entry_failure_fail_closed",
+        target="tests/test_trading_chain_smoke.py::test_live_follower_entry_failure_marks_exchange_safety_failed",
+        requirement="Live follower entry failure marks exchange safety failed instead of silently leaving new entries enabled.",
+    ),
+    AuditCase(
+        id="follower_exit_failure_fail_closed",
+        target="tests/test_trading_chain_smoke.py::test_live_follower_exit_failure_marks_exchange_safety_failed",
+        requirement="Live follower exit failure marks exchange safety failed so account divergence requires operator review.",
+    ),
+    AuditCase(
+        id="follower_order_status_refresh_failure_fail_closed",
+        target="tests/test_trading_chain_smoke.py::test_live_follower_order_status_refresh_failure_marks_exchange_safety_failed",
+        requirement="Follower order-status refresh failure blocks live readiness through exchange safety.",
     ),
 )
 

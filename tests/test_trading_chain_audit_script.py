@@ -15,8 +15,15 @@ def test_trading_chain_audit_core_cases_cover_required_links() -> None:
     assert "software_atr_stop_mirrors_follower" in case_ids
     assert "native_stop_fill_mirrors_follower" in case_ids
     assert "unknown_submit_blocks_blind_retry" in case_ids
+    assert "unresolved_order_lifecycle_blocks_readiness" in case_ids
     assert "native_stop_unknown_requires_manual_gate" in case_ids
+    assert "native_stop_exchange_verification_required" in case_ids
     assert "stale_trend_state_repair_requires_terminal_stop" in case_ids
+
+    extended_ids = {case.id for case in trading_chain_audit.selected_cases("extended")}
+    assert "follower_entry_failure_fail_closed" in extended_ids
+    assert "follower_exit_failure_fail_closed" in extended_ids
+    assert "follower_order_status_refresh_failure_fail_closed" in extended_ids
 
 
 def test_trading_chain_audit_invokes_pytest_and_writes_json(tmp_path, monkeypatch, capsys) -> None:
