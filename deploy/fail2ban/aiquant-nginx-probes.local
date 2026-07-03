@@ -1,0 +1,8 @@
+[aiquant-nginx-probes]
+enabled = true
+filter = aiquant-nginx-probes
+logpath = /var/log/nginx/access.log
+maxretry = 8
+findtime = 600
+bantime = 3600
+backend = auto
