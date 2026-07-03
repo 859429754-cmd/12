@@ -128,6 +128,20 @@ def test_prometheus_metrics_requires_console_auth_by_default(tmp_path: Path, mon
     assert "ai_quant_readiness_status" in allowed.text
 
 
+def test_readiness_allows_loopback_watchdog_but_not_remote_without_auth(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("CONSOLE_AUTH_DISABLED", "0")
+    monkeypatch.setenv("CONSOLE_ADMIN_USER", "admin")
+    monkeypatch.setenv("CONSOLE_ADMIN_PASSWORD_SHA256", "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918")  # admin
+    config_path = tmp_path / "config.yaml"
+    write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl", symbols=["ETH/USDT:USDT"])
+
+    local_client = TestClient(create_app(str(config_path)), client=("127.0.0.1", 12345))
+    remote_client = TestClient(create_app(str(config_path)), client=("203.0.113.44", 12345))
+
+    assert local_client.get("/api/system/readiness").status_code == 200
+    assert remote_client.get("/api/system/readiness").status_code == 401
+
+
 def test_console_alert_user_is_admin_credential(monkeypatch) -> None:
     monkeypatch.setenv("CONSOLE_ALERT_USER", "alert")
     monkeypatch.setenv("CONSOLE_ALERT_PASSWORD", "alert-secret")

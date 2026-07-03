@@ -3089,9 +3089,16 @@ def _console_auth_public_path(request: Request) -> bool:
     path = request.url.path
     if path == "/metrics":
         return _env_flag_enabled("METRICS_PUBLIC_ENABLED")
+    if path == "/api/system/readiness" and _is_loopback_client(request):
+        return True
     if not path.startswith("/api/"):
         return True
     return path in {"/api/health", "/api/auth/session", "/api/auth/login", "/api/auth/logout"}
+
+
+def _is_loopback_client(request: Request) -> bool:
+    host = request.client.host if request.client else ""
+    return host in {"127.0.0.1", "::1", "localhost"}
 
 
 def _console_users() -> dict[str, dict[str, Any]]:
