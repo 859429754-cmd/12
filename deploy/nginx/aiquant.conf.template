@@ -1,0 +1,109 @@
+# Managed by ai-quant-trader. Public console reverse proxy with conservative hardening.
+#
+# This file is included from nginx's http context via sites-enabled, so the
+# limit/map directives below intentionally live at top level.
+limit_req_zone $binary_remote_addr zone=aiquant_console:10m rate=12r/s;
+limit_req_zone $binary_remote_addr zone=aiquant_auth:10m rate=6r/m;
+limit_conn_zone $binary_remote_addr zone=aiquant_conn:10m;
+
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    '' close;
+}
+
+server {
+    listen 80 default_server;
+    server_name __SERVER_NAMES__;
+
+    client_max_body_size 2m;
+    limit_req_status 429;
+    limit_conn_status 429;
+
+    add_header X-Frame-Options "DENY" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
+    add_header Cross-Origin-Opener-Policy "same-origin" always;
+
+    location = /api/auth/login {
+        limit_req zone=aiquant_auth burst=3 nodelay;
+        limit_conn aiquant_conn 10;
+        proxy_pass http://127.0.0.1:8090;
+        proxy_http_version 1.1;
+        proxy_read_timeout 120s;
+        proxy_send_timeout 120s;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+    }
+
+    location / {
+        limit_req zone=aiquant_console burst=80 nodelay;
+        limit_conn aiquant_conn 30;
+        proxy_pass http://127.0.0.1:8090;
+        proxy_http_version 1.1;
+        proxy_read_timeout 120s;
+        proxy_send_timeout 120s;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+    }
+}
+
+server {
+    listen 443 ssl http2;
+    server_name __TLS_SERVER_NAME__;
+
+    ssl_certificate __CERT_FULLCHAIN__;
+    ssl_certificate_key __CERT_PRIVKEY__;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    client_max_body_size 2m;
+    limit_req_status 429;
+    limit_conn_status 429;
+
+    add_header Strict-Transport-Security "max-age=15552000" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
+    add_header Cross-Origin-Opener-Policy "same-origin" always;
+
+    location = /api/auth/login {
+        limit_req zone=aiquant_auth burst=3 nodelay;
+        limit_conn aiquant_conn 10;
+        proxy_pass http://127.0.0.1:8090;
+        proxy_http_version 1.1;
+        proxy_read_timeout 120s;
+        proxy_send_timeout 120s;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+    }
+
+    location / {
+        limit_req zone=aiquant_console burst=80 nodelay;
+        limit_conn aiquant_conn 30;
+        proxy_pass http://127.0.0.1:8090;
+        proxy_http_version 1.1;
+        proxy_read_timeout 120s;
+        proxy_send_timeout 120s;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+    }
+}
