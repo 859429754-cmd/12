@@ -36,6 +36,7 @@ import type {
   NewsResponse,
   OptimizationResult,
   PlatformOverview,
+  SecurityEventsResponse,
   SystemReadiness,
   StatusResponse,
   StrategyProfile,
@@ -127,6 +128,10 @@ export function App() {
   const [accountSlots, setAccountSlots] = useState<ExecutionAccountSlot[]>([]);
   const [denseZone, setDenseZone] = useState<DbRow<DenseZonePayload> | null>(null);
   const [news, setNews] = useState<NewsResponse>({ items: [] });
+  const [securityEvents, setSecurityEvents] = useState<SecurityEventsResponse>({
+    items: [],
+    summary: { total: 0, by_event: {}, latest_created_at: null },
+  });
   const [warning, setWarning] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
@@ -215,6 +220,8 @@ export function App() {
         }
       });
       const primaryAccountSlot = activeSession?.user?.account_slot || "trend";
+      const activeCapabilities = activeSession?.user?.capabilities;
+      const activeIsAdmin = Boolean(activeCapabilities?.manage_strategy_parameters || activeCapabilities?.manage_position_review);
       void api<Record<string, unknown>>(
         `/api/account/balance?account_slot=${encodeURIComponent(primaryAccountSlot)}&max_cache_age_seconds=120`,
         { retries: 0, timeoutMs: 9000 },
@@ -248,6 +255,7 @@ export function App() {
         nextDecisions,
         nextAiTierAudit,
         nextDenseZone,
+        nextSecurityEvents,
       ] =
         await Promise.all([
           api<StatusResponse>("/api/status", { retries: 1 }),
@@ -270,6 +278,12 @@ export function App() {
             trades: [],
           }),
           safe(api<{ item: DbRow<DenseZonePayload> | null }>(`/api/dense-zones/latest?symbol=${encodeURIComponent(symbol)}`, { retries: 1 }), { item: null }),
+          activeIsAdmin
+            ? safe(api<SecurityEventsResponse>("/api/system/security-events?limit=30", { retries: 1 }), {
+                items: [],
+                summary: { total: 0, by_event: {}, latest_created_at: null },
+              })
+            : Promise.resolve({ items: [], summary: { total: 0, by_event: {}, latest_created_at: null } }),
         ]);
       setStatus(nextStatus);
       setPlatform(nextPlatform);
@@ -292,6 +306,7 @@ export function App() {
       setDecisions(nextDecisions.items || []);
       setAiTierAudit(nextAiTierAudit);
       setDenseZone(nextDenseZone.item || null);
+      setSecurityEvents(nextSecurityEvents);
     } catch (error) {
       setWarning(errText(error));
     }
@@ -441,6 +456,7 @@ export function App() {
           denseZone={denseZone}
           riskSummary={riskSummary}
           readiness={readiness}
+          securityEvents={securityEvents}
           visibleSlots={visibleSlots}
           activeAccountSlot={session?.user?.account_slot || "trend"}
           isAdmin={isAdmin}
@@ -1021,6 +1037,7 @@ function WorkspaceBody({
   denseZone,
   riskSummary,
   readiness,
+  securityEvents,
   visibleSlots,
   activeAccountSlot,
   isAdmin,
@@ -1054,6 +1071,7 @@ function WorkspaceBody({
   denseZone: DbRow<DenseZonePayload> | null;
   riskSummary: Record<string, unknown> | null;
   readiness: SystemReadiness | null;
+  securityEvents: SecurityEventsResponse;
   visibleSlots: Array<"trend" | "follower" | "range">;
   activeAccountSlot: "trend" | "follower" | "range" | null;
   isAdmin: boolean;
@@ -1096,6 +1114,7 @@ function WorkspaceBody({
         ticker={ticker}
         warning={warning}
         readiness={readiness}
+        securityEvents={securityEvents}
         busy={busy}
         postAction={postAction}
       />
@@ -1726,6 +1745,7 @@ function DashboardWorkspace({
   ticker,
   warning,
   readiness,
+  securityEvents,
   busy,
   postAction,
 }: {
@@ -1745,6 +1765,7 @@ function DashboardWorkspace({
   ticker: MarketTickerResponse | null;
   warning: string;
   readiness: SystemReadiness | null;
+  securityEvents: SecurityEventsResponse;
   busy: boolean;
   postAction: (path: string, body: Record<string, unknown>) => Promise<void>;
 }) {
@@ -1775,6 +1796,7 @@ function DashboardWorkspace({
   const latestPrice = realtimePrice != null ? num(realtimePrice) : latestCandle ? num(latestCandle.close) : "--";
   const latestPriceLabel = realtimePrice != null ? "实时价" : "K线收盘";
   const positionsReadFailed = positionsMeta?.ok === false;
+  const securityEventItems = securityEvents.items || [];
   return (
     <section className="min-h-0 space-y-3 overflow-auto sm:space-y-4 sm:pr-1">
       <div className="rounded-2xl border border-[#263246] bg-[#0b1220] p-3 shadow-[0_18px_44px_rgba(0,0,0,0.30)] sm:p-4">
@@ -1893,6 +1915,36 @@ function DashboardWorkspace({
                 <div className="rounded-xl border border-[#14532d] bg-[#052e1a] p-3 text-xs text-[#22c55e]">当前没有阻断项。</div>
               )}
             </div>
+            <div className="mt-3 rounded-xl border border-[#263246] bg-[#101a2d] p-3">
+              <div className="mb-2 flex items-center justify-between gap-3 text-xs">
+                <span className="font-semibold text-[#e5eefb]">安全事件</span>
+                <span className={`${mono} text-[11px] text-[#94a3b8]`}>最近 {num(securityEvents.summary.total || 0, 0)} 条</span>
+              </div>
+              <div className="mb-2 flex flex-wrap gap-2">
+                {Object.entries(securityEvents.summary.by_event || {}).slice(0, 4).map(([event, count]) => (
+                  <span key={event} className={`rounded-full px-2 py-1 text-[10px] ${securityEventTone(event)}`}>
+                    {securityEventLabel(event)} {count}
+                  </span>
+                ))}
+              </div>
+              <div className="grid gap-2">
+                {securityEventItems.length ? securityEventItems.slice(0, 3).map((row) => (
+                  <div key={`${row.id}-${row.created_at}`} className="rounded-lg border border-[#1f2a3d] bg-[#0b1220] px-3 py-2 text-[11px]">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="font-semibold text-[#e5eefb]">{securityEventLabel(String(row.payload?.event || "unknown"))}</span>
+                      <span className={`${mono} text-[#94a3b8]`}>{formatRelativeAge(row.created_at)}</span>
+                    </div>
+                    <div className="mt-1 truncate text-[#94a3b8]">
+                      {securityEventActor(row.payload)}{row.payload?.reason ? ` · ${String(row.payload.reason)}` : ""}
+                    </div>
+                  </div>
+                )) : (
+                  <div className="rounded-lg border border-[#1f2a3d] bg-[#0b1220] px-3 py-2 text-[11px] text-[#94a3b8]">
+                    管理员可见。暂无安全事件或当前账户无权限读取。
+                  </div>
+                )}
+              </div>
+            </div>
           </DashboardPanel>
         </div>
 
@@ -1989,6 +2041,37 @@ function HealthMini({ label, value, ok }: { label: string; value: string; ok: bo
       <div className={`${mono} mt-1 font-semibold`}>{value}</div>
     </div>
   );
+}
+
+function securityEventLabel(event: string) {
+  const labels: Record<string, string> = {
+    login_failed: "登录失败",
+    login_success: "登录成功",
+    logout: "退出登录",
+    admin_action_confirmation_missing: "缺少二次确认",
+    admin_action_confirmed: "管理员确认",
+    admin_action_denied: "管理员拒绝",
+    public_probe_blocked: "公网扫描拦截",
+  };
+  return labels[event] || event || "未知事件";
+}
+
+function securityEventTone(event: string) {
+  if (event.includes("failed") || event.includes("denied") || event.includes("missing") || event.includes("probe")) {
+    return "border border-[#854d0e] bg-[#241806] text-[#facc15]";
+  }
+  if (event.includes("confirmed") || event.includes("success")) {
+    return "border border-[#14532d] bg-[#052e1a] text-[#22c55e]";
+  }
+  return "border border-[#263246] bg-[#101a2d] text-[#cbd5e1]";
+}
+
+function securityEventActor(payload?: Record<string, unknown>) {
+  if (!payload) return "来源未知";
+  const username = payload.username ? `用户 ${String(payload.username)}` : "用户未知";
+  const clientIp = payload.client_ip ? `IP ${String(payload.client_ip)}` : "IP 未记录";
+  const path = payload.path ? `路径 ${String(payload.path)}` : "";
+  return [username, clientIp, path].filter(Boolean).join(" · ");
 }
 
 function LiveOpsBadge({ readiness, mode }: { readiness: string; mode: string }) {

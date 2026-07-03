@@ -7,6 +7,24 @@ export type DbRow<T = Record<string, unknown>> = {
   payload: T;
 };
 
+export type SecurityEventPayload = {
+  event?: string;
+  username?: string;
+  client_ip?: string;
+  reason?: string;
+  path?: string;
+  method?: string;
+};
+
+export type SecurityEventsResponse = {
+  items: Array<DbRow<SecurityEventPayload>>;
+  summary: {
+    total: number;
+    by_event: Record<string, number>;
+    latest_created_at?: string | null;
+  };
+};
+
 export type StatusResponse = {
   mode: string;
   execution_mode?: "mock" | "live";

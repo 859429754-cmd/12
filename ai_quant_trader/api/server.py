@@ -666,6 +666,23 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         alerts = readiness.get("runtime_alerts") or []
         return {"summary": alert_summary(alerts), "alerts": alerts}
 
+    @app.get("/api/system/security-events")
+    def system_security_events(request: Request, limit: int = Query(default=50, ge=1, le=200)) -> dict[str, Any]:
+        ctx = _ctx(app)
+        ctx.reload()
+        user = _current_console_user(request)
+        if str(user.get("role")) != "admin":
+            raise HTTPException(status_code=403, detail="permission_denied")
+        rows = ctx.table("security_events", limit=limit)
+        summary: dict[str, Any] = {"total": len(rows), "by_event": {}, "latest_created_at": None}
+        for row in rows:
+            payload = row.get("payload") or {}
+            event = str(payload.get("event") or "unknown")
+            summary["by_event"][event] = int(summary["by_event"].get(event, 0)) + 1
+        if rows:
+            summary["latest_created_at"] = rows[0].get("created_at")
+        return {"items": rows, "summary": summary}
+
     @app.get("/api/system/metrics")
     def system_metrics() -> dict[str, Any]:
         ctx = _ctx(app)

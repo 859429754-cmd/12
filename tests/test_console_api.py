@@ -177,6 +177,38 @@ def test_console_alert_user_is_admin_credential(monkeypatch) -> None:
     assert user["role"] == "admin"
 
 
+def test_security_events_api_is_admin_only_and_summarized(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("CONSOLE_AUTH_DISABLED", "0")
+    monkeypatch.setenv("CONSOLE_ADMIN_PASSWORD", "admin-secret")
+    monkeypatch.setenv("CONSOLE_ACCOUNT1_PASSWORD", "account-secret")
+    config_path = tmp_path / "config.yaml"
+    db_path = tmp_path / "trader.sqlite3"
+    audit_path = tmp_path / "audit.jsonl"
+    write_config(config_path, db_path, audit_path, ["ETH/USDT:USDT"])
+    client = TestClient(create_app(str(config_path)), client=("203.0.113.77", 12345))
+
+    assert client.post("/api/auth/login", json={"username": "account1", "password": "bad"}).status_code == 401
+    account_login = client.post("/api/auth/login", json={"username": "account1", "password": "account-secret"})
+    assert account_login.status_code == 200
+    denied = client.get("/api/system/security-events")
+    assert denied.status_code == 403
+
+    client.post("/api/auth/logout", json={})
+    admin_login = client.post("/api/auth/login", json={"username": "admin", "password": "admin-secret"})
+    assert admin_login.status_code == 200
+    client.post("/api/control/authorize", json={"operator_id": "admin", "symbols": ["ETH/USDT:USDT"]})
+    events = client.get("/api/system/security-events?limit=20")
+    assert events.status_code == 200
+    body = events.json()
+    assert body["summary"]["total"] >= 3
+    assert body["summary"]["by_event"]["login_failed"] >= 1
+    assert body["summary"]["by_event"]["login_success"] >= 1
+    assert body["summary"]["by_event"]["admin_action_confirmation_missing"] >= 1
+    first_payload = body["items"][0]["payload"]
+    assert "password" not in str(first_payload).lower()
+    assert "api_secret" not in str(first_payload).lower()
+
+
 def test_readiness_exposes_runtime_alerts_for_unknown_order(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("CONSOLE_AUTH_DISABLED", "1")
     config_path = tmp_path / "config.yaml"
