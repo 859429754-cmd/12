@@ -24,6 +24,11 @@ server {
     add_header Referrer-Policy "no-referrer" always;
     add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
     add_header Cross-Origin-Opener-Policy "same-origin" always;
+    proxy_hide_header X-Frame-Options;
+    proxy_hide_header X-Content-Type-Options;
+    proxy_hide_header Referrer-Policy;
+    proxy_hide_header Permissions-Policy;
+    proxy_hide_header Cross-Origin-Opener-Policy;
 
     location = /api/auth/login {
         limit_req zone=aiquant_auth burst=3 nodelay;
@@ -75,6 +80,12 @@ server {
     add_header Referrer-Policy "no-referrer" always;
     add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
     add_header Cross-Origin-Opener-Policy "same-origin" always;
+    proxy_hide_header Strict-Transport-Security;
+    proxy_hide_header X-Frame-Options;
+    proxy_hide_header X-Content-Type-Options;
+    proxy_hide_header Referrer-Policy;
+    proxy_hide_header Permissions-Policy;
+    proxy_hide_header Cross-Origin-Opener-Policy;
 
     location = /api/auth/login {
         limit_req zone=aiquant_auth burst=3 nodelay;
