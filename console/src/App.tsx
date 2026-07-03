@@ -173,6 +173,12 @@ export function App() {
           return fallback;
         }
       };
+      const nextSessionState = await safe(api<ConsoleSession>("/api/auth/session", { retries: 0, timeoutMs: 5000 }), activeSession);
+      if (nextSessionState?.auth_required && !nextSessionState.authenticated) {
+        setSession(nextSessionState);
+        return;
+      }
+      setSession(nextSessionState);
       void api<NewsResponse>("/api/news/latest?limit=8&compact=true&max_age_minutes=2", { retries: 0, timeoutMs: 10000 })
         .then((payload) => {
           const hasVisibleItems = visibleNewsItems(payload).length > 0;
@@ -775,6 +781,7 @@ function TopBar({
   logout: () => Promise<void>;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const sessionTime = sessionExpiryLabel(session);
   const switchWorkspace = (id: WorkspaceId) => {
     setWorkspace(id);
     setMenuOpen(false);
@@ -840,6 +847,11 @@ function TopBar({
           <KeyRound size={13} />
           <span className="hidden whitespace-nowrap sm:inline">{session.user?.label || "账号"}</span>
         </div>
+        {sessionTime ? (
+          <span className={`hidden rounded-full border px-3 py-2 sm:inline-flex ${session.session_expiring_soon ? "border-[#854d0e] bg-[#241806] text-[#facc15]" : "border-[#263246] bg-[#111827] text-[#94a3b8]"}`}>
+            {sessionTime}
+          </span>
+        ) : null}
         <span className={`hidden rounded-full border px-3 py-2 sm:inline-flex ${status?.opening_paused ? "border-[#854d0e] bg-[#241806] text-[#facc15]" : "border-[#14532d] bg-[#052e1a] text-[#22c55e]"}`}>
           {status?.opening_paused ? "开仓已暂停" : "允许开仓"}
         </span>
@@ -852,6 +864,18 @@ function TopBar({
       </div>
     </header>
   );
+}
+
+function sessionExpiryLabel(session: ConsoleSession) {
+  if (!session.authenticated || session.session_seconds_remaining == null) return "";
+  const seconds = Number(session.session_seconds_remaining);
+  if (!Number.isFinite(seconds)) return "";
+  if (seconds <= 0) return "会话已过期";
+  const minutes = Math.ceil(seconds / 60);
+  if (minutes < 60) return `会话 ${minutes} 分钟后过期`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest ? `会话 ${hours}小时${rest}分后过期` : `会话 ${hours}小时后过期`;
 }
 
 function MobileBottomNav({
@@ -1935,7 +1959,7 @@ function DashboardWorkspace({
                       <span className={`${mono} text-[#94a3b8]`}>{formatRelativeAge(row.created_at)}</span>
                     </div>
                     <div className="mt-1 truncate text-[#94a3b8]">
-                      {securityEventActor(row.payload)}{row.payload?.reason ? ` · ${String(row.payload.reason)}` : ""}
+                      {securityEventActor(row.payload)}{securityEventReason(row.payload) ? ` · ${securityEventReason(row.payload)}` : ""}
                     </div>
                   </div>
                 )) : (
@@ -2072,6 +2096,16 @@ function securityEventActor(payload?: Record<string, unknown>) {
   const clientIp = payload.client_ip ? `IP ${String(payload.client_ip)}` : "IP 未记录";
   const path = payload.path ? `路径 ${String(payload.path)}` : "";
   return [username, clientIp, path].filter(Boolean).join(" · ");
+}
+
+function securityEventReason(payload?: Record<string, unknown>) {
+  if (!payload) return "";
+  if (payload.reason) return String(payload.reason);
+  const detail = payload.payload;
+  if (detail && typeof detail === "object" && "reason" in detail) {
+    return String((detail as Record<string, unknown>).reason || "");
+  }
+  return "";
 }
 
 function LiveOpsBadge({ readiness, mode }: { readiness: string; mode: string }) {

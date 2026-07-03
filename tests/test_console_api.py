@@ -79,6 +79,45 @@ def test_auth_login_failure_lockout_and_security_headers(tmp_path: Path, monkeyp
     assert locked.json()["detail"]["locked"] is True
 
 
+def test_console_session_exposes_expiry_and_audits_expired_session(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("CONSOLE_AUTH_DISABLED", "0")
+    monkeypatch.setenv("CONSOLE_ADMIN_USER", "admin")
+    monkeypatch.setenv("CONSOLE_ADMIN_PASSWORD", "admin-secret")
+    monkeypatch.setenv("CONSOLE_SESSION_HOURS", "1")
+    config_path = tmp_path / "config.yaml"
+    db_path = tmp_path / "trader.sqlite3"
+    audit_path = tmp_path / "audit.jsonl"
+    write_config(config_path, db_path, audit_path, symbols=["ETH/USDT:USDT"])
+    app = create_app(str(config_path))
+    client = TestClient(app)
+
+    login = client.post("/api/auth/login", json={"username": "admin", "password": "admin-secret"})
+
+    assert login.status_code == 200
+    body = login.json()
+    assert body["session_expires_at"]
+    assert body["session_seconds_remaining"] > 3500
+    assert body["session_expiring_soon"] is False
+
+    token = login.cookies.get("aiq_session")
+    assert token
+    app.state.console_sessions[token]["expires_at"] = datetime.now(UTC) - timedelta(seconds=1)
+    expired_client = TestClient(app)
+    expired_client.cookies.set("aiq_session", token)
+    expired = expired_client.get("/api/status")
+
+    assert expired.status_code == 401
+    store = SQLiteStore(str(db_path), str(audit_path))
+    try:
+        latest = store.fetch_latest("security_events")
+    finally:
+        store.close()
+    assert latest is not None
+    payload = latest["payload"]
+    assert payload["event"] == "session_expired"
+    assert "aiq_session" in payload["payload"]["reason"]
+
+
 def test_console_ip_allowlist_blocks_untrusted_clients(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("CONSOLE_AUTH_DISABLED", "1")
     monkeypatch.setenv("CONSOLE_ALLOWED_IPS", "203.0.113.10,198.51.100.0/24")

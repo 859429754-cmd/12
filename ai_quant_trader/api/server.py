@@ -349,7 +349,8 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         user = _console_user_from_request(request)
         if not _console_auth_enabled():
             user = _dev_console_user()
-        return _console_session_payload(user, authenticated=bool(user))
+        expires_at = getattr(request.state, "console_session_expires_at", None)
+        return _console_session_payload(user, authenticated=bool(user), expires_at=expires_at if isinstance(expires_at, datetime) else None)
 
     @app.post("/api/auth/login")
     def auth_login(body: ConsoleLoginRequest, request: Request) -> Response:
@@ -369,7 +370,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         token = secrets.token_urlsafe(32)
         expires_at = datetime.now(UTC) + timedelta(hours=_console_session_hours())
         request.app.state.console_sessions[token] = {"user": user, "expires_at": expires_at}
-        response = JSONResponse(_console_session_payload(user, authenticated=True))
+        response = JSONResponse(_console_session_payload(user, authenticated=True, expires_at=expires_at))
         response.set_cookie(
             _console_session_cookie_name(),
             token,
@@ -3112,14 +3113,15 @@ def _clear_login_failures(request: Request, username: str) -> None:
         failures.pop(_login_failure_key(request, username), None)
 
 
-def _record_security_event(request: Request, event: str, username: str, payload: dict[str, Any] | None = None) -> None:
+def _record_security_event(request: Request, event: str, username: str | None, payload: dict[str, Any] | None = None) -> None:
     try:
         ctx = _ctx(request.app)
+        event_username = (username or "unknown").strip() or "unknown"
         ctx.store.insert(
             "security_events",
             {
                 "event": event,
-                "username": username.strip(),
+                "username": event_username,
                 "client_ip": _login_client_ip(request),
                 "created_at": datetime.now(UTC).isoformat(),
                 "payload": payload or {},
@@ -3301,8 +3303,10 @@ def _console_user_from_request(request: Request) -> dict[str, Any] | None:
             if isinstance(expires_at, datetime) and expires_at > datetime.now(UTC):
                 user = session.get("user")
                 if isinstance(user, dict):
+                    request.state.console_session_expires_at = expires_at
                     return user
             request.app.state.console_sessions.pop(token, None)
+            _record_security_event(request, "session_expired", None, {"reason": f"{_console_session_cookie_name()} expired"})
     return _console_user_from_basic_auth(request.headers.get("authorization"))
 
 
@@ -3357,14 +3361,26 @@ def _current_console_user(request: Request) -> dict[str, Any]:
     return user
 
 
-def _console_session_payload(user: dict[str, Any] | None, authenticated: bool) -> dict[str, Any]:
+def _console_session_payload(
+    user: dict[str, Any] | None,
+    authenticated: bool,
+    expires_at: datetime | None = None,
+) -> dict[str, Any]:
     role = str((user or {}).get("role") or "")
     account_slot = (user or {}).get("account_slot")
+    seconds_remaining: int | None = None
+    expiring_soon = False
+    if authenticated and isinstance(expires_at, datetime):
+        seconds_remaining = max(int((expires_at - datetime.now(UTC)).total_seconds()), 0)
+        expiring_soon = seconds_remaining <= 15 * 60
     return {
         "ok": True,
         "auth_required": _console_auth_enabled(),
         "auth_configured": _console_auth_configured(),
         "authenticated": authenticated,
+        "session_expires_at": expires_at.isoformat() if authenticated and isinstance(expires_at, datetime) else None,
+        "session_seconds_remaining": seconds_remaining,
+        "session_expiring_soon": expiring_soon,
         "user": None
         if not user
         else {

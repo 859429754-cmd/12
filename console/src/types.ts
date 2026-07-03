@@ -14,6 +14,7 @@ export type SecurityEventPayload = {
   reason?: string;
   path?: string;
   method?: string;
+  payload?: Record<string, unknown>;
 };
 
 export type SecurityEventsResponse = {
@@ -186,6 +187,9 @@ export type ConsoleSession = {
   auth_required: boolean;
   auth_configured?: boolean;
   authenticated: boolean;
+  session_expires_at?: string | null;
+  session_seconds_remaining?: number | null;
+  session_expiring_soon?: boolean;
   user: null | {
     username: string;
     role: "admin" | "account1" | "account2" | "range";
