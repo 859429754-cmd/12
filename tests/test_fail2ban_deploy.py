@@ -20,6 +20,8 @@ def test_fail2ban_probe_filter_and_jail_are_present() -> None:
 
     for needle in [".env", "/\\.git", "php://filter", "wp-admin", "/etc/passwd"]:
         assert needle in filter_text
+    assert "%2e%2e" not in filter_text
+    assert "%%2e%%2e" in filter_text
     assert "logpath = /var/log/nginx/access.log" in jail_text
     assert "maxretry = 8" in jail_text
     assert "bantime = 3600" in jail_text
