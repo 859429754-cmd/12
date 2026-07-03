@@ -16,8 +16,8 @@ def test_nginx_hardening_template_contains_public_controls() -> None:
     assert "add_header X-Content-Type-Options \"nosniff\" always;" in template
     assert "add_header Referrer-Policy \"no-referrer\" always;" in template
     assert "add_header Strict-Transport-Security" in template
-    assert "proxy_hide_header X-Frame-Options;" in template
-    assert "proxy_hide_header Strict-Transport-Security;" in template
+    assert template.count("proxy_hide_header X-Frame-Options;") >= 4
+    assert template.count("proxy_hide_header Strict-Transport-Security;") >= 3
     assert "include /etc/letsencrypt/options-ssl-nginx.conf;" in template
     assert "ssl_protocols TLSv1.2 TLSv1.3;" not in template
     assert "proxy_pass http://127.0.0.1:8090;" in template
