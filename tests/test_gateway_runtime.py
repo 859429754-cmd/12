@@ -312,13 +312,23 @@ def test_runtime_mode_requires_configured_trend_account_for_live(tmp_path: Path,
     write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl", ["ETH/USDT:USDT"])
     client = TestClient(create_app(str(config_path)))
 
-    missing_account = client.post("/api/control/runtime-mode", json={"operator_id": "tester", "dry_run": False})
+    missing_confirm = client.post("/api/control/runtime-mode", json={"operator_id": "tester", "dry_run": False})
+    assert missing_confirm.status_code == 400
+    assert "必须显式二次确认" in missing_confirm.json()["detail"]
+
+    missing_account = client.post(
+        "/api/control/runtime-mode",
+        json={"operator_id": "tester", "dry_run": False, "confirm_admin_action": True},
+    )
     assert missing_account.status_code == 403
 
     monkeypatch.setenv("GATEIO_TREND_API_KEY", "trend_key")
     monkeypatch.setenv("GATEIO_TREND_API_SECRET", "trend_secret")
 
-    ok = client.post("/api/control/runtime-mode", json={"operator_id": "tester", "dry_run": False})
+    ok = client.post(
+        "/api/control/runtime-mode",
+        json={"operator_id": "tester", "dry_run": False, "confirm_admin_action": True},
+    )
     assert ok.status_code == 200
     live_status = client.get("/api/status").json()
     assert live_status["dry_run"] is False

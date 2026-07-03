@@ -616,7 +616,14 @@ def test_console_can_create_global_max_leverage_proposal(tmp_path: Path, monkeyp
     assert created.status_code == 200
     proposal_id = created.json()["proposal_id"]
 
-    approved = client.post(f"/api/proposals/{proposal_id}/approve", json={"operator_id": "console"})
+    missing_confirm = client.post(f"/api/proposals/{proposal_id}/approve", json={"operator_id": "console"})
+    assert missing_confirm.status_code == 400
+    assert "必须显式二次确认" in missing_confirm.json()["detail"]
+
+    approved = client.post(
+        f"/api/proposals/{proposal_id}/approve",
+        json={"operator_id": "console", "confirm_admin_action": True},
+    )
     assert approved.status_code == 200
 
     strategy = client.get("/api/strategy/config")
@@ -1157,7 +1164,11 @@ def test_console_account_rbac_replaces_operation_code_for_mutating_requests(tmp_
     client.post("/api/auth/logout", json={})
     admin_login = client.post("/api/auth/login", json={"username": "admin", "password": "admin-secret"})
     assert admin_login.status_code == 200
-    ok = client.post("/api/control/authorize", json=body)
+    missing_confirm = client.post("/api/control/authorize", json=body)
+    assert missing_confirm.status_code == 400
+    assert "必须显式二次确认" in missing_confirm.json()["detail"]
+
+    ok = client.post("/api/control/authorize", json={**body, "confirm_admin_action": True})
     assert ok.status_code == 200
 
 

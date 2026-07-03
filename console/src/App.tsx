@@ -945,7 +945,10 @@ function LeftRail({
           </div>
         )}
         {canControl ? <div className="mt-2 grid grid-cols-2 gap-1">
-          <button className={button} disabled={busy} onClick={() => postAction("/api/control/authorize", { operator_id: "console", symbols: [symbol] })}>
+          <button className={button} disabled={busy} onClick={() => {
+            if (!window.confirm(`确认授权 ${shortSymbol(symbol)} 自动开仓？实盘仍会经过 readiness、AI 和风控，但授权后满足条件时可以下真实订单。`)) return;
+            void postAction("/api/control/authorize", { operator_id: "console", symbols: [symbol], confirm_admin_action: true });
+          }}>
             授权开仓
           </button>
           <button className={button} disabled={busy} onClick={() => postAction("/api/control/pause", { operator_id: "console", symbols: [symbol] })}>
@@ -974,10 +977,16 @@ function LeftRail({
 
       {canControl ? <Surface title={<><Power size={13} /> 执行控制</>}>
         <div className="grid grid-cols-1 gap-1">
-          <button className={danger} disabled={busy} onClick={() => postAction("/api/control/close-position", { operator_id: "console", symbol })}>
+          <button className={danger} disabled={busy} onClick={() => {
+            if (!window.confirm(`确认提交 ${shortSymbol(symbol)} 人工平仓请求？该操作会走真实交易网关和订单状态机。`)) return;
+            void postAction("/api/control/close-position", { operator_id: "console", symbol, confirm_admin_action: true });
+          }}>
             平仓 {shortSymbol(symbol)}
           </button>
-          <button className={danger} disabled={busy} onClick={() => postAction("/api/control/panic-close", { operator_id: "console", symbols: [] })}>
+          <button className={danger} disabled={busy} onClick={() => {
+            if (!window.confirm("确认暂停所有新开仓并提交一键全平？这是最高风险人工操作，只应在紧急接管时使用。")) return;
+            void postAction("/api/control/panic-close", { operator_id: "console", symbols: [], confirm_admin_action: true });
+          }}>
             紧急全平
           </button>
         </div>
@@ -1562,10 +1571,11 @@ function StrategyParameterEditor({
     setSubmitting(`${action}:${proposalId}`);
     setMessage("");
     try {
+      if (action === "approve" && !window.confirm(`确认审批参数提案 #${proposalId} 并写入运行配置？`)) return;
       await api<Record<string, unknown>>(`/api/proposals/${proposalId}/${action}`, {
         method: "POST",
         timeoutMs: 12000,
-        body: JSON.stringify({ operator_id: "console" }),
+        body: JSON.stringify({ operator_id: "console", confirm_admin_action: action === "approve" }),
       });
       setMessage(action === "approve" ? `提案 #${proposalId} 已审批生效。` : `提案 #${proposalId} 已拒绝，未修改运行参数。`);
       await loadProposals();
@@ -4066,10 +4076,16 @@ function ExecutionWorkspace({
         </Surface>
         {isAdmin ? <Surface title={<><Power size={13} /> 人工危险操作</>}>
           <div className="grid gap-2">
-            <button className={danger} disabled={busy} onClick={() => postAction("/api/control/close-position", { operator_id: "console", symbol })}>
+            <button className={danger} disabled={busy} onClick={() => {
+              if (!window.confirm(`确认提交 ${shortSymbol(symbol)} 人工平仓请求？该操作会走真实交易网关和订单状态机。`)) return;
+              void postAction("/api/control/close-position", { operator_id: "console", symbol, confirm_admin_action: true });
+            }}>
               平仓 {shortSymbol(symbol)}
             </button>
-            <button className={danger} disabled={busy} onClick={() => postAction("/api/control/panic-close", { operator_id: "console", symbols: [] })}>
+            <button className={danger} disabled={busy} onClick={() => {
+              if (!window.confirm("确认暂停所有新开仓并提交一键全平？这是最高风险人工操作，只应在紧急接管时使用。")) return;
+              void postAction("/api/control/panic-close", { operator_id: "console", symbols: [], confirm_admin_action: true });
+            }}>
               暂停开仓并一键全平
             </button>
             <div className="text-[11px] leading-5 text-[#94a3b8]">这里不提供手动开仓入口。真实开仓必须由策略信号、AI、本地风控和交易网关串联通过。</div>
@@ -4199,13 +4215,16 @@ function RuntimeModePanel({
         <button
           className={`${button} justify-center ${isLive ? "border-[#facc15] bg-[#241806] text-[#facc15]" : ""}`}
           disabled={busy || !isAdmin || isLive || isUnknown}
-          onClick={() => postAction("/api/control/runtime-mode", { operator_id: "console", dry_run: false })}
+          onClick={() => {
+            if (!window.confirm("确认切换到实盘真实网关？开启后满足策略信号、AI 和风控条件时会提交真实订单。")) return;
+            void postAction("/api/control/runtime-mode", { operator_id: "console", dry_run: false, confirm_admin_action: true });
+          }}
         >
           {isLive ? "当前实盘" : isUnknown ? "等待状态" : "开启实盘"}
         </button>
       </div>
       <div className="mt-2 text-[11px] leading-5 text-[#94a3b8]">
-        实盘/模拟切换不再使用 Trade PIN 或操作验证码。只有管理员账号可以切换；普通账号只能查看和调整自己账户的杠杆上限。
+        实盘/模拟切换不再使用 Trade PIN；开启实盘必须由管理员账号登录并完成二次确认。普通账号只能查看和调整自己账户的杠杆上限。
       </div>
       {isLive ? (
         <div className="mt-2 rounded-lg border border-[#854d0e] bg-[#241806] px-2 py-1.5 text-[11px] leading-5 text-[#facc15]">
@@ -4354,12 +4373,14 @@ function AccountSlotCard({
     setMaxLeverage(String(item?.max_leverage ?? 4));
   }, [item?.max_leverage, slot]);
   const submit = async () => {
+    if (!window.confirm(`确认更新 ${label} 的 Gate.io API Key/Secret？明文只写入云端运行密钥文件，错误密钥会影响该账户实盘路由。`)) return;
     await postAction("/api/execution/accounts/secret", {
       operator_id: "console",
       account_slot: slot,
       exchange: "gateio",
       api_key: apiKey,
       api_secret: apiSecret,
+      confirm_admin_action: true,
     });
     setApiKey("");
     setApiSecret("");

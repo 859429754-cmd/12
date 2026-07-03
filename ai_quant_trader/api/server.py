@@ -63,10 +63,12 @@ from scripts.ai_position_tier_audit import run_audit as run_ai_position_tier_aud
 class ConsoleAction(BaseModel):
     operator_id: str = Field(default="console")
     symbols: list[str] = Field(default_factory=list)
+    confirm_admin_action: bool = False
 
 
 class ProposalAction(BaseModel):
     operator_id: str = Field(default="console")
+    confirm_admin_action: bool = False
 
 
 class ParameterProposalRequest(BaseModel):
@@ -98,6 +100,7 @@ class TradeModeRequest(BaseModel):
 class RuntimeModeRequest(BaseModel):
     operator_id: str = Field(default="console")
     dry_run: bool
+    confirm_admin_action: bool = False
 
 
 class PositionReviewModeRequest(BaseModel):
@@ -123,6 +126,7 @@ class AccountSecretUpdateRequest(BaseModel):
     api_key: str = Field(min_length=8)
     api_secret: str = Field(min_length=8)
     exchange: Literal["gateio"] = "gateio"
+    confirm_admin_action: bool = False
 
 
 class RunOnceRequest(BaseModel):
@@ -203,6 +207,7 @@ class BacktestOptimizeRequest(BacktestRequest):
 class ClosePositionRequest(BaseModel):
     operator_id: str = Field(default="console")
     symbol: str | None = None
+    confirm_admin_action: bool = False
 
 
 class ConsoleContext:
@@ -1137,9 +1142,10 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         return {"items": _strategy_channels(ctx)}
 
     @app.post("/api/execution/accounts/secret")
-    async def update_execution_account_secret(body: AccountSecretUpdateRequest) -> dict[str, Any]:
+    async def update_execution_account_secret(body: AccountSecretUpdateRequest, request: Request) -> dict[str, Any]:
         ctx = _ctx(app)
         ctx.reload()
+        _require_confirmed_admin_action(request, body.confirm_admin_action, "update_exchange_api_secret")
         if ctx.store is None:
             raise HTTPException(status_code=500, detail="store_closed")
         account_slot = _canonical_account_slot(body.account_slot)
@@ -1584,9 +1590,10 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         return {"ok": True, "message": f"{body.symbol} 自定义策略回测完成，交易 {result['trade_count']} 笔。", "result": result}
 
     @app.post("/api/proposals/{proposal_id}/approve")
-    def approve_proposal(proposal_id: int, body: ProposalAction) -> dict[str, Any]:
+    def approve_proposal(proposal_id: int, body: ProposalAction, request: Request) -> dict[str, Any]:
         ctx = _ctx(app)
         ctx.reload()
+        _require_confirmed_admin_action(request, body.confirm_admin_action, "approve_parameter_proposal")
         try:
             message = ctx.control.approve_proposal(proposal_id, body.operator_id)
         except ValueError as exc:
@@ -1675,11 +1682,12 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         return {"ok": True, "message": f"已切换为{labels[body.mode]}。"}
 
     @app.post("/api/control/runtime-mode")
-    def set_runtime_mode(body: RuntimeModeRequest) -> dict[str, Any]:
+    def set_runtime_mode(body: RuntimeModeRequest, request: Request) -> dict[str, Any]:
         ctx = _ctx(app)
         ctx.reload()
         target_mode = "mock" if body.dry_run else "live"
         if target_mode == "live":
+            _require_confirmed_admin_action(request, body.confirm_admin_action, "enable_live_runtime")
             if not _account_slot_configured("trend"):
                 raise HTTPException(status_code=403, detail="趋势策略账号未配置 Gate API Key/Secret，禁止切换真实运行。")
 
@@ -1771,9 +1779,10 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         return {"ok": True, "message": ctx.control.disable_symbol_report(state, symbols, body.operator_id)}
 
     @app.post("/api/control/authorize")
-    def authorize(body: ConsoleAction) -> dict[str, Any]:
+    def authorize(body: ConsoleAction, request: Request) -> dict[str, Any]:
         ctx = _ctx(app)
         ctx.reload()
+        _require_confirmed_admin_action(request, body.confirm_admin_action, "authorize_opening")
         state = ctx.runtime_state()
         symbols = _validate_symbols(body.symbols, ctx.configured_symbols(), require_any=True)
         message = ctx.control.authorize_opening(state, symbols, body.operator_id, execution_mode_from_config(ctx.config) == "mock")
@@ -1804,9 +1813,10 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         return {"ok": True, "message": f"已完成 {', '.join(symbols)} 的即时AI行情判断和消息面抓取。"}
 
     @app.post("/api/control/close-position")
-    async def close_position(body: ClosePositionRequest) -> dict[str, Any]:
+    async def close_position(body: ClosePositionRequest, request: Request) -> dict[str, Any]:
         ctx = _ctx(app)
         ctx.reload()
+        _require_confirmed_admin_action(request, body.confirm_admin_action, "manual_close_position")
         symbols = [body.symbol] if body.symbol else ctx.configured_symbols()
         _validate_symbols(symbols, ctx.configured_symbols(), require_any=True)
         execution = create_exchange_gateway(ctx.config, account_slot="trend")
@@ -1831,9 +1841,10 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
             await execution.close()
 
     @app.post("/api/control/panic-close")
-    async def panic_close(body: ConsoleAction) -> dict[str, Any]:
+    async def panic_close(body: ConsoleAction, request: Request) -> dict[str, Any]:
         ctx = _ctx(app)
         ctx.reload()
+        _require_confirmed_admin_action(request, body.confirm_admin_action, "panic_close_all")
         state = ctx.runtime_state()
         ctx.control.pause(state, [], body.operator_id)
         execution = create_exchange_gateway(ctx.config, account_slot="trend")
@@ -3099,6 +3110,19 @@ def _record_security_event(request: Request, event: str, username: str, payload:
         )
     except Exception:
         return
+
+
+def _require_confirmed_admin_action(request: Request, confirmed: bool, action: str) -> dict[str, Any]:
+    user = _current_console_user(request)
+    username = str(user.get("username") or "unknown")
+    if str(user.get("role")) != "admin":
+        _record_security_event(request, "admin_action_denied", username, {"action": action, "reason": "not_admin"})
+        raise HTTPException(status_code=403, detail="permission_denied")
+    if not confirmed:
+        _record_security_event(request, "admin_action_confirmation_missing", username, {"action": action})
+        raise HTTPException(status_code=400, detail=f"敏感操作 {action} 必须显式二次确认。")
+    _record_security_event(request, "admin_action_confirmed", username, {"action": action})
+    return user
 
 
 def _suspicious_probe_reason(request: Request) -> str | None:
