@@ -26,3 +26,4 @@ def test_fail2ban_probe_filter_and_jail_are_present() -> None:
     assert "maxretry = 8" in jail_text
     assert "bantime = 3600" in jail_text
     assert "fail2ban-client status aiquant-nginx-probes" in script_text
+    assert "fail2ban_jail_not_ready:aiquant-nginx-probes" in script_text

@@ -23,4 +23,13 @@ install -m 0644 "$JAIL_SRC" /etc/fail2ban/jail.d/aiquant-nginx-probes.local
 
 systemctl enable fail2ban >/dev/null
 systemctl restart fail2ban
-fail2ban-client status aiquant-nginx-probes
+for _ in 1 2 3 4 5; do
+  if fail2ban-client status aiquant-nginx-probes; then
+    exit 0
+  fi
+  sleep 1
+done
+
+fail2ban-client status
+echo "fail2ban_jail_not_ready:aiquant-nginx-probes" >&2
+exit 4
