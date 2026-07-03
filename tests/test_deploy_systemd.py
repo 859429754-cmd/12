@@ -29,8 +29,8 @@ def test_systemd_units_use_restart_and_watchdogs() -> None:
     assert "main.py --order-status-worker" in order_status
     assert "PYTHONPATH=/root/ai-quant-trader/current" in order_status
     assert "current/scripts/http_readiness_check.py" in watchdog
-    assert "--mode health" in watchdog
-    assert "--mode readiness" not in watchdog
+    assert "--mode readiness" in watchdog
+    assert "--allow-warn" in watchdog
     assert "current/scripts/runtime_maintenance.py" in maintenance
     assert "--backup-keep" in maintenance
     assert "--restore-drill-dir" in maintenance
@@ -47,6 +47,8 @@ def test_release_deploy_script_uses_current_symlink_and_rollback() -> None:
     assert "previous_target" in script
     assert 'cd "$remote_dir"' in script
     assert "release_health_check_failed_rolled_back" in script
+    assert "release_readiness_check_failed_rolled_back" in script
+    assert "--mode readiness" in script
     assert "http_readiness_check.py" in script
 
 

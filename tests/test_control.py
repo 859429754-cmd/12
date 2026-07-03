@@ -1,9 +1,28 @@
 from __future__ import annotations
 
+import asyncio
+from typing import Any
+
 import yaml
 
 from ai_quant_trader.core.control import RuntimeControlManager
 from ai_quant_trader.storage.sqlite import SQLiteStore
+from ai_quant_trader.optimizer.proposals import StrategyOptimizer
+
+
+class FakeOptimizationBrain:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def propose_optimization(self, snapshot: dict[str, Any], days: int) -> dict[str, Any]:
+        self.calls.append({"snapshot": snapshot, "days": days})
+        return {
+            "summary": "保持参数，等待更多样本。",
+            "logic_suggestions": [],
+            "parameter_changes": [],
+            "expected_effect": "无",
+            "risk_note": "",
+        }
 
 
 def test_symbol_specific_parameter_proposal(tmp_path) -> None:
@@ -116,5 +135,96 @@ def test_runtime_state_ignores_deepseek_credential_rows(tmp_path) -> None:
         loaded = manager.load_state(["ETH/USDT:USDT"])
         assert loaded.opening_paused is False
         assert loaded.enabled_symbols == {"ETH/USDT:USDT"}
+    finally:
+        store.close()
+
+
+def test_ai_optimization_snapshot_is_compact_and_budget_tagged(tmp_path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "ai": {"call_budget_enabled": True, "max_calls_per_hour": 10, "max_calls_per_day": 100},
+                "strategy": {"trend": {"kc_length": 20, "kc_scalar": 2.8}},
+                "risk": {"min_confidence_to_trade": 0.55},
+            },
+            allow_unicode=True,
+        ),
+        encoding="utf-8",
+    )
+    store = SQLiteStore(str(tmp_path / "test.sqlite3"), str(tmp_path / "audit.jsonl"))
+    try:
+        for index in range(40):
+            store.insert(
+                "orders",
+                {
+                    "symbol": "ETH/USDT:USDT",
+                    "side": "buy",
+                    "amount": index + 1,
+                    "price": 1000 + index,
+                    "status": "closed",
+                    "raw": {"huge": "x" * 10000},
+                    "metadata": {"position_tier": "strong", "position_scale": 0.75, "account_slot": "trend"},
+                },
+                symbol="ETH/USDT:USDT",
+            )
+            store.insert(
+                "ai_decisions",
+                {
+                    "symbol": "ETH/USDT:USDT",
+                    "regime": "trend",
+                    "direction": "long",
+                    "confidence": 0.7,
+                    "position_tier": "strong",
+                    "position_scale": 0.75,
+                    "brief_reason": "a" * 1000,
+                    "full_prompt": "y" * 10000,
+                    "reason_codes": [f"code_{n}" for n in range(20)],
+                },
+                symbol="ETH/USDT:USDT",
+            )
+        brain = FakeOptimizationBrain()
+        optimizer = StrategyOptimizer(store, brain, RuntimeControlManager(store, str(config_path)))  # type: ignore[arg-type]
+        optimizer_id, proposal = asyncio.run(optimizer.create_ai_proposal(30, "admin"))
+        snapshot = brain.calls[0]["snapshot"]
+        budget = store.fetch_payloads("ai_call_budget_events", symbol="ai_optimization", limit=1)[0]["payload"]
+
+        assert optimizer_id > 0
+        assert proposal["source"] == "deepseek"
+        assert budget["call_type"] == "optimization_proposal"
+        assert budget["status"] == "success"
+        assert len(snapshot["recent_orders"]) == 30
+        assert len(snapshot["recent_ai_decisions"]) == 30
+        assert "raw" not in snapshot["recent_orders"][0]
+        assert "full_prompt" not in snapshot["recent_ai_decisions"][0]
+        assert len(snapshot["recent_ai_decisions"][0]["brief_reason"]) <= 240
+        assert len(snapshot["recent_ai_decisions"][0]["reason_codes"]) == 8
+    finally:
+        store.close()
+
+
+def test_ai_optimization_budget_block_avoids_deepseek_call(tmp_path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {"ai": {"call_budget_enabled": True, "max_calls_per_hour": 1, "max_calls_per_day": 100}},
+            allow_unicode=True,
+        ),
+        encoding="utf-8",
+    )
+    store = SQLiteStore(str(tmp_path / "test.sqlite3"), str(tmp_path / "audit.jsonl"))
+    try:
+        store.insert(
+            "ai_call_budget_events",
+            {"symbol": "ETH/USDT:USDT", "call_type": "trading_cycle", "status": "attempt", "reason": "reserved"},
+            symbol="ETH/USDT:USDT",
+        )
+        brain = FakeOptimizationBrain()
+        optimizer = StrategyOptimizer(store, brain, RuntimeControlManager(store, str(config_path)))  # type: ignore[arg-type]
+        _, proposal = asyncio.run(optimizer.create_ai_proposal(30, "admin"))
+
+        assert brain.calls == []
+        assert proposal["changes"] == {}
+        assert proposal["risk_note"] == "deepseek_budget_blocked:hourly_limit_exceeded"
     finally:
         store.close()

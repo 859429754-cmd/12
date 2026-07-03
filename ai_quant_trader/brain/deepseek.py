@@ -542,7 +542,13 @@ class DeepSeekBrain:
             "data": snapshot,
         }
         try:
-            data = await self._chat_json(prompt, timeout_seconds=90, retries=2)
+            data = await self._chat_json(
+                prompt,
+                timeout_seconds=45,
+                retries=1,
+                call_type="optimization_proposal",
+                symbol="ai_optimization",
+            )
             parsed = json.loads(data["choices"][0]["message"]["content"])
             return parsed if isinstance(parsed, dict) else self._fallback_optimization(snapshot, days, "invalid_json_shape")
         except Exception as exc:  # noqa: BLE001

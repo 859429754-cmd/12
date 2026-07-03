@@ -3,7 +3,9 @@ from __future__ import annotations
 from typing import Any
 
 from ai_quant_trader.brain.deepseek import DeepSeekBrain
+from ai_quant_trader.brain.budget import DeepSeekBudgetGuard
 from ai_quant_trader.core.control import PARAM_RULES, RuntimeControlManager
+from ai_quant_trader.core.models import AppConfig
 from ai_quant_trader.storage.sqlite import SQLiteStore
 
 
@@ -16,8 +18,14 @@ class StrategyOptimizer:
     async def create_ai_proposal(self, days: int, operator_id: str) -> tuple[int, dict[str, Any]]:
         days = 15 if days <= 20 else 30
         snapshot = self._build_snapshot(days)
-        suggestion = await self.brain.propose_optimization(snapshot, days)
         config = self.control.read_config()
+        budget = DeepSeekBudgetGuard.from_config(self.store, AppConfig.model_validate(config).ai)
+        reservation = budget.reserve(symbol="ai_optimization", call_type="optimization_proposal")
+        if reservation.allowed:
+            suggestion = await self.brain.propose_optimization(snapshot, days)
+            budget.record_success(reservation.row_id, detail="optimization_proposal_created")
+        else:
+            suggestion = self._fallback_suggestion(days, f"deepseek_budget_blocked:{reservation.reason}")
         changes: dict[str, dict[str, Any]] = {}
         for item in suggestion.get("parameter_changes", []) or []:
             path = item.get("path")
@@ -56,9 +64,62 @@ class StrategyOptimizer:
         return {
             "days": days,
             "order_count": len(orders),
-            "recent_orders": [row["payload"] for row in orders[:50]],
-            "recent_ai_decisions": [row["payload"] for row in ai_decisions[:80]],
+            "recent_orders": [self._compact_order(row.get("payload") or {}) for row in orders[:30]],
+            "recent_ai_decisions": [self._compact_ai_decision(row.get("payload") or {}) for row in ai_decisions[:30]],
             "recent_report_count": len(reports),
+        }
+
+    def _compact_order(self, payload: dict[str, Any]) -> dict[str, Any]:
+        metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+        return {
+            "symbol": payload.get("symbol"),
+            "side": payload.get("side"),
+            "amount": payload.get("amount"),
+            "price": payload.get("price"),
+            "status": payload.get("status"),
+            "dry_run": payload.get("dry_run"),
+            "created_at": payload.get("created_at"),
+            "reason": payload.get("reason") or metadata.get("reason"),
+            "account_slot": payload.get("account_slot") or metadata.get("account_slot"),
+            "position_tier": metadata.get("position_tier"),
+            "position_scale": metadata.get("position_scale"),
+        }
+
+    def _compact_ai_decision(self, payload: dict[str, Any]) -> dict[str, Any]:
+        keys = (
+            "symbol",
+            "regime",
+            "direction",
+            "confidence",
+            "action_suggestion",
+            "position_tier",
+            "position_scale",
+            "trend_confirmation_score",
+            "range_risk_score",
+            "news_risk_score",
+            "news_alignment",
+            "news_direction_alignment_score",
+            "orderflow_confirmation_score",
+            "dense_zone_breakout_score",
+            "pattern_confirmation_score",
+            "brief_reason",
+            "reason_codes",
+            "created_at",
+        )
+        compact = {key: payload.get(key) for key in keys if key in payload}
+        if isinstance(compact.get("reason_codes"), list):
+            compact["reason_codes"] = compact["reason_codes"][:8]
+        if isinstance(compact.get("brief_reason"), str):
+            compact["brief_reason"] = compact["brief_reason"][:240]
+        return compact
+
+    def _fallback_suggestion(self, days: int, reason: str) -> dict[str, Any]:
+        return {
+            "summary": f"最近{days}天优化提案被成本/预算闸拦截，暂不建议自动调整参数。",
+            "logic_suggestions": ["保持当前实盘参数，等预算窗口恢复后再做AI复盘。"],
+            "parameter_changes": [],
+            "expected_effect": "避免非交易必要调用挤占DeepSeek预算。",
+            "risk_note": reason,
         }
 
     def format_proposal(self, proposal_id: int, proposal: dict[str, Any]) -> str:

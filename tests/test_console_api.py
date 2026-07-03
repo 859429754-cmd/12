@@ -82,6 +82,7 @@ def test_auth_login_failure_lockout_and_security_headers(tmp_path: Path, monkeyp
 def test_console_ip_allowlist_blocks_untrusted_clients(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("CONSOLE_AUTH_DISABLED", "1")
     monkeypatch.setenv("CONSOLE_ALLOWED_IPS", "203.0.113.10,198.51.100.0/24")
+    monkeypatch.setenv("CONSOLE_TRUST_PROXY_HEADERS", "1")
     config_path = tmp_path / "config.yaml"
     write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl", symbols=["ETH/USDT:USDT"])
 
@@ -93,6 +94,38 @@ def test_console_ip_allowlist_blocks_untrusted_clients(tmp_path: Path, monkeypat
     assert blocked.status_code == 403
     assert blocked.json()["detail"] == "ip_not_allowed"
     assert allowed.status_code == 200
+
+
+def test_console_ip_allowlist_ignores_forwarded_for_without_trusted_proxy(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("CONSOLE_AUTH_DISABLED", "1")
+    monkeypatch.setenv("CONSOLE_ALLOWED_IPS", "198.51.100.0/24")
+    monkeypatch.delenv("CONSOLE_TRUST_PROXY_HEADERS", raising=False)
+    config_path = tmp_path / "config.yaml"
+    write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl", symbols=["ETH/USDT:USDT"])
+
+    client = TestClient(create_app(str(config_path)), client=("198.51.100.7", 12345))
+
+    allowed = client.get("/api/health", headers={"x-forwarded-for": "192.0.2.9"})
+
+    assert allowed.status_code == 200
+
+
+def test_prometheus_metrics_requires_console_auth_by_default(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("CONSOLE_AUTH_DISABLED", "0")
+    monkeypatch.setenv("CONSOLE_ADMIN_USER", "admin")
+    monkeypatch.setenv("CONSOLE_ADMIN_PASSWORD", "admin-secret")
+    monkeypatch.delenv("METRICS_PUBLIC_ENABLED", raising=False)
+    config_path = tmp_path / "config.yaml"
+    write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl", symbols=["ETH/USDT:USDT"])
+    client = TestClient(create_app(str(config_path)))
+
+    blocked = client.get("/metrics")
+    assert blocked.status_code == 401
+
+    assert client.post("/api/auth/login", json={"username": "admin", "password": "admin-secret"}).status_code == 200
+    allowed = client.get("/metrics")
+    assert allowed.status_code == 200
+    assert "ai_quant_readiness_status" in allowed.text
 
 
 def test_console_alert_user_is_admin_credential(monkeypatch) -> None:

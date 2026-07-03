@@ -2979,7 +2979,7 @@ def _login_lockout_config() -> tuple[int, timedelta]:
 
 def _login_client_ip(request: Request) -> str:
     forwarded = request.headers.get("x-forwarded-for", "")
-    if forwarded:
+    if forwarded and _env_flag_enabled("CONSOLE_TRUST_PROXY_HEADERS"):
         return forwarded.split(",", 1)[0].strip() or "unknown"
     if request.client is not None:
         return request.client.host or "unknown"
@@ -3087,6 +3087,8 @@ def _console_auth_configured() -> bool:
 
 def _console_auth_public_path(request: Request) -> bool:
     path = request.url.path
+    if path == "/metrics":
+        return _env_flag_enabled("METRICS_PUBLIC_ENABLED")
     if not path.startswith("/api/"):
         return True
     return path in {"/api/health", "/api/auth/session", "/api/auth/login", "/api/auth/logout"}
