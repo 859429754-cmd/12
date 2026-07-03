@@ -638,6 +638,8 @@ followers:
     app.follower_execution = MockExchangeGateway(str(tmp_path / "mock_follower.json"))
     app.order_lifecycle.gateway_mode = "mock"
     app.follower_order_lifecycle.gateway_mode = "mock"
+    app.trend_state = TrendStateStore(str(tmp_path / "state_trend.json"))
+    app.follower_trend_state = TrendStateStore(str(tmp_path / "state_trend_follower.json"))
 
     entry_signal = StrategySignal(
         symbol="ETH/USDT:USDT",

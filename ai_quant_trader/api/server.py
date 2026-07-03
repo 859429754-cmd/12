@@ -464,6 +464,12 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         ai_drift_status = str(((latest_ai_drift or {}).get("payload") or {}).get("status") or "warn")
         deepseek_status, deepseek_detail = _deepseek_readiness_status(deepseek_ready, latest_ai_decision, execution_mode)
         ai_budget_status, ai_budget_detail = _ai_budget_readiness_status(latest_ai_budget, execution_mode)
+        news_status, news_detail = _news_readiness_status(
+            latest_news,
+            execution_mode,
+            refresh_interval_minutes=ctx.config.news.refresh_interval_minutes,
+            max_age_hours=ctx.config.news.max_age_hours,
+        )
         worker_status, worker_detail = _worker_heartbeat_status(ctx, latest_worker_heartbeats)
         maintenance_status, maintenance_detail = _maintenance_status(latest_maintenance)
         console_auth_status, console_auth_detail = _console_auth_readiness_status(execution_mode)
@@ -532,8 +538,8 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
             _readiness_check(
                 "news",
                 "News cache",
-                "ok" if latest_news else "warn",
-                _freshness_message(latest_news, "Latest news cache"),
+                news_status,
+                news_detail,
                 age_minutes=_row_age_minutes(latest_news),
             ),
             _readiness_check(
@@ -2464,6 +2470,32 @@ def _freshness_message(row: dict[str, Any] | None, label: str) -> str:
     if age < 1:
         return f"{label} was updated less than 1 minute ago."
     return f"{label} was updated {age:.1f} minutes ago."
+
+
+def _news_readiness_status(
+    row: dict[str, Any] | None,
+    execution_mode: str,
+    *,
+    refresh_interval_minutes: int,
+    max_age_hours: int,
+) -> tuple[Literal["ok", "warn", "block"], str]:
+    if not row:
+        status: Literal["ok", "warn", "block"] = "block" if execution_mode == "live" else "warn"
+        return status, "Latest news cache is missing."
+
+    age = _row_age_minutes(row)
+    detail = _freshness_message(row, "Latest news cache")
+    if age is None:
+        return ("block" if execution_mode == "live" else "warn"), detail
+
+    warn_after = max(float(refresh_interval_minutes) * 2.0, 30.0)
+    block_after = max(float(max_age_hours) * 60.0, warn_after)
+    if age >= block_after:
+        status = "block" if execution_mode == "live" else "warn"
+        return status, f"{detail} This exceeds the hard news freshness limit of {block_after:.0f} minutes."
+    if age >= warn_after:
+        return "warn", f"{detail} This exceeds the soft news freshness window of {warn_after:.0f} minutes."
+    return "ok", detail
 
 
 async def _fetch_backtest_candles(market: MarketDataClient, body: BacktestRequest | CustomBacktestRequest):

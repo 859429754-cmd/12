@@ -1547,6 +1547,66 @@ def test_news_latest_auto_refreshes_when_cache_is_empty(tmp_path: Path, monkeypa
     assert "通胀" in body["timeline"][0]["summary"]
 
 
+def test_readiness_warns_when_news_cache_exceeds_soft_window(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    db_path = tmp_path / "trader.sqlite3"
+    audit_path = tmp_path / "audit.jsonl"
+    write_config(config_path, db_path, audit_path, ["ETH/USDT:USDT"])
+    store = SQLiteStore(str(db_path), str(audit_path))
+    row_id = store.insert(
+        "news_summaries",
+        {
+            "summary": "old but not hard-expired news",
+            "items": [{"title": "old headline", "source": "test"}],
+            "warnings": [],
+        },
+    )
+    stale_at = (datetime.now(UTC) - timedelta(minutes=90)).isoformat()
+    with store._lock:  # noqa: SLF001
+        store.conn.execute("UPDATE news_summaries SET created_at = ? WHERE id = ?", (stale_at, row_id))
+        store.conn.commit()
+
+    client = TestClient(create_app(str(config_path)))
+    body = client.get("/api/system/readiness").json()
+    news_check = next(item for item in body["checks"] if item["id"] == "news")
+
+    assert news_check["status"] == "warn"
+    assert news_check["age_minutes"] >= 89
+    assert any(alert["event"] == "news_stale" for alert in body["runtime_alerts"])
+
+
+def test_live_readiness_blocks_when_news_cache_exceeds_hard_window(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    db_path = tmp_path / "trader.sqlite3"
+    audit_path = tmp_path / "audit.jsonl"
+    write_config(config_path, db_path, audit_path, ["ETH/USDT:USDT"])
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace("  dry_run: true", "  dry_run: false\n  execution_mode: live"),
+        encoding="utf-8",
+    )
+    store = SQLiteStore(str(db_path), str(audit_path))
+    row_id = store.insert(
+        "news_summaries",
+        {
+            "summary": "hard-expired news",
+            "items": [{"title": "stale headline", "source": "test"}],
+            "warnings": [],
+        },
+    )
+    stale_at = (datetime.now(UTC) - timedelta(hours=7)).isoformat()
+    with store._lock:  # noqa: SLF001
+        store.conn.execute("UPDATE news_summaries SET created_at = ? WHERE id = ?", (stale_at, row_id))
+        store.conn.commit()
+
+    client = TestClient(create_app(str(config_path)))
+    body = client.get("/api/system/readiness").json()
+    news_check = next(item for item in body["checks"] if item["id"] == "news")
+
+    assert news_check["status"] == "block"
+    assert body["overall"] == "block"
+    assert any(alert["event"] == "news_stale" and alert["level"] == "critical" for alert in body["runtime_alerts"])
+
+
 def test_news_latest_compact_omits_heavy_rows(tmp_path: Path, monkeypatch) -> None:
     config_path = tmp_path / "config.yaml"
     write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl", ["ETH/USDT:USDT"])

@@ -209,6 +209,27 @@ risk:
 
 这条规则用于修复“交易所已平仓但本地趋势 state 未清理”造成的 `local_trend_state_without_exchange_position` 阻断，不允许绕过真实持仓确认。
 
+## 2026-07-04 交易链路审计与 freshness 闸门
+
+以后以本节为准：交易链路必须有可重复的本地审计脚本，不能只依赖人工看网页或聊天记忆。新增固定入口：
+
+```powershell
+python scripts/trading_chain_audit.py --mode core
+python scripts/trading_chain_audit.py --mode extended
+```
+
+审计脚本只运行确定性 pytest，不读取 `.env.runtime`，不提交真实订单。它覆盖策略信号到 AI/RiskManager、订单生命周期、原生止损、软件 ATR 止损、账户2跟随、加仓后净仓止损替换、unknown/cancel_failed 等关键链路。
+
+本轮新增两个 fail-closed 规则：
+
+- Live 对账已经处于 `reconciliation_required/degraded_readonly` 时，普通 `fetch_positions()` 成功只能证明“持仓接口本次可读”，不能把 `exchange_safety` 恢复成 `ok`。恢复开仓权限只能来自完整只读 reconciliation。
+- 新闻缓存按 freshness 分级：超过 `max(refresh_interval_minutes * 2, 30)` 分钟进入 `warn` 并生成 `news_stale` 告警；live 下超过 `news.max_age_hours` 进入 `block`。过旧新闻不能让控制台显示为正常，也不能作为实盘开仓的实时消息面依据。
+
+仍待补强但不影响本节修复结论：
+
+- Gate 原生 trigger stop 需要更强的交易所侧契约验证：持仓存在时，本地 stop id 之外还应校验 Gate 上真实 reduce-only 止损单的存在、方向、数量和触发价。
+- 账户2跟随失败应进入 fail-closed 人工处置模式；不能只写 `follower_executions` 后继续放开新开仓。
+
 ## 3. 多账户执行模型
 
 当前采用“一次策略信号 + 一次 DeepSeek 决策 + 多账户独立裁剪”：

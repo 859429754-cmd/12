@@ -425,6 +425,32 @@ async def test_live_position_fetch_failure_blocks_trading_cycle(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
+async def test_live_position_fetch_success_does_not_clear_failed_reconciliation(tmp_path: Path) -> None:
+    class HealthyPositionGateway:
+        async def fetch_positions(self, symbols):
+            return [PositionSnapshot(symbol=symbol, side=Side.FLAT, qty=0.0, mark_price=0.0) for symbol in symbols]
+
+        async def close(self):
+            return None
+
+    config_path = tmp_path / "config.yaml"
+    write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl", ["ETH/USDT:USDT"])
+    app = TradingApp(str(config_path))
+    app.config.runtime.execution_mode = "live"
+    app.config.runtime.dry_run = False
+    app.execution = HealthyPositionGateway()
+    app.exchange_safety.mark_failure("exchange_reconciliation_required", ["orphan_position_without_local_trend_state"])
+
+    positions = await app._fetch_positions(["ETH/USDT:USDT"])
+
+    assert positions[0].side == Side.FLAT
+    assert app.exchange_safety.state.can_open_new_entries is False
+    assert app.exchange_safety.state.reason == "exchange_reconciliation_required"
+    assert "orphan_position_without_local_trend_state" in app.exchange_safety.state.failures
+    await app.close()
+
+
+@pytest.mark.asyncio
 async def test_live_effective_equity_uses_exchange_balance(tmp_path: Path) -> None:
     class BalanceGateway:
         async def fetch_balance_summary(self):

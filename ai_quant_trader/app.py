@@ -1182,7 +1182,7 @@ class TradingApp:
     async def _fetch_positions(self, symbols: list[str]) -> list[PositionSnapshot]:
         try:
             positions = await self.execution.fetch_positions(symbols)
-            if execution_mode_from_config(self.config) == "live":
+            if execution_mode_from_config(self.config) == "live" and self.exchange_safety.state.can_open_new_entries:
                 self.exchange_safety.mark_success("live_positions_fetch_ok")
         except Exception as exc:  # noqa: BLE001
             if execution_mode_from_config(self.config) == "live":
