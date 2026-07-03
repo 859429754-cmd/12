@@ -142,6 +142,31 @@ def test_readiness_allows_loopback_watchdog_but_not_remote_without_auth(tmp_path
     assert remote_client.get("/api/system/readiness").status_code == 401
 
 
+def test_public_probe_requests_are_blocked_and_audited(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("CONSOLE_AUTH_DISABLED", "1")
+    config_path = tmp_path / "config.yaml"
+    db_path = tmp_path / "trader.sqlite3"
+    audit_path = tmp_path / "audit.jsonl"
+    write_config(config_path, db_path, audit_path, symbols=["ETH/USDT:USDT"])
+    client = TestClient(create_app(str(config_path)), client=("203.0.113.44", 12345))
+
+    normal = client.get("/")
+    probe = client.get("/?document=..%2F..%2F.env.production")
+
+    assert normal.status_code in {200, 404}
+    assert probe.status_code == 404
+    store = SQLiteStore(str(db_path), str(audit_path))
+    try:
+        latest = store.fetch_latest("security_events")
+    finally:
+        store.close()
+    assert latest is not None
+    payload = latest["payload"]
+    assert payload["event"] == "suspicious_probe_blocked"
+    assert payload["username"] == "anonymous"
+    assert payload["payload"]["reason"] in {"env_file_probe", "path_traversal_probe"}
+
+
 def test_console_alert_user_is_admin_credential(monkeypatch) -> None:
     monkeypatch.setenv("CONSOLE_ALERT_USER", "alert")
     monkeypatch.setenv("CONSOLE_ALERT_PASSWORD", "alert-secret")

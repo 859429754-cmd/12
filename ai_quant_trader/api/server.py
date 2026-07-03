@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Literal
+from urllib.parse import unquote_plus
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -278,6 +279,25 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
     async def console_ip_allowlist_guard(request: Request, call_next):
         if _console_ip_allowlist_enabled() and not _console_client_ip_allowed(request):
             response = JSONResponse({"detail": "ip_not_allowed"}, status_code=403)
+            _apply_security_headers(response)
+            return response
+        return await call_next(request)
+
+    @app.middleware("http")
+    async def console_probe_block_guard(request: Request, call_next):
+        probe = _suspicious_probe_reason(request)
+        if probe:
+            _record_security_event(
+                request,
+                "suspicious_probe_blocked",
+                "anonymous",
+                {
+                    "reason": probe,
+                    "path": request.url.path[:180],
+                    "query_length": len(request.url.query or ""),
+                },
+            )
+            response = JSONResponse({"detail": "not_found"}, status_code=404)
             _apply_security_headers(response)
             return response
         return await call_next(request)
@@ -3079,6 +3099,34 @@ def _record_security_event(request: Request, event: str, username: str, payload:
         )
     except Exception:
         return
+
+
+def _suspicious_probe_reason(request: Request) -> str | None:
+    path = request.url.path or "/"
+    raw_query = request.url.query or ""
+    combined = f"{path}?{raw_query}"
+    decoded = combined.lower()
+    for _ in range(2):
+        next_decoded = unquote_plus(decoded)
+        if next_decoded == decoded:
+            break
+        decoded = next_decoded
+    normalized = decoded.replace("\\", "/")
+    indicators = {
+        ".env": "env_file_probe",
+        "/.git": "git_metadata_probe",
+        "php://filter": "php_filter_probe",
+        "convert.base64-encode": "php_filter_probe",
+        "../": "path_traversal_probe",
+        "..%2f": "encoded_path_traversal_probe",
+        "wp-admin": "wordpress_probe",
+        "wp-login": "wordpress_probe",
+        "/etc/passwd": "passwd_probe",
+    }
+    for needle, reason in indicators.items():
+        if needle in normalized:
+            return reason
+    return None
 
 
 def _console_auth_configured() -> bool:
