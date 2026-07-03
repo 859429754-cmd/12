@@ -30,9 +30,37 @@ def fetch_json(
     return json.loads(body)
 
 
-def login_cookie(base_url: str, *, timeout: float) -> str | None:
+def auth_credentials() -> tuple[str | None, str | None]:
     username = os.getenv("CONSOLE_ADMIN_USER") or os.getenv("CONSOLE_BASIC_USER")
     password = os.getenv("CONSOLE_ADMIN_PASSWORD") or os.getenv("CONSOLE_BASIC_PASSWORD")
+    if username and password:
+        return username, password
+
+    raw_json = os.getenv("CONSOLE_USERS_JSON", "").strip()
+    if not raw_json:
+        return None, None
+    try:
+        loaded = json.loads(raw_json)
+    except json.JSONDecodeError:
+        return None, None
+    if isinstance(loaded, dict):
+        loaded = loaded.get("users", [])
+    if not isinstance(loaded, list):
+        return None, None
+    for item in loaded:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("role") or "").strip().lower() != "admin":
+            continue
+        candidate_user = str(item.get("username") or "").strip()
+        candidate_password = str(item.get("password") or "").strip()
+        if candidate_user and candidate_password:
+            return candidate_user, candidate_password
+    return None, None
+
+
+def login_cookie(base_url: str, *, timeout: float) -> str | None:
+    username, password = auth_credentials()
     if not username or not password:
         return None
     body = json.dumps({"username": username, "password": password}).encode("utf-8")
