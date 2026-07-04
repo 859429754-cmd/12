@@ -46,6 +46,7 @@ export type StatusResponse = {
   latest_ai_budget?: DbRow | null;
   latest_worker_heartbeats?: Record<string, DbRow | null>;
   latest_maintenance?: DbRow | null;
+  latest_release_run?: DbRow | null;
 };
 
 export type StrategyProfile = {
@@ -148,6 +149,7 @@ export type SystemReadiness = {
   latest_worker_heartbeats?: Record<string, DbRow | null>;
   worker_heartbeat_details?: WorkerHeartbeatDetail[];
   latest_maintenance?: DbRow | null;
+  latest_release_run?: DbRow | null;
   runtime_alerts?: RuntimeAlert[];
   runtime_alert_summary?: RuntimeAlertSummary;
   checks: ReadinessCheck[];

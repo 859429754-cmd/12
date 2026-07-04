@@ -1811,6 +1811,7 @@ function DashboardWorkspace({
   const reconciliationPayload = readiness?.latest_reconciliation?.payload || {};
   const dataHealthPayload = readiness?.latest_data_health?.payload || {};
   const orderLifecyclePayload = readiness?.latest_order_lifecycle?.payload || {};
+  const releasePayload = readiness?.latest_release_run?.payload || {};
   const unresolvedOrderLifecycle = readiness?.unresolved_order_lifecycle || [];
   const mode = runtimeStatus?.execution_mode || platform?.platform.execution_mode || readiness?.execution_mode || "mock";
   const openingAuthorized = runtimeStatus?.enabled_symbols?.includes(symbol) || Boolean(profile?.opening_authorized);
@@ -1923,7 +1924,7 @@ function DashboardWorkspace({
             <div className="grid gap-2 md:grid-cols-3">
               <HealthMini label="交易所对账" value={reconciliationStatusLabel(reconciliationPayload.status)} ok={reconciliationPayload.status === "ok"} />
               <HealthMini label="数据新鲜度" value={healthStatusLabel(dataHealthPayload.status)} ok={dataHealthPayload.status === "ok"} />
-              <HealthMini label="实盘准备" value={liveReady ? "就绪" : "待复核"} ok={Boolean(liveReady)} />
+              <HealthMini label="云端发布" value={releasePayload.release_id ? String(releasePayload.release_id) : "无记录"} ok={String(releasePayload.status || "") === "success"} />
             </div>
             {unresolvedOrderLifecycle.length ? (
               <div className="mt-3 rounded-xl border border-red-500/50 bg-red-950/30 p-3 text-xs">
@@ -2845,6 +2846,7 @@ function ReadinessPanel({ readiness }: { readiness: SystemReadiness | null }) {
   const newsRiskPayload = readiness?.latest_news_risk_review?.payload || {};
   const workerHeartbeats = readiness?.latest_worker_heartbeats || {};
   const workerHeartbeatDetails = readiness?.worker_heartbeat_details || [];
+  const releasePayload = readiness?.latest_release_run?.payload || {};
   const alertSummary = readiness?.runtime_alert_summary || { total: 0, critical: 0, warn: 0, status: "ok" };
   const runtimeAlerts = readiness?.runtime_alerts || [];
   const blockedReasons = (readiness?.checks || []).filter((check) => check.status === "block").map((check) => readinessCheckLabel(check.label));
@@ -2866,6 +2868,18 @@ function ReadinessPanel({ readiness }: { readiness: SystemReadiness | null }) {
         <Metric label="最近对账" value={reconciliationStatusLabel(reconciliationPayload.status)} tone={reconciliationPayload.status === "ok" ? "good" : "warn"} />
         <Metric label="数据新鲜度" value={healthStatusLabel(dataHealthPayload.status)} tone={dataHealthPayload.status === "ok" ? "good" : dataHealthPayload.status === "block" ? "bad" : "warn"} />
         <Metric label="AI 漂移" value={healthStatusLabel(aiDriftPayload.status)} tone={aiDriftPayload.status === "ok" ? "good" : aiDriftPayload.status === "block" ? "bad" : "warn"} />
+      </div>
+      <div className="mt-3 rounded-xl border border-[#263246] bg-[#101a2d] p-3 text-xs">
+        <div className="flex items-center justify-between gap-2">
+          <span className="font-semibold text-[#e5eefb]">云端发布证据</span>
+          <span className={`rounded-full px-2 py-1 text-[10px] ${releaseStatusTone(releasePayload.status)}`}>{releaseStatusLabel(releasePayload.status)}</span>
+        </div>
+        <div className="mt-2 grid gap-2 text-[11px] text-[#94a3b8] sm:grid-cols-2 xl:grid-cols-4">
+          <BoundaryLine label="Release" value={String(releasePayload.release_id || "--")} />
+          <BoundaryLine label="Health" value={releaseHealthLabel(releasePayload.health)} />
+          <BoundaryLine label="Readiness" value={releaseReadinessLabel(releasePayload.readiness)} />
+          <BoundaryLine label="记录时间" value={releasePayload.recorded_at ? formatTime(String(releasePayload.recorded_at)) : "--"} />
+        </div>
       </div>
       {alertSummary.total ? (
         <div className={`mt-3 rounded-xl border p-3 text-xs ${alertSummary.critical ? "border-red-500/50 bg-red-950/30" : "border-amber-500/50 bg-amber-950/30"}`}>
@@ -2963,6 +2977,33 @@ function healthStatusLabel(status: unknown) {
   if (value === "ok") return "正常";
   if (value === "block") return "阻断";
   return "警告";
+}
+
+function releaseStatusLabel(status: unknown) {
+  const value = String(status || "missing");
+  if (value === "success") return "已记录";
+  if (value === "missing") return "无记录";
+  return value;
+}
+
+function releaseStatusTone(status: unknown) {
+  const value = String(status || "missing");
+  if (value === "success") return "bg-[#052e1a] text-[#22c55e]";
+  return "bg-[#241806] text-[#facc15]";
+}
+
+function releaseHealthLabel(value: unknown) {
+  const payload = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  if (payload.ok === true) return "ok";
+  if (payload.ok === false) return "failed";
+  return "--";
+}
+
+function releaseReadinessLabel(value: unknown) {
+  const payload = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  const overall = payload.overall ? String(payload.overall) : "--";
+  const blocking = Array.isArray(payload.blocking) ? payload.blocking.length : 0;
+  return blocking ? `${overall} / ${blocking} block` : overall;
 }
 
 function exchangeSafetyReason(value: unknown) {

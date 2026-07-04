@@ -539,7 +539,21 @@ def test_console_status_strategy_and_workbench(tmp_path: Path, monkeypatch) -> N
     for key in ["GATEIO_API_KEY", "GATEIO_API_SECRET", "GATEIO_TREND_API_KEY", "GATEIO_TREND_API_SECRET"]:
         monkeypatch.setenv(key, "")
     config_path = tmp_path / "config.yaml"
-    write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl")
+    db_path = tmp_path / "trader.sqlite3"
+    audit_path = tmp_path / "audit.jsonl"
+    write_config(config_path, db_path, audit_path)
+    store = SQLiteStore(str(db_path), str(audit_path))
+    store.insert(
+        "release_runs",
+        {
+            "release_id": "abc123",
+            "status": "success",
+            "health": {"ok": True},
+            "readiness": {"overall": "ok", "blocking": []},
+        },
+        symbol="cloud_release",
+    )
+    store.close()
     client = TestClient(create_app(str(config_path)))
 
     status = client.get("/api/status")
@@ -613,6 +627,7 @@ def test_console_status_strategy_and_workbench(tmp_path: Path, monkeypatch) -> N
     assert "latest_position_review" in readiness_body
     assert "latest_ai_budget" in readiness_body
     assert "latest_worker_heartbeats" in readiness_body
+    assert readiness_body["latest_release_run"]["payload"]["release_id"] == "abc123"
     assert "worker_heartbeat_details" in readiness_body
     assert {item["worker"] for item in readiness_body["worker_heartbeat_details"]} >= {
         "trading_worker",

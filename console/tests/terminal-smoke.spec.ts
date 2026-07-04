@@ -182,6 +182,16 @@ async function mockConsoleApi(page: Page, options: { executionMode?: "mock" | "l
         latest_worker_heartbeats: {},
         worker_heartbeat_details: [],
         latest_maintenance: dbRow({ status: "ok" }, null),
+        latest_release_run: dbRow(
+          {
+            release_id: "61f9752",
+            status: "success",
+            health: { ok: true },
+            readiness: { overall: "ok", blocking: [] },
+            recorded_at: now,
+          },
+          "cloud_release",
+        ),
         runtime_alerts: [],
         runtime_alert_summary: { total: 0, critical: 0, warn: 0, status: "ok" },
         checks: [
@@ -299,6 +309,8 @@ test("账号登录后总览显示新闻、图表和未解决订单事故", async
   await expect(page.getByText("ETH 趋势策略").first()).toBeVisible();
   await expect(page.getByText("金十数据：美联储官员称风险资产波动上升").first()).toBeVisible();
   await expect(page.getByText("未解决订单生命周期事故").first()).toBeVisible();
+  await expect(page.getByText("云端发布").first()).toBeVisible();
+  await expect(page.getByText("61f9752").first()).toBeVisible();
   await expect(page.getByText(/trend \/ market \/ 未知 \/ client #12345678/).first()).toBeVisible();
   await page.getByRole("button", { name: "行情图表" }).click();
   await expect(page.locator("canvas").first()).toBeVisible();

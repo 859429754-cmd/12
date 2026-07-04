@@ -427,6 +427,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
             "latest_ai_budget": ctx.store.fetch_latest("ai_call_budget_events"),
             "latest_worker_heartbeats": _worker_heartbeat_rows(ctx),
             "latest_maintenance": ctx.store.fetch_latest("maintenance_runs"),
+            "latest_release_run": ctx.store.fetch_latest("release_runs", "cloud_release"),
         }
 
     @app.get("/api/system/readiness")
@@ -457,6 +458,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         latest_worker_heartbeats = _worker_heartbeat_rows(ctx)
         worker_heartbeat_details = _worker_heartbeat_details(ctx, latest_worker_heartbeats)
         latest_maintenance = ctx.store.fetch_latest("maintenance_runs")
+        latest_release_run = ctx.store.fetch_latest("release_runs", "cloud_release")
         exchange_payload = (latest_exchange or {}).get("payload") or {}
         exchange_status = str(exchange_payload.get("status") or ("ok" if execution_mode == "mock" else "blocked"))
         exchange_ok = execution_mode == "mock" or _latest_exchange_safety_allows_new_entries(ctx)
@@ -671,6 +673,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
             "latest_worker_heartbeats": latest_worker_heartbeats,
             "worker_heartbeat_details": worker_heartbeat_details,
             "latest_maintenance": latest_maintenance,
+            "latest_release_run": latest_release_run,
             "runtime_alerts": runtime_alerts,
             "runtime_alert_summary": runtime_alert_summary,
             "checks": checks,
