@@ -93,6 +93,7 @@ test.describe("真实云端控制台只读 smoke", () => {
     await page.getByRole("button", { name: "交易执行" }).click();
     await expect(page.getByText("最近订单").first()).toBeVisible();
     await expect(page.getByText("持仓闭K复评").first()).toBeVisible();
+    await expect(page.getByText("云端发布与回滚审计").first()).toBeVisible();
     await expect(page.getByText("账户 API 与杠杆槽位").first()).toBeVisible();
 
     await page.getByRole("button", { name: "AI 大脑" }).click();
@@ -103,6 +104,7 @@ test.describe("真实云端控制台只读 smoke", () => {
     await page.getByRole("button", { name: "交易" }).click();
     await expect(page.getByText("最近订单").first()).toBeVisible();
     await expect(page.getByText("持仓闭K复评").first()).toBeVisible();
+    await expect(page.getByText("云端发布与回滚审计").first()).toBeVisible();
     await page.getByRole("button", { name: "AI" }).click();
     await expect(page.getByText("AI 不可越权边界").first()).toBeVisible();
     await expect(page.getByText("最近 AI 决策").first()).toBeVisible();
