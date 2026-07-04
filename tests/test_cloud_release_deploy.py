@@ -112,6 +112,53 @@ def test_release_v2_can_run_console_e2e_before_remote_upload(monkeypatch, tmp_pa
     assert calls[1][1][0] == "scp"
 
 
+def test_release_v2_can_run_cloud_readonly_e2e_after_remote_release(monkeypatch, tmp_path) -> None:
+    import scripts.cloud_release_deploy_v2 as deploy_v2
+
+    key = tmp_path / "ssh-key"
+    key.write_text("placeholder", encoding="utf-8")
+    monkeypatch.setenv("AIQUANT_E2E_ACCOUNT1_PASSWORD", "account1-password")
+    monkeypatch.setenv("AIQUANT_E2E_ACCOUNT2_PASSWORD", "account2-password")
+    monkeypatch.setenv("AIQUANT_E2E_ADMIN_PASSWORD", "admin-password")
+    calls: list[tuple[str, list[str], dict[str, object]]] = []
+
+    def fake_subprocess_run(command, **kwargs):
+        calls.append(("subprocess", list(command), kwargs))
+        return SimpleNamespace(stdout="")
+
+    def fake_run(command: list[str]) -> None:
+        calls.append(("run", command, {}))
+
+    monkeypatch.setattr(deploy_v2.subprocess, "run", fake_subprocess_run)
+    monkeypatch.setattr(deploy_v2, "run", fake_run)
+    monkeypatch.setattr(deploy_v2, "build_source_tar", lambda target: target.write_text("src", encoding="utf-8"))
+    monkeypatch.setattr(deploy_v2, "build_console_dist_tar", lambda target: target.write_text("console", encoding="utf-8"))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "cloud_release_deploy_v2.py",
+            "--host",
+            "root@example",
+            "--key",
+            str(key),
+            "--remote-dir",
+            "/srv/ai-quant",
+            "--release-id",
+            "test-release",
+            "--cloud-console-readonly-e2e-url",
+            "https://example.test",
+        ],
+    )
+
+    assert deploy_v2.main() == 0
+
+    assert calls[-1][0] == "subprocess"
+    assert calls[-1][1][-2:] == ["run", "test:e2e:cloud"]
+    assert calls[-1][2]["env"]["CONSOLE_URL"] == "https://example.test"
+    assert calls[-2][0] == "run"
+
+
 def test_release_v2_full_local_validation_runs_all_gates_before_remote_upload(monkeypatch, tmp_path) -> None:
     import scripts.cloud_release_deploy_v2 as deploy_v2
 

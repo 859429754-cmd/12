@@ -34,6 +34,21 @@ def run_console_e2e() -> None:
     subprocess.run([npm, "run", "test:e2e"], cwd=REPO_ROOT / "console", check=True, env=playwright_env())
 
 
+def run_cloud_console_readonly_e2e(console_url: str) -> None:
+    npm = "npm.cmd" if os.name == "nt" else "npm"
+    env = playwright_env()
+    env["CONSOLE_URL"] = console_url
+    required = [
+        "AIQUANT_E2E_ACCOUNT1_PASSWORD",
+        "AIQUANT_E2E_ACCOUNT2_PASSWORD",
+        "AIQUANT_E2E_ADMIN_PASSWORD",
+    ]
+    missing = [name for name in required if not env.get(name)]
+    if missing:
+        raise RuntimeError(f"Missing cloud console E2E credential env var(s): {', '.join(missing)}")
+    subprocess.run([npm, "run", "test:e2e:cloud"], cwd=REPO_ROOT / "console", check=True, env=env)
+
+
 def run_full_local_validation() -> None:
     npm = "npm.cmd" if os.name == "nt" else "npm"
     subprocess.run(
@@ -140,6 +155,11 @@ def main() -> int:
         action="store_true",
         help="Run compileall, pytest, console build, public preflight, and console E2E before uploading.",
     )
+    parser.add_argument(
+        "--cloud-console-readonly-e2e-url",
+        default=None,
+        help="After a successful restart, run read-only Playwright smoke tests against this public console URL.",
+    )
     args = parser.parse_args()
 
     key = Path(args.key)
@@ -174,6 +194,8 @@ def main() -> int:
                 ),
             ]
         )
+    if args.cloud_console_readonly_e2e_url:
+        run_cloud_console_readonly_e2e(args.cloud_console_readonly_e2e_url)
     return 0
 
 
