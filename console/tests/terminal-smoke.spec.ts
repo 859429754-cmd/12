@@ -73,9 +73,11 @@ function dbRow(payload: Record<string, unknown>, symbol: string | null = "ETH/US
   return { id: 1, created_at: now, symbol, payload };
 }
 
-async function mockConsoleApi(page: Page) {
+async function mockConsoleApi(page: Page, options: { executionMode?: "mock" | "live" } = {}) {
   let activeUser: ConsoleUser | null = null;
   const requests: string[] = [];
+  const actionPosts: { path: string; body: Record<string, unknown> }[] = [];
+  const executionMode = options.executionMode || "live";
   page.on("request", (request) => requests.push(request.url()));
   await page.route("**/api/**", async (route) => {
     const request = route.request();
@@ -101,9 +103,9 @@ async function mockConsoleApi(page: Page) {
     if (path === "/api/status") {
       return json({
         mode: "running",
-        execution_mode: "live",
+        execution_mode: executionMode,
         opening_paused: false,
-        trade_mode: "live",
+        trade_mode: executionMode,
         enabled_symbols: ["ETH/USDT:USDT"],
         report_symbols: ["ETH/USDT:USDT"],
         risk: { max_total_leverage: 4, ai_sizing_policy: "hybrid_subjective_guarded_v2" },
@@ -124,7 +126,7 @@ async function mockConsoleApi(page: Page) {
     }
     if (path === "/api/platform/overview") {
       return json({
-        platform: { shell: "console", core: "ai_quant_trader", execution_mode: "live", trade_mode: "live", notification_channels: [] },
+        platform: { shell: "console", core: "ai_quant_trader", execution_mode: executionMode, trade_mode: executionMode, notification_channels: [] },
         workspaces: [
           { id: "dashboard", label: "总览" },
           { id: "market", label: "行情图表" },
@@ -138,8 +140,8 @@ async function mockConsoleApi(page: Page) {
           { symbol: "ETH/USDT:USDT", profile_name: "ETH 趋势策略", strategy_type: "trend", enabled: true, opening_authorized: true, report_enabled: true, live_ready: true, notes: "", params: {} },
         ],
         strategy_channels: [
-          { channel: "trend", label: "趋势", strategy_type: "trend", account_slot: "trend", account_label: "账号1", enabled: true, executable: true, status: "running", mode: "live", opening_paused: false, authorized_symbols: ["ETH/USDT:USDT"], configured_symbols: ["ETH/USDT:USDT"], account_configured: true, gateway_binding: "trend", live_ready: true, ai_sizing_tiers: [], notes: [] },
-          { channel: "follower", label: "跟随", strategy_type: "trend_follower", account_slot: "follower", account_label: "账号2", enabled: true, executable: true, status: "running", mode: "live", opening_paused: false, authorized_symbols: ["ETH/USDT:USDT"], configured_symbols: ["ETH/USDT:USDT"], account_configured: true, gateway_binding: "follower", live_ready: true, ai_sizing_tiers: [], notes: [] },
+          { channel: "trend", label: "趋势", strategy_type: "trend", account_slot: "trend", account_label: "账号1", enabled: true, executable: true, status: "running", mode: executionMode, opening_paused: false, authorized_symbols: ["ETH/USDT:USDT"], configured_symbols: ["ETH/USDT:USDT"], account_configured: true, gateway_binding: "trend", live_ready: true, ai_sizing_tiers: [], notes: [] },
+          { channel: "follower", label: "跟随", strategy_type: "trend_follower", account_slot: "follower", account_label: "账号2", enabled: true, executable: true, status: "running", mode: executionMode, opening_paused: false, authorized_symbols: ["ETH/USDT:USDT"], configured_symbols: ["ETH/USDT:USDT"], account_configured: true, gateway_binding: "follower", live_ready: true, ai_sizing_tiers: [], notes: [] },
         ],
         latest_backtest_runs: [],
         latest_ai_review_runs: [],
@@ -148,8 +150,8 @@ async function mockConsoleApi(page: Page) {
     if (path === "/api/system/readiness") {
       return json({
         overall: "block",
-        execution_mode: "live",
-        trade_mode: "live",
+        execution_mode: executionMode,
+        trade_mode: executionMode,
         configured_symbols: ["ETH/USDT:USDT"],
         enabled_symbols: ["ETH/USDT:USDT"],
         profile_count: 1,
@@ -255,9 +257,13 @@ async function mockConsoleApi(page: Page) {
     if (path === "/api/news/refresh") {
       return json({ ok: true, refreshed: true });
     }
+    if (path.startsWith("/api/control/")) {
+      actionPosts.push({ path, body: JSON.parse(request.postData() || "{}") });
+      return json({ ok: true, path });
+    }
     return json({ ok: true, items: [] });
   });
-  return { requests };
+  return { requests, actionPosts };
 }
 
 test("账号登录后总览显示新闻、图表和未解决订单事故", async ({ page }) => {
@@ -318,4 +324,40 @@ test("管理员开仓授权走账号权限而不是 Trade PIN", async ({ page })
   await expect(page.getByText("Trade PIN")).toHaveCount(0);
   await page.getByRole("button", { name: "授权开仓" }).first().click();
   await expect.poll(() => requests.some((url) => url.includes("/api/control/authorize"))).toBeTruthy();
+});
+
+test("普通账号不能切换实盘或提交管理控制", async ({ page }) => {
+  const { actionPosts } = await mockConsoleApi(page, { executionMode: "mock" });
+  await page.goto("/");
+  await page.getByPlaceholder("用户名").fill("account1");
+  await page.getByPlaceholder("密码").fill("yx");
+  await page.getByRole("button", { name: "登录" }).click();
+
+  await page.getByRole("button", { name: "交易执行" }).click();
+  await expect(page.getByText("当前账号只能查看交易链路和修改自己账户的杠杆上限").first()).toBeVisible();
+  await expect(page.getByText("当前权限：只读账户").first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "开启实盘" }).first()).toBeDisabled();
+  await expect(page.getByRole("button", { name: /平仓 ETH/ })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "暂停开仓并一键全平" })).toHaveCount(0);
+  expect(actionPosts).toEqual([]);
+});
+
+test("管理员切换实盘必须提交二次确认字段", async ({ page }) => {
+  const { actionPosts } = await mockConsoleApi(page, { executionMode: "mock" });
+  page.on("dialog", (dialog) => dialog.accept());
+
+  await page.goto("/");
+  await page.getByPlaceholder("用户名").fill("admin");
+  await page.getByPlaceholder("密码").fill("1234567");
+  await page.getByRole("button", { name: "登录" }).click();
+
+  await page.getByRole("button", { name: "交易执行" }).click();
+  await page.getByRole("button", { name: "开启实盘" }).first().click();
+
+  await expect.poll(() => actionPosts.some((item) => item.path === "/api/control/runtime-mode")).toBeTruthy();
+  expect(actionPosts.find((item) => item.path === "/api/control/runtime-mode")?.body).toMatchObject({
+    operator_id: "console",
+    dry_run: false,
+    confirm_admin_action: true,
+  });
 });
