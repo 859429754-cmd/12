@@ -91,7 +91,7 @@ async def test_reconciliation_allows_verified_reduce_only_native_stop(tmp_path: 
                 status="open",
                 dry_run=False,
                 exchange_order_id=exchange_order_id,
-                raw={"reduce_only": True},
+                raw={"reduce_only": True, "stop_loss_price": 1970.0},
             )
 
     trend_state = TrendStateStore(str(tmp_path / "state_trend.json"))
@@ -103,6 +103,64 @@ async def test_reconciliation_allows_verified_reduce_only_native_stop(tmp_path: 
     assert report.status == ExchangeConnectionStatus.OK
     assert report.native_stops_ok is True
     assert monitor.state.can_open_new_entries is True
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_blocks_when_native_stop_amount_does_not_cover_position(tmp_path: Path) -> None:
+    class UndersizedNativeStopGateway(HealthyGateway):
+        async def fetch_positions(self, symbols):
+            return [PositionSnapshot(symbol=symbols[0], side=Side.LONG, qty=0.25, mark_price=2000.0)]
+
+        async def fetch_order_by_exchange_id(self, symbol: str, exchange_order_id: str):
+            return OrderResult(
+                symbol=symbol,
+                side="sell",
+                amount=0.1,
+                price=1970.0,
+                status="open",
+                dry_run=False,
+                exchange_order_id=exchange_order_id,
+                raw={"reduce_only": True, "stop_loss_price": 1970.0},
+            )
+
+    trend_state = TrendStateStore(str(tmp_path / "state_trend.json"))
+    trend_state.record_entry("ETH/USDT:USDT", Side.LONG, 2000.0, 20.0, 1.5, native_stop_order_id="stop_too_small")
+    monitor = ExchangeSafetyMonitor(stale_after_seconds=300)
+
+    report = await monitor.reconcile(UndersizedNativeStopGateway(), ["ETH/USDT:USDT"], trend_state, live=True)
+
+    assert report.status == ExchangeConnectionStatus.RECONCILIATION_REQUIRED
+    assert report.native_stops_ok is False
+    assert any("native_stop_order_amount_under_covers_position" in issue for issue in report.issues)
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_blocks_when_native_stop_trigger_price_drifted(tmp_path: Path) -> None:
+    class DriftedNativeStopGateway(HealthyGateway):
+        async def fetch_positions(self, symbols):
+            return [PositionSnapshot(symbol=symbols[0], side=Side.SHORT, qty=0.2, mark_price=2000.0)]
+
+        async def fetch_order_by_exchange_id(self, symbol: str, exchange_order_id: str):
+            return OrderResult(
+                symbol=symbol,
+                side="buy",
+                amount=0.2,
+                price=2050.0,
+                status="open",
+                dry_run=False,
+                exchange_order_id=exchange_order_id,
+                raw={"reduceOnly": True, "stopLossPrice": 2050.0},
+            )
+
+    trend_state = TrendStateStore(str(tmp_path / "state_trend.json"))
+    trend_state.record_entry("ETH/USDT:USDT", Side.SHORT, 2000.0, 20.0, 1.5, native_stop_order_id="stop_drifted")
+    monitor = ExchangeSafetyMonitor(stale_after_seconds=300)
+
+    report = await monitor.reconcile(DriftedNativeStopGateway(), ["ETH/USDT:USDT"], trend_state, live=True)
+
+    assert report.status == ExchangeConnectionStatus.RECONCILIATION_REQUIRED
+    assert report.native_stops_ok is False
+    assert any("native_stop_order_trigger_price_mismatch" in issue for issue in report.issues)
 
 
 @pytest.mark.asyncio

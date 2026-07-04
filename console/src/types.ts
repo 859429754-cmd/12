@@ -113,6 +113,19 @@ export type ReadinessCheck = {
   age_minutes?: number | null;
 };
 
+export type OrderLifecycleIssue = {
+  id?: number | string | null;
+  created_at?: string | null;
+  symbol?: string | null;
+  client_order_id?: string | null;
+  exchange_order_id?: string | null;
+  status?: string | null;
+  order_type?: string | null;
+  account_slot?: string | null;
+  reason?: string | null;
+  error_type?: string | null;
+};
+
 export type SystemReadiness = {
   overall: "ok" | "warn" | "block";
   execution_mode: "mock" | "live";
@@ -127,6 +140,7 @@ export type SystemReadiness = {
   exchange_safety?: DbRow | null;
   latest_reconciliation?: DbRow | null;
   latest_order_lifecycle?: DbRow | null;
+  unresolved_order_lifecycle?: OrderLifecycleIssue[];
   latest_data_health?: DbRow | null;
   latest_ai_drift?: DbRow | null;
   latest_news_risk_review?: DbRow | null;

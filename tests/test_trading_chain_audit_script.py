@@ -18,6 +18,8 @@ def test_trading_chain_audit_core_cases_cover_required_links() -> None:
     assert "unresolved_order_lifecycle_blocks_readiness" in case_ids
     assert "native_stop_unknown_requires_manual_gate" in case_ids
     assert "native_stop_exchange_verification_required" in case_ids
+    assert "native_stop_amount_covers_net_position" in case_ids
+    assert "native_stop_trigger_price_matches_atr_stop" in case_ids
     assert "stale_trend_state_repair_requires_terminal_stop" in case_ids
 
     extended_ids = {case.id for case in trading_chain_audit.selected_cases("extended")}

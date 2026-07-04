@@ -1811,6 +1811,7 @@ function DashboardWorkspace({
   const reconciliationPayload = readiness?.latest_reconciliation?.payload || {};
   const dataHealthPayload = readiness?.latest_data_health?.payload || {};
   const orderLifecyclePayload = readiness?.latest_order_lifecycle?.payload || {};
+  const unresolvedOrderLifecycle = readiness?.unresolved_order_lifecycle || [];
   const mode = runtimeStatus?.execution_mode || platform?.platform.execution_mode || readiness?.execution_mode || "mock";
   const openingAuthorized = runtimeStatus?.enabled_symbols?.includes(symbol) || Boolean(profile?.opening_authorized);
   const liveReady = profile?.live_ready || readiness?.overall === "ok";
@@ -1924,6 +1925,21 @@ function DashboardWorkspace({
               <HealthMini label="数据新鲜度" value={healthStatusLabel(dataHealthPayload.status)} ok={dataHealthPayload.status === "ok"} />
               <HealthMini label="实盘准备" value={liveReady ? "就绪" : "待复核"} ok={Boolean(liveReady)} />
             </div>
+            {unresolvedOrderLifecycle.length ? (
+              <div className="mt-3 rounded-xl border border-red-500/50 bg-red-950/30 p-3 text-xs">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <span className="font-semibold text-[#fecdd3]">未解决订单生命周期事故</span>
+                  <span className="rounded-full bg-red-500/20 px-2 py-1 text-[10px] text-[#fecdd3]">{unresolvedOrderLifecycle.length} 项</span>
+                </div>
+                <div className="grid gap-2">
+                  {unresolvedOrderLifecycle.slice(0, 3).map((issue, index) => (
+                    <div key={`${issue.client_order_id || issue.id || index}`} className="rounded-lg border border-red-500/30 bg-[#220b12] px-3 py-2 text-[#fecdd3]">
+                      {orderLifecycleIssueSummary(issue)}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
             <div className="mt-3 grid gap-2">
               {blockedChecks.length || warnChecks.length ? (
                 [...blockedChecks, ...warnChecks].slice(0, 4).map((check) => (
@@ -2823,6 +2839,7 @@ function ReadinessPanel({ readiness }: { readiness: SystemReadiness | null }) {
   const exchangePayload = readiness?.exchange_safety?.payload || {};
   const reconciliationPayload = readiness?.latest_reconciliation?.payload || {};
   const orderLifecyclePayload = readiness?.latest_order_lifecycle?.payload || {};
+  const unresolvedOrderLifecycle = readiness?.unresolved_order_lifecycle || [];
   const dataHealthPayload = readiness?.latest_data_health?.payload || {};
   const aiDriftPayload = readiness?.latest_ai_drift?.payload || {};
   const newsRiskPayload = readiness?.latest_news_risk_review?.payload || {};
@@ -2880,6 +2897,21 @@ function ReadinessPanel({ readiness }: { readiness: SystemReadiness | null }) {
           <div className="mt-1 leading-relaxed">{newsRiskSummary(newsRiskPayload)}</div>
         </div>
       </div>
+      {unresolvedOrderLifecycle.length ? (
+        <div className="mt-3 rounded-xl border border-red-500/50 bg-red-950/30 p-3 text-xs">
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-semibold text-[#fecdd3]">未解决订单生命周期事故</span>
+            <span className="rounded-full bg-red-500/20 px-2 py-1 text-[10px] text-[#fecdd3]">{unresolvedOrderLifecycle.length} 项</span>
+          </div>
+          <div className="mt-2 grid gap-2 md:grid-cols-2">
+            {unresolvedOrderLifecycle.slice(0, 6).map((issue, index) => (
+              <div key={`${issue.client_order_id || issue.id || index}`} className="rounded-lg border border-red-500/30 bg-[#220b12] px-3 py-2 text-[#fecdd3]">
+                {orderLifecycleIssueSummary(issue)}
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
       <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-4">
         {(workerHeartbeatDetails.length ? workerHeartbeatDetails : fallbackWorkerHeartbeatDetails(workerHeartbeats)).map((worker) => (
           <div key={worker.worker} className="rounded-xl border border-[#263246] bg-[#0b1220] p-3 text-xs">
@@ -2974,6 +3006,17 @@ function orderLifecycleSummary(payload: Record<string, unknown>) {
     blocked: "阻断",
   };
   return `${labels[status] || status}${clientOrderId ? ` #${clientOrderId}` : ""}`;
+}
+
+function orderLifecycleIssueSummary(issue: Record<string, unknown>) {
+  const status = String(issue.status || "--");
+  const orderType = String(issue.order_type || "unknown");
+  const accountSlot = String(issue.account_slot || "default");
+  const clientOrderId = String(issue.client_order_id || "").slice(-8);
+  const exchangeOrderId = String(issue.exchange_order_id || "").slice(-8);
+  const reason = String(issue.reason || issue.error_type || "需要人工复核后解除");
+  const idPart = clientOrderId ? `client #${clientOrderId}` : exchangeOrderId ? `exchange #${exchangeOrderId}` : "无订单号";
+  return `${accountSlot} / ${orderType} / ${orderStatusLabel(status)} / ${idPart}：${reason}`;
 }
 
 function workerHeartbeatSummary(rows: Record<string, DbRow | null>) {

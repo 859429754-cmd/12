@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from ai_quant_trader.core.models import ExchangeConnectionStatus, ExchangeSafetyState, PositionSnapshot, ReconciliationReport, Side
-from ai_quant_trader.strategy.trend_state import TrendStateStore
+from ai_quant_trader.strategy.trend_state import TrendPositionState, TrendStateStore
 
 
 class ExchangeSafetyMonitor:
@@ -122,7 +122,7 @@ class ExchangeSafetyMonitor:
                         issues.append(f"native_stop_state_missing:{position.symbol}")
                         native_stops_ok = False
                     else:
-                        stop_issues = await self._verify_native_stop_order(gateway, position, local.native_stop_order_id)
+                        stop_issues = await self._verify_native_stop_order(gateway, position, local, local.native_stop_order_id)
                         if stop_issues:
                             issues.extend(stop_issues)
                             native_stops_ok = False
@@ -167,6 +167,7 @@ class ExchangeSafetyMonitor:
         self,
         gateway: Any,
         position: PositionSnapshot,
+        local: TrendPositionState,
         native_stop_order_id: str,
     ) -> list[str]:
         fetcher = getattr(gateway, "fetch_order_by_exchange_id", None)
@@ -187,4 +188,55 @@ class ExchangeSafetyMonitor:
         actual_side = str(getattr(order, "side", "") or raw.get("side") or "").lower()
         if actual_side and actual_side != expected_side:
             issues.append(f"native_stop_order_side_mismatch:{position.symbol}:{actual_side}:{expected_side}")
+        order_amount = self._float_or_none(getattr(order, "amount", None) or raw.get("amount") or raw.get("size"))
+        required_amount = abs(float(position.qty))
+        amount_tolerance = max(required_amount * 0.001, 1e-9)
+        if order_amount is None or order_amount <= 0:
+            issues.append(f"native_stop_order_amount_missing:{position.symbol}")
+        elif order_amount + amount_tolerance < required_amount:
+            issues.append(
+                f"native_stop_order_amount_under_covers_position:{position.symbol}:{order_amount:.12g}:{required_amount:.12g}"
+            )
+        expected_trigger_price = float(local.stop_loss_price)
+        actual_trigger_price = self._native_stop_trigger_price(order)
+        price_tolerance = max(abs(expected_trigger_price) * 0.0005, 0.1)
+        if actual_trigger_price is None or actual_trigger_price <= 0:
+            issues.append(f"native_stop_order_trigger_price_missing:{position.symbol}")
+        elif abs(actual_trigger_price - expected_trigger_price) > price_tolerance:
+            issues.append(
+                f"native_stop_order_trigger_price_mismatch:{position.symbol}:{actual_trigger_price:.12g}:{expected_trigger_price:.12g}"
+            )
         return issues
+
+    def _native_stop_trigger_price(self, order: Any) -> float | None:
+        raw = getattr(order, "raw", {}) or {}
+        info = raw.get("info") if isinstance(raw.get("info"), dict) else {}
+        candidates = [
+            raw.get("stop_loss_price"),
+            raw.get("stopLossPrice"),
+            raw.get("stop_price"),
+            raw.get("stopPrice"),
+            raw.get("trigger_price"),
+            raw.get("triggerPrice"),
+            raw.get("trigger"),
+            info.get("stop_loss_price"),
+            info.get("stopLossPrice"),
+            info.get("stop_price"),
+            info.get("stopPrice"),
+            info.get("trigger_price"),
+            info.get("triggerPrice"),
+            info.get("trigger"),
+            getattr(order, "price", None),
+        ]
+        for value in candidates:
+            parsed = self._float_or_none(value)
+            if parsed is not None and parsed > 0:
+                return parsed
+        return None
+
+    @staticmethod
+    def _float_or_none(value: Any) -> float | None:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None

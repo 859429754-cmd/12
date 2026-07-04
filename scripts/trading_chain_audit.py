@@ -82,6 +82,16 @@ CORE_CASES: tuple[AuditCase, ...] = (
         requirement="Live reconciliation blocks when an open position has a local native stop id that cannot be verified on the exchange.",
     ),
     AuditCase(
+        id="native_stop_amount_covers_net_position",
+        target="tests/test_execution_safety.py::test_reconciliation_blocks_when_native_stop_amount_does_not_cover_position",
+        requirement="Live reconciliation blocks when the verified native stop amount does not cover the current Gate net position.",
+    ),
+    AuditCase(
+        id="native_stop_trigger_price_matches_atr_stop",
+        target="tests/test_execution_safety.py::test_reconciliation_blocks_when_native_stop_trigger_price_drifted",
+        requirement="Live reconciliation blocks when the verified native stop trigger price drifts from the local fixed ATR stop price.",
+    ),
+    AuditCase(
         id="stale_trend_state_repair_requires_terminal_stop",
         target="tests/test_gateway_runtime.py::test_terminal_stop_with_flat_exchange_position_repairs_stale_trend_state",
         requirement="Stale local trend state is repaired only after terminal stop status and flat exchange position are confirmed.",

@@ -226,11 +226,7 @@ python scripts/trading_chain_audit.py --mode extended
 - 新闻缓存按 freshness 分级：超过 `max(refresh_interval_minutes * 2, 30)` 分钟进入 `warn` 并生成 `news_stale` 告警；live 下超过 `news.max_age_hours` 进入 `block`。过旧新闻不能让控制台显示为正常，也不能作为实盘开仓的实时消息面依据。
 - `order_lifecycle` readiness 不能只看最新一条事件。系统必须按 `client_order_id` 检查每个订单的最新状态；任何仍未解决的 `unknown`、`cancel_failed`、或 stop-loss `rejected/failed` 都必须进入 readiness 告警，live 下阻断新开仓。
 - 账户2/follower 是“跟随账户”，不是可忽略的展示层。live 下 follower 开仓、平仓或订单状态刷新失败，必须写入 `exchange_health` 并 fail-closed，直到人工确认账户2状态。
-- Gate 仍有持仓且本地存在 `native_stop_order_id` 时，reconciliation 必须通过 `fetch_order_by_exchange_id()` 校验交易所侧止损单存在、方向与持仓相反且 reduce-only。查不到、查询失败、非 reduce-only 或方向不匹配都必须进入 `reconciliation_required`。
-
-仍待补强但不影响本节修复结论：
-
-- Gate 原生 trigger stop 仍需要更强数量/触发价契约验证：当前已校验存在、reduce-only 与方向，下一步应校验数量覆盖真实净仓、触发价等于当前趋势状态的固定 ATR 止损价。
+- Gate 仍有持仓且本地存在 `native_stop_order_id` 时，reconciliation 必须通过 `fetch_order_by_exchange_id()` 校验交易所侧止损单存在、方向与持仓相反、reduce-only、数量覆盖当前 Gate 净持仓、触发价匹配本地固定 ATR 止损价。查不到、查询失败、非 reduce-only、方向不匹配、数量不足或触发价漂移都必须进入 `reconciliation_required`。
 
 ## 3. 多账户执行模型
 
