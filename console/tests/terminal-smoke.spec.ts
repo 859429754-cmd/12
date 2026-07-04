@@ -282,7 +282,10 @@ test("账号登录后总览显示新闻、图表和未解决订单事故", async
   await expect(page.getByText(/trend \/ market \/ 未知 \/ client #12345678/).first()).toBeVisible();
   await page.getByRole("button", { name: "行情图表" }).click();
   await expect(page.locator("canvas").first()).toBeVisible();
+  await page.getByRole("button", { name: "总览" }).click();
+  await page.getByRole("button", { name: "刷新" }).first().click();
   await expect.poll(() => requests.some((url) => url.includes("/api/account/balance?account_slot=trend"))).toBeTruthy();
+  await expect.poll(() => requests.some((url) => url.includes("/api/news/refresh"))).toBeTruthy();
   expect(consoleErrors.filter((item) => !item.includes("401 (Unauthorized)"))).toEqual([]);
 });
 
@@ -298,4 +301,21 @@ test("账号2登录后只读取 follower 余额和持仓", async ({ page }) => {
   await expect(page.getByText("ETH 空仓").first()).toBeVisible();
   await expect.poll(() => requests.some((url) => url.includes("/api/account/balance?account_slot=follower"))).toBeTruthy();
   await expect.poll(() => requests.some((url) => url.includes("/api/positions?limit=50&account_slot=follower"))).toBeTruthy();
+  await expect.poll(() => requests.some((url) => url.includes("/api/order-lifecycle?limit=120") && url.includes("account_slot=follower"))).toBeTruthy();
+  expect(requests.some((url) => url.includes("/api/account/balance?account_slot=trend"))).toBeFalsy();
+});
+
+test("管理员开仓授权走账号权限而不是 Trade PIN", async ({ page }) => {
+  const { requests } = await mockConsoleApi(page);
+  page.on("dialog", (dialog) => dialog.accept());
+
+  await page.goto("/");
+  await page.getByPlaceholder("用户名").fill("admin");
+  await page.getByPlaceholder("密码").fill("1234567");
+  await page.getByRole("button", { name: "登录" }).click();
+
+  await expect(page.getByText("管理员").first()).toBeVisible();
+  await expect(page.getByText("Trade PIN")).toHaveCount(0);
+  await page.getByRole("button", { name: "授权开仓" }).first().click();
+  await expect.poll(() => requests.some((url) => url.includes("/api/control/authorize"))).toBeTruthy();
 });
