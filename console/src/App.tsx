@@ -1809,6 +1809,7 @@ function DashboardWorkspace({
   const dataHealthPayload = readiness?.latest_data_health?.payload || {};
   const orderLifecyclePayload = readiness?.latest_order_lifecycle?.payload || {};
   const releasePayload = readiness?.latest_release_run?.payload || {};
+  const releaseRuns = readiness?.release_runs || [];
   const unresolvedOrderLifecycle = readiness?.unresolved_order_lifecycle || [];
   const mode = runtimeStatus?.execution_mode || platform?.platform.execution_mode || readiness?.execution_mode || "mock";
   const openingAuthorized = runtimeStatus?.enabled_symbols?.includes(symbol) || Boolean(profile?.opening_authorized);
@@ -1922,6 +1923,21 @@ function DashboardWorkspace({
               <HealthMini label="交易所对账" value={reconciliationStatusLabel(reconciliationPayload.status)} ok={reconciliationPayload.status === "ok"} />
               <HealthMini label="数据新鲜度" value={healthStatusLabel(dataHealthPayload.status)} ok={dataHealthPayload.status === "ok"} />
               <HealthMini label="云端发布" value={releasePayload.release_id ? String(releasePayload.release_id) : "无记录"} ok={String(releasePayload.status || "") === "success"} />
+            </div>
+            <div className="mt-3 rounded-xl border border-[#263246] bg-[#101a2d] p-3 text-xs">
+              <div className="mb-2 font-semibold text-[#e5eefb]">最近发布历史</div>
+              <div className="grid gap-2">
+                {releaseRuns.length ? releaseRuns.slice(0, 3).map((row, index) => {
+                  const payload = row.payload || {};
+                  return (
+                    <BoundaryLine
+                      key={`${row.id}-${String(payload.release_id || row.symbol || "release")}-${index}`}
+                      label={String(payload.release_id || row.symbol || "--")}
+                      value={`${releaseStatusLabel(payload.status)} / ${releaseReadinessLabel(payload.readiness)}`}
+                    />
+                  );
+                }) : <BoundaryLine label="发布历史" value="暂无记录" />}
+              </div>
             </div>
             {unresolvedOrderLifecycle.length ? (
               <div className="mt-3 rounded-xl border border-red-500/50 bg-red-950/30 p-3 text-xs">
@@ -2844,6 +2860,7 @@ function ReadinessPanel({ readiness }: { readiness: SystemReadiness | null }) {
   const workerHeartbeats = readiness?.latest_worker_heartbeats || {};
   const workerHeartbeatDetails = readiness?.worker_heartbeat_details || [];
   const releasePayload = readiness?.latest_release_run?.payload || {};
+  const releaseRuns = readiness?.release_runs || [];
   const alertSummary = readiness?.runtime_alert_summary || { total: 0, critical: 0, warn: 0, status: "ok" };
   const runtimeAlerts = readiness?.runtime_alerts || [];
   const blockedReasons = (readiness?.checks || []).filter((check) => check.status === "block").map((check) => readinessCheckLabel(check.label));
@@ -2876,6 +2893,24 @@ function ReadinessPanel({ readiness }: { readiness: SystemReadiness | null }) {
           <BoundaryLine label="Health" value={releaseHealthLabel(releasePayload.health)} />
           <BoundaryLine label="Readiness" value={releaseReadinessLabel(releasePayload.readiness)} />
           <BoundaryLine label="记录时间" value={releasePayload.recorded_at ? formatTime(String(releasePayload.recorded_at)) : "--"} />
+        </div>
+        <div className="mt-3 border-t border-[#263246] pt-3">
+          <div className="mb-2 text-[11px] font-semibold text-[#cbd5e1]">最近发布历史</div>
+          <div className="grid gap-2">
+            {releaseRuns.length ? releaseRuns.slice(0, 5).map((row, index) => {
+              const payload = row.payload || {};
+              return (
+                <div key={`${row.id}-${String(payload.release_id || row.symbol || "release")}-${index}`} className="grid gap-2 rounded-lg border border-[#263246] bg-[#0b1220] px-3 py-2 text-[11px] text-[#94a3b8] sm:grid-cols-[1.1fr_0.8fr_0.9fr_1fr]">
+                  <span className="truncate font-semibold text-[#e5eefb]">{String(payload.release_id || row.symbol || "--")}</span>
+                  <span className={`w-fit rounded-full px-2 py-0.5 ${releaseStatusTone(payload.status)}`}>{releaseStatusLabel(payload.status)}</span>
+                  <span>{releaseReadinessLabel(payload.readiness)}</span>
+                  <span className="truncate">{payload.recorded_at ? formatTime(String(payload.recorded_at)) : formatTime(row.created_at)}</span>
+                </div>
+              );
+            }) : (
+              <div className="rounded-lg border border-[#263246] bg-[#0b1220] px-3 py-2 text-[11px] text-[#94a3b8]">暂无发布历史。</div>
+            )}
+          </div>
         </div>
       </div>
       {alertSummary.total ? (
@@ -2979,6 +3014,8 @@ function healthStatusLabel(status: unknown) {
 function releaseStatusLabel(status: unknown) {
   const value = String(status || "missing");
   if (value === "success") return "已记录";
+  if (value === "rolled_back") return "已回滚";
+  if (value === "failed") return "失败";
   if (value === "missing") return "无记录";
   return value;
 }
@@ -2986,6 +3023,7 @@ function releaseStatusLabel(status: unknown) {
 function releaseStatusTone(status: unknown) {
   const value = String(status || "missing");
   if (value === "success") return "bg-[#052e1a] text-[#22c55e]";
+  if (value === "rolled_back" || value === "failed") return "bg-red-950/50 text-[#fb7185]";
   return "bg-[#241806] text-[#facc15]";
 }
 

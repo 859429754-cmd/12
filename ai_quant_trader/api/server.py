@@ -459,6 +459,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         worker_heartbeat_details = _worker_heartbeat_details(ctx, latest_worker_heartbeats)
         latest_maintenance = ctx.store.fetch_latest("maintenance_runs")
         latest_release_run = ctx.store.fetch_latest("release_runs", "cloud_release")
+        release_runs = ctx.store.fetch_payloads("release_runs", limit=8, symbol="cloud_release")
         exchange_payload = (latest_exchange or {}).get("payload") or {}
         exchange_status = str(exchange_payload.get("status") or ("ok" if execution_mode == "mock" else "blocked"))
         exchange_ok = execution_mode == "mock" or _latest_exchange_safety_allows_new_entries(ctx)
@@ -674,6 +675,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
             "worker_heartbeat_details": worker_heartbeat_details,
             "latest_maintenance": latest_maintenance,
             "latest_release_run": latest_release_run,
+            "release_runs": release_runs,
             "runtime_alerts": runtime_alerts,
             "runtime_alert_summary": runtime_alert_summary,
             "checks": checks,

@@ -546,6 +546,16 @@ def test_console_status_strategy_and_workbench(tmp_path: Path, monkeypatch) -> N
     store.insert(
         "release_runs",
         {
+            "release_id": "old999",
+            "status": "rolled_back",
+            "health": {"ok": True},
+            "readiness": {"overall": "block", "blocking": ["cloud_e2e_failed"]},
+        },
+        symbol="cloud_release",
+    )
+    store.insert(
+        "release_runs",
+        {
             "release_id": "abc123",
             "status": "success",
             "health": {"ok": True},
@@ -628,6 +638,9 @@ def test_console_status_strategy_and_workbench(tmp_path: Path, monkeypatch) -> N
     assert "latest_ai_budget" in readiness_body
     assert "latest_worker_heartbeats" in readiness_body
     assert readiness_body["latest_release_run"]["payload"]["release_id"] == "abc123"
+    assert readiness_body["release_runs"][0]["payload"]["release_id"] == "abc123"
+    assert readiness_body["release_runs"][1]["payload"]["release_id"] == "old999"
+    assert readiness_body["release_runs"][1]["payload"]["status"] == "rolled_back"
     assert "worker_heartbeat_details" in readiness_body
     assert {item["worker"] for item in readiness_body["worker_heartbeat_details"]} >= {
         "trading_worker",

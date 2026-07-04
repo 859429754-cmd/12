@@ -47,6 +47,7 @@ export type StatusResponse = {
   latest_worker_heartbeats?: Record<string, DbRow | null>;
   latest_maintenance?: DbRow | null;
   latest_release_run?: DbRow | null;
+  release_runs?: DbRow[];
 };
 
 export type StrategyProfile = {
@@ -150,6 +151,7 @@ export type SystemReadiness = {
   worker_heartbeat_details?: WorkerHeartbeatDetail[];
   latest_maintenance?: DbRow | null;
   latest_release_run?: DbRow | null;
+  release_runs?: DbRow[];
   runtime_alerts?: RuntimeAlert[];
   runtime_alert_summary?: RuntimeAlertSummary;
   checks: ReadinessCheck[];
