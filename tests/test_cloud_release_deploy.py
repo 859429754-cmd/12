@@ -111,6 +111,59 @@ def test_release_v2_can_run_console_e2e_before_remote_upload(monkeypatch, tmp_pa
     assert calls[1][1][0] == "scp"
 
 
+def test_release_v2_full_local_validation_runs_all_gates_before_remote_upload(monkeypatch, tmp_path) -> None:
+    import scripts.cloud_release_deploy_v2 as deploy_v2
+
+    key = tmp_path / "ssh-key"
+    key.write_text("placeholder", encoding="utf-8")
+    calls: list[tuple[str, list[str], dict[str, object]]] = []
+
+    def fake_subprocess_run(command, **kwargs):
+        calls.append(("subprocess", list(command), kwargs))
+        return SimpleNamespace(stdout="")
+
+    def fake_run(command: list[str]) -> None:
+        calls.append(("run", command, {}))
+
+    monkeypatch.setattr(deploy_v2.subprocess, "run", fake_subprocess_run)
+    monkeypatch.setattr(deploy_v2, "run", fake_run)
+    monkeypatch.setattr(deploy_v2, "build_source_tar", lambda target: target.write_text("src", encoding="utf-8"))
+    monkeypatch.setattr(deploy_v2, "build_console_dist_tar", lambda target: target.write_text("console", encoding="utf-8"))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "cloud_release_deploy_v2.py",
+            "--host",
+            "root@example",
+            "--key",
+            str(key),
+            "--remote-dir",
+            "/srv/ai-quant",
+            "--release-id",
+            "test-release",
+            "--full-local-validation",
+        ],
+    )
+
+    assert deploy_v2.main() == 0
+
+    validation_calls = calls[:5]
+    assert [call[0] for call in validation_calls] == ["subprocess"] * 5
+    assert validation_calls[0][1] == [sys.executable, "-m", "compileall", "ai_quant_trader", "tests", "scripts"]
+    assert validation_calls[0][2]["cwd"] == deploy_v2.REPO_ROOT
+    assert validation_calls[1][1] == [sys.executable, "-m", "pytest", "-q"]
+    assert validation_calls[1][2]["cwd"] == deploy_v2.REPO_ROOT
+    assert validation_calls[2][1][-2:] == ["run", "build"]
+    assert validation_calls[2][2]["cwd"] == deploy_v2.REPO_ROOT / "console"
+    assert validation_calls[3][1] == [sys.executable, "scripts/public_repo_preflight.py"]
+    assert validation_calls[3][2]["cwd"] == deploy_v2.REPO_ROOT
+    assert validation_calls[4][1][-2:] == ["run", "test:e2e"]
+    assert validation_calls[4][2]["cwd"] == deploy_v2.REPO_ROOT / "console"
+    assert calls[5][0] == "run"
+    assert calls[5][1][0] == "scp"
+
+
 def test_release_v2_skips_console_e2e_by_default(monkeypatch, tmp_path) -> None:
     import scripts.cloud_release_deploy_v2 as deploy_v2
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -24,6 +25,19 @@ def git_sha() -> str:
 
 def run_console_e2e() -> None:
     npm = "npm.cmd" if os.name == "nt" else "npm"
+    subprocess.run([npm, "run", "test:e2e"], cwd=REPO_ROOT / "console", check=True)
+
+
+def run_full_local_validation() -> None:
+    npm = "npm.cmd" if os.name == "nt" else "npm"
+    subprocess.run(
+        [sys.executable, "-m", "compileall", "ai_quant_trader", "tests", "scripts"],
+        cwd=REPO_ROOT,
+        check=True,
+    )
+    subprocess.run([sys.executable, "-m", "pytest", "-q"], cwd=REPO_ROOT, check=True)
+    subprocess.run([npm, "run", "build"], cwd=REPO_ROOT / "console", check=True)
+    subprocess.run([sys.executable, "scripts/public_repo_preflight.py"], cwd=REPO_ROOT, check=True)
     subprocess.run([npm, "run", "test:e2e"], cwd=REPO_ROOT / "console", check=True)
 
 
@@ -104,6 +118,11 @@ def main() -> int:
         action="store_true",
         help="Run the Playwright console smoke tests before uploading the release.",
     )
+    parser.add_argument(
+        "--full-local-validation",
+        action="store_true",
+        help="Run compileall, pytest, console build, public preflight, and console E2E before uploading.",
+    )
     args = parser.parse_args()
 
     key = Path(args.key)
@@ -111,7 +130,9 @@ def main() -> int:
         raise FileNotFoundError(f"SSH key not found: {key}")
     release_id = args.release_id or git_sha()
 
-    if args.run_console_e2e:
+    if args.full_local_validation:
+        run_full_local_validation()
+    elif args.run_console_e2e:
         run_console_e2e()
 
     with tempfile.TemporaryDirectory() as tmp:
