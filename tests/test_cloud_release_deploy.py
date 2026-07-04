@@ -200,3 +200,23 @@ def test_release_v2_skips_console_e2e_by_default(monkeypatch, tmp_path) -> None:
     assert deploy_v2.main() == 0
 
     assert subprocess_calls == []
+
+
+def test_release_v2_records_health_and_readiness_in_release_runs() -> None:
+    import scripts.cloud_release_deploy_v2 as deploy_v2
+
+    script = deploy_v2.remote_release_script(
+        "/srv/ai-quant",
+        "abc123",
+        restart=True,
+        install_deps=False,
+        health_timeout=1,
+    )
+
+    assert "health_json=" in script
+    assert "readiness_json=" in script
+    assert "current/scripts/record_release_run.py" in script
+    assert "AIQUANT_RELEASE_ID=\"$release_id\"" in script
+    assert "AIQUANT_HEALTH_JSON=\"$health_json\"" in script
+    assert "AIQUANT_READINESS_JSON=\"$readiness_json\"" in script
+    assert "release_audit_record_failed_rolled_back" in script
