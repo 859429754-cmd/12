@@ -842,9 +842,9 @@ function TopBar({
       </div>
       <div className="ml-auto flex min-w-0 items-center gap-3 text-[11px] text-[#94a3b8]">
         {warning ? <span className="hidden max-w-[440px] truncate rounded-full border border-[#854d0e] bg-[#241806] px-3 py-2 text-[#facc15] sm:inline-flex">{warning}</span> : null}
-        <div className="hidden h-10 items-center gap-2 rounded-xl border border-[#263246] bg-[#111827] px-2 md:flex sm:px-3">
+        <div className="flex h-10 max-w-[92px] items-center gap-2 rounded-xl border border-[#263246] bg-[#111827] px-2 sm:max-w-none sm:px-3">
           <KeyRound size={13} />
-          <span className="hidden whitespace-nowrap sm:inline">{session.user?.label || "账号"}</span>
+          <span className="truncate whitespace-nowrap">{session.user?.label || "账号"}</span>
         </div>
         {sessionTime ? (
           <span className={`hidden rounded-full border px-3 py-2 sm:inline-flex ${session.session_expiring_soon ? "border-[#854d0e] bg-[#241806] text-[#facc15]" : "border-[#263246] bg-[#111827] text-[#94a3b8]"}`}>
