@@ -23,9 +23,15 @@ def git_sha() -> str:
     return result.stdout.strip()
 
 
+def playwright_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env.setdefault("PLAYWRIGHT_OUTPUT_DIR", str(Path(tempfile.gettempdir()) / "aiquant-playwright-results"))
+    return env
+
+
 def run_console_e2e() -> None:
     npm = "npm.cmd" if os.name == "nt" else "npm"
-    subprocess.run([npm, "run", "test:e2e"], cwd=REPO_ROOT / "console", check=True)
+    subprocess.run([npm, "run", "test:e2e"], cwd=REPO_ROOT / "console", check=True, env=playwright_env())
 
 
 def run_full_local_validation() -> None:
@@ -38,7 +44,7 @@ def run_full_local_validation() -> None:
     subprocess.run([sys.executable, "-m", "pytest", "-q"], cwd=REPO_ROOT, check=True)
     subprocess.run([npm, "run", "build"], cwd=REPO_ROOT / "console", check=True)
     subprocess.run([sys.executable, "scripts/public_repo_preflight.py"], cwd=REPO_ROOT, check=True)
-    subprocess.run([npm, "run", "test:e2e"], cwd=REPO_ROOT / "console", check=True)
+    subprocess.run([npm, "run", "test:e2e"], cwd=REPO_ROOT / "console", check=True, env=playwright_env())
 
 
 def remote_release_script(remote_dir: str, release_id: str, restart: bool, install_deps: bool, health_timeout: int) -> str:

@@ -2,9 +2,11 @@ import { defineConfig, devices } from "@playwright/test";
 
 const externalBaseURL = process.env.CONSOLE_URL;
 const localBaseURL = "http://127.0.0.1:5173";
+const outputDir = process.env.PLAYWRIGHT_OUTPUT_DIR || "test-results";
 
 export default defineConfig({
   testDir: "./tests",
+  outputDir,
   timeout: 30_000,
   expect: { timeout: 8_000 },
   use: {

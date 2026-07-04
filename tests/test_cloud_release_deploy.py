@@ -107,6 +107,7 @@ def test_release_v2_can_run_console_e2e_before_remote_upload(monkeypatch, tmp_pa
     assert calls[0][0] == "subprocess"
     assert calls[0][1][-2:] == ["run", "test:e2e"]
     assert calls[0][2]["cwd"] == deploy_v2.REPO_ROOT / "console"
+    assert str(calls[0][2]["env"]["PLAYWRIGHT_OUTPUT_DIR"]).endswith("aiquant-playwright-results")
     assert calls[1][0] == "run"
     assert calls[1][1][0] == "scp"
 
@@ -160,6 +161,7 @@ def test_release_v2_full_local_validation_runs_all_gates_before_remote_upload(mo
     assert validation_calls[3][2]["cwd"] == deploy_v2.REPO_ROOT
     assert validation_calls[4][1][-2:] == ["run", "test:e2e"]
     assert validation_calls[4][2]["cwd"] == deploy_v2.REPO_ROOT / "console"
+    assert str(validation_calls[4][2]["env"]["PLAYWRIGHT_OUTPUT_DIR"]).endswith("aiquant-playwright-results")
     assert calls[5][0] == "run"
     assert calls[5][1][0] == "scp"
 

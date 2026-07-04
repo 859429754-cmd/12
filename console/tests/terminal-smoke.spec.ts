@@ -239,7 +239,21 @@ async function mockConsoleApi(page: Page, options: { executionMode?: "mock" | "l
         { slot: "follower", label: "账号2", exchange: "gate", strategy_type: "trend_follower", configured: true, version: 1, key_tail: "2222", secret_tail: "2222", gateway_binding: "follower", live_routing: "live", max_leverage: 4 },
       ] });
     }
-    if (path === "/api/orders" || path === "/api/order-lifecycle" || path === "/api/decisions") {
+    if (path === "/api/decisions") {
+      return json({
+        ok: true,
+        items: [
+          dbRow({
+            action_suggestion: "open_long",
+            confidence: 0.7,
+            direction: "long",
+            regime: "trend",
+            risk: { position_tier: "strong", position_scale: 0.75 },
+          }),
+        ],
+      });
+    }
+    if (path === "/api/orders" || path === "/api/order-lifecycle") {
       return json({ ok: true, items: [dbRow({ status: "unknown", client_order_id: "aiq_unknown_12345678", account_slot: accountSlot, order_type: "market" })] });
     }
     if (path === "/api/audits/ai-position-tiers") {
@@ -360,4 +374,25 @@ test("管理员切换实盘必须提交二次确认字段", async ({ page }) => 
     dry_run: false,
     confirm_admin_action: true,
   });
+});
+
+test("管理员能查看订单流、AI审计、复评和账户槽位", async ({ page }) => {
+  await mockConsoleApi(page, { executionMode: "live" });
+
+  await page.goto("/");
+  await page.getByPlaceholder("用户名").fill("admin");
+  await page.getByPlaceholder("密码").fill("1234567");
+  await page.getByRole("button", { name: "登录" }).click();
+
+  await page.getByRole("button", { name: "交易执行" }).click();
+  await expect(page.getByText("最近订单").first()).toBeVisible();
+  await expect(page.getByText("持仓闭K复评").first()).toBeVisible();
+  await expect(page.getByText("账户 API 与杠杆槽位").first()).toBeVisible();
+  await expect(page.getByText("账号2跟随执行").first()).toBeVisible();
+
+  await page.getByRole("button", { name: "AI 大脑" }).click();
+  await expect(page.getByText("AI 不可越权边界").first()).toBeVisible();
+  await expect(page.getByText("最近 AI 决策").first()).toBeVisible();
+  await expect(page.getByText("open_long").first()).toBeVisible();
+  await expect(page.getByText(/强仓\s+75%/).first()).toBeVisible();
 });
