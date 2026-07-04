@@ -62,7 +62,59 @@ def run_full_local_validation() -> None:
     subprocess.run([npm, "run", "test:e2e"], cwd=REPO_ROOT / "console", check=True, env=playwright_env())
 
 
-def remote_release_script(remote_dir: str, release_id: str, restart: bool, install_deps: bool, health_timeout: int) -> str:
+def remote_current_target(host: str, key: Path, remote_dir: str) -> str:
+    result = subprocess.run(
+        [
+            "ssh",
+            "-i",
+            str(key),
+            "-o",
+            "StrictHostKeyChecking=no",
+            host,
+            f"readlink -f '{remote_dir}/current' 2>/dev/null || true",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
+def remote_mark_success_script(remote_dir: str, release_id: str) -> str:
+    return f"""set -euo pipefail
+remote_dir='{remote_dir}'
+release_id='{release_id}'
+mkdir -p "$remote_dir/releases"
+echo "$release_id" > "$remote_dir/releases/.last_successful_release"
+"""
+
+
+def remote_rollback_script(remote_dir: str, previous_target: str, restart: bool) -> str:
+    restart_block = ""
+    if restart:
+        restart_block = "systemctl restart ai-quant-console.service ai-quant-trader.service || true\n"
+    return f"""set -euo pipefail
+remote_dir='{remote_dir}'
+previous_target='{previous_target}'
+current_link="$remote_dir/current"
+if [ -n "$previous_target" ] && [ -e "$previous_target" ]; then
+  ln -sfn "$previous_target" "$current_link"
+  {restart_block}echo 'cloud_console_e2e_failed_rolled_back' >&2
+  exit 0
+fi
+echo 'cloud_console_e2e_failed_no_previous_release' >&2
+exit 53
+"""
+
+
+def remote_release_script(
+    remote_dir: str,
+    release_id: str,
+    restart: bool,
+    install_deps: bool,
+    health_timeout: int,
+    mark_success_after_remote: bool = True,
+) -> str:
     install_block = ""
     if install_deps:
         install_block = (
@@ -107,6 +159,7 @@ def remote_release_script(remote_dir: str, release_id: str, restart: bool, insta
             "  exit 52\n"
             "fi\n"
         )
+    success_marker = f'echo "$release_id" > "$remote_dir/releases/.last_successful_release"\n' if mark_success_after_remote else ""
     return f"""set -euo pipefail
 remote_dir='{remote_dir}'
 release_id='{release_id}'
@@ -132,7 +185,7 @@ if [ -d "$release_dir/deploy/systemd" ]; then
   cp "$release_dir"/deploy/systemd/*.service "$release_dir"/deploy/systemd/*.timer /etc/systemd/system/
 fi
 cd "$remote_dir"
-{install_block}{restart_block}echo "$release_id" > "$remote_dir/releases/.last_successful_release"
+{install_block}{restart_block}{success_marker}
 """
 
 
@@ -172,6 +225,10 @@ def main() -> int:
     elif args.run_console_e2e:
         run_console_e2e()
 
+    previous_target_for_local_gate = ""
+    if args.cloud_console_readonly_e2e_url:
+        previous_target_for_local_gate = remote_current_target(args.host, key, args.remote_dir)
+
     with tempfile.TemporaryDirectory() as tmp:
         tmpdir = Path(tmp)
         source_tar = tmpdir / "aiquant-src-current.tar"
@@ -191,11 +248,18 @@ def main() -> int:
                     restart=args.restart,
                     install_deps=args.install_deps,
                     health_timeout=args.health_timeout,
+                    mark_success_after_remote=not bool(args.cloud_console_readonly_e2e_url),
                 ),
             ]
         )
     if args.cloud_console_readonly_e2e_url:
-        run_cloud_console_readonly_e2e(args.cloud_console_readonly_e2e_url)
+        ssh_base = ["ssh", "-i", str(key), "-o", "StrictHostKeyChecking=no", args.host]
+        try:
+            run_cloud_console_readonly_e2e(args.cloud_console_readonly_e2e_url)
+        except Exception:
+            run([*ssh_base, remote_rollback_script(args.remote_dir, previous_target_for_local_gate, restart=args.restart)])
+            raise
+        run([*ssh_base, remote_mark_success_script(args.remote_dir, release_id)])
     return 0
 
 

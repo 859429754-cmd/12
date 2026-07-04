@@ -37,6 +37,11 @@ async function login(page: Page, username: string, password: string) {
   await expect(page.getByText("当前登录")).toBeVisible();
 }
 
+async function switchToMobile(page: Page, label: string) {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator("header").getByText(label)).toBeVisible();
+}
+
 test.describe("真实云端控制台只读 smoke", () => {
   test.skip(Boolean(missingCloudReadonlyConfig()), missingCloudReadonlyConfig());
 
@@ -56,6 +61,15 @@ test.describe("真实云端控制台只读 smoke", () => {
 
     await page.getByRole("button", { name: "行情图表" }).click();
     await expect(page.locator("canvas").first()).toBeVisible();
+
+    await switchToMobile(page, credentials.account1.label);
+    await page.getByRole("button", { name: "总览" }).click();
+    await expect(page.getByText("账户与持仓").first()).toBeVisible();
+    await expect(page.getByText("AI 决策与仓位").first()).toBeVisible();
+    await expect(page.getByText("新闻快讯").first()).toBeVisible();
+    await page.getByRole("button", { name: "图表" }).click();
+    await expect(page.getByText("专业行情图表").first()).toBeVisible();
+    await expect(page.locator("canvas").first()).toBeVisible();
   });
 
   test("账号2只读 follower 视图", async ({ page }) => {
@@ -63,6 +77,12 @@ test.describe("真实云端控制台只读 smoke", () => {
     await expect(page.getByText(credentials.account2.label).first()).toBeVisible();
     await expect(page.getByText("账户与持仓").first()).toBeVisible();
     await expect(page.getByText("AI 决策与仓位").first()).toBeVisible();
+    await expect(page.getByText("新闻快讯").first()).toBeVisible();
+
+    await switchToMobile(page, credentials.account2.label);
+    await expect(page.getByText("账户与持仓").first()).toBeVisible();
+    await expect(page.getByText("AI 决策与仓位").first()).toBeVisible();
+    await page.getByRole("button", { name: "快讯" }).click();
     await expect(page.getByText("新闻快讯").first()).toBeVisible();
   });
 
@@ -76,6 +96,14 @@ test.describe("真实云端控制台只读 smoke", () => {
     await expect(page.getByText("账户 API 与杠杆槽位").first()).toBeVisible();
 
     await page.getByRole("button", { name: "AI 大脑" }).click();
+    await expect(page.getByText("AI 不可越权边界").first()).toBeVisible();
+    await expect(page.getByText("最近 AI 决策").first()).toBeVisible();
+
+    await switchToMobile(page, credentials.admin.label);
+    await page.getByRole("button", { name: "交易" }).click();
+    await expect(page.getByText("最近订单").first()).toBeVisible();
+    await expect(page.getByText("持仓闭K复评").first()).toBeVisible();
+    await page.getByRole("button", { name: "AI" }).click();
     await expect(page.getByText("AI 不可越权边界").first()).toBeVisible();
     await expect(page.getByText("最近 AI 决策").first()).toBeVisible();
   });
