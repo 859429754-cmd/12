@@ -347,6 +347,38 @@ test("账号登录后总览显示新闻、图表和未解决订单事故", async
   expect(consoleErrors.filter((item) => !item.includes("401 (Unauthorized)"))).toEqual([]);
 });
 
+test("登录被公网限流时不显示原始 HTML 错误页", async ({ page }) => {
+  await page.route("**/api/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/api/auth/session") {
+      return route.fulfill({
+        status: 401,
+        contentType: "application/json",
+        body: JSON.stringify({ ok: false, auth_required: true, authenticated: false, user: null }),
+      });
+    }
+    if (path === "/api/auth/login") {
+      return route.fulfill({
+        status: 429,
+        contentType: "text/html",
+        body: "<html><head><title>429 Too Many Requests</title></head><body><center>nginx</center></body></html>",
+      });
+    }
+    return route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+  });
+
+  await page.goto("/");
+  await expect(page.getByText("AI 量化控制台登录")).toBeVisible();
+  await page.getByPlaceholder("用户名").fill("account1");
+  await page.getByPlaceholder("密码").fill("yx");
+  await page.getByRole("button", { name: "登录" }).click();
+
+  await expect(page.getByText("登录请求过快，请稍后再试。")).toBeVisible();
+  await expect(page.locator("body")).not.toContainText("<html>");
+  await expect(page.locator("body")).not.toContainText("nginx");
+  await expect(page.locator("body")).not.toContainText("Too Many Requests");
+});
+
 test("账号2登录后只读取 follower 余额和持仓", async ({ page }) => {
   const { requests } = await mockConsoleApi(page);
   await page.goto("/");

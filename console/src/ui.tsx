@@ -26,6 +26,9 @@ export const errText = (error: unknown): string => {
     const detail = item.detail;
     if (detail === "auth_required") return "请先登录 AI 量化控制台账号。";
     if (detail === "permission_denied") return "当前账号没有执行该操作的权限。";
+    if (maybe?.status === 429) return "请求过快，请稍后再试。";
+    if (typeof detail === "string" && looksLikeHtmlError(detail)) return fallback;
+    if (typeof item.message === "string" && looksLikeHtmlError(item.message)) return fallback;
     if (typeof detail === "string" && detail.trim()) return detail;
     if (typeof item.message === "string" && item.message.trim()) return item.message;
     if (Array.isArray(detail)) {
@@ -37,6 +40,11 @@ export const errText = (error: unknown): string => {
   if (fallback === "permission_denied") return "当前账号没有执行该操作的权限。";
   return fallback;
 };
+
+function looksLikeHtmlError(value: string): boolean {
+  const text = value.trim().toLowerCase();
+  return text.startsWith("<!doctype html") || text.startsWith("<html") || text.includes("<body") || text.includes("nginx");
+}
 
 export function Surface({ title, action, children }: { title: ReactNode; action?: ReactNode; children: ReactNode }) {
   return (

@@ -386,7 +386,8 @@ export function App() {
       setMessage("登录成功。");
       await load(nextSession);
     } catch (error) {
-      setMessage(errText(error));
+      const status = (error as { status?: number } | null)?.status;
+      setMessage(status === 429 ? "登录请求过快，请稍后再试。" : errText(error));
     } finally {
       setBusy(false);
     }

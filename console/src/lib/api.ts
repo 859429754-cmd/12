@@ -61,6 +61,9 @@ function parseBody(text: string): unknown {
 }
 
 function extractMessage(body: unknown, status: number): string {
+  if (status === 429) {
+    return "请求过快，请稍后再试。";
+  }
   if (body && typeof body === "object") {
     const item = body as Record<string, unknown>;
     if (item.detail === "console_auth_not_configured") {
@@ -72,9 +75,20 @@ function extractMessage(body: unknown, status: number): string {
     if (item.detail === "permission_denied") {
       return "当前账号没有执行该操作的权限。";
     }
+    if (typeof item.detail === "string" && looksLikeHtmlError(item.detail)) {
+      return `请求失败（HTTP ${status}），请稍后重试。`;
+    }
+    if (typeof item.message === "string" && looksLikeHtmlError(item.message)) {
+      return `请求失败（HTTP ${status}），请稍后重试。`;
+    }
     return String(item.detail || item.message || `HTTP ${status}`);
   }
   return `HTTP ${status}`;
+}
+
+function looksLikeHtmlError(value: string): boolean {
+  const text = value.trim().toLowerCase();
+  return text.startsWith("<!doctype html") || text.startsWith("<html") || text.includes("<body") || text.includes("nginx");
 }
 
 function normalizeFetchError(path: string, error: unknown): Error {
