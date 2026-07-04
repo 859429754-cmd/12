@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import tempfile
 from pathlib import Path
 
-from cloud_release_deploy import REPO_ROOT, build_console_dist_tar, build_source_tar, run
+try:
+    from scripts.cloud_release_deploy import REPO_ROOT, build_console_dist_tar, build_source_tar, run
+except ModuleNotFoundError:  # pragma: no cover - direct script execution path
+    from cloud_release_deploy import REPO_ROOT, build_console_dist_tar, build_source_tar, run
 
 
 def git_sha() -> str:
@@ -16,6 +20,11 @@ def git_sha() -> str:
         text=True,
     )
     return result.stdout.strip()
+
+
+def run_console_e2e() -> None:
+    npm = "npm.cmd" if os.name == "nt" else "npm"
+    subprocess.run([npm, "run", "test:e2e"], cwd=REPO_ROOT / "console", check=True)
 
 
 def remote_release_script(remote_dir: str, release_id: str, restart: bool, install_deps: bool, health_timeout: int) -> str:
@@ -86,15 +95,24 @@ def main() -> int:
     parser.add_argument("--host", default="root@8.209.200.19")
     parser.add_argument("--key", default=str(REPO_ROOT / ".ssh" / "aiquant_aliyun"))
     parser.add_argument("--remote-dir", default="/root/ai-quant-trader")
-    parser.add_argument("--release-id", default=git_sha())
+    parser.add_argument("--release-id", default=None)
     parser.add_argument("--install-deps", action="store_true")
     parser.add_argument("--restart", action="store_true")
     parser.add_argument("--health-timeout", type=int, default=8)
+    parser.add_argument(
+        "--run-console-e2e",
+        action="store_true",
+        help="Run the Playwright console smoke tests before uploading the release.",
+    )
     args = parser.parse_args()
 
     key = Path(args.key)
     if not key.exists():
         raise FileNotFoundError(f"SSH key not found: {key}")
+    release_id = args.release_id or git_sha()
+
+    if args.run_console_e2e:
+        run_console_e2e()
 
     with tempfile.TemporaryDirectory() as tmp:
         tmpdir = Path(tmp)
@@ -111,7 +129,7 @@ def main() -> int:
                 *ssh_base,
                 remote_release_script(
                     args.remote_dir,
-                    args.release_id,
+                    release_id,
                     restart=args.restart,
                     install_deps=args.install_deps,
                     health_timeout=args.health_timeout,

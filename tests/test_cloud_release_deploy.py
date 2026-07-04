@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import sys
+import subprocess
+from types import SimpleNamespace
 from pathlib import Path
 
 from scripts.cloud_release_deploy import (
@@ -51,3 +54,94 @@ def test_remote_sync_preserves_runtime_directories() -> None:
     assert 'cp "$remote_dir"/deploy/systemd/*.service "$remote_dir"/deploy/systemd/*.timer /etc/systemd/system/' in script
     assert "systemctl daemon-reload" in script
     assert "systemctl restart ai-quant-console.service ai-quant-trader.service" in script
+
+
+def test_release_v2_script_is_directly_executable() -> None:
+    result = subprocess.run(
+        [sys.executable, "scripts/cloud_release_deploy_v2.py", "--help"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "--run-console-e2e" in result.stdout
+
+
+def test_release_v2_can_run_console_e2e_before_remote_upload(monkeypatch, tmp_path) -> None:
+    import scripts.cloud_release_deploy_v2 as deploy_v2
+
+    key = tmp_path / "ssh-key"
+    key.write_text("placeholder", encoding="utf-8")
+    calls: list[tuple[str, list[str], dict[str, object]]] = []
+
+    def fake_subprocess_run(command, **kwargs):
+        calls.append(("subprocess", list(command), kwargs))
+        return SimpleNamespace(stdout="")
+
+    def fake_run(command: list[str]) -> None:
+        calls.append(("run", command, {}))
+
+    monkeypatch.setattr(deploy_v2.subprocess, "run", fake_subprocess_run)
+    monkeypatch.setattr(deploy_v2, "run", fake_run)
+    monkeypatch.setattr(deploy_v2, "build_source_tar", lambda target: target.write_text("src", encoding="utf-8"))
+    monkeypatch.setattr(deploy_v2, "build_console_dist_tar", lambda target: target.write_text("console", encoding="utf-8"))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "cloud_release_deploy_v2.py",
+            "--host",
+            "root@example",
+            "--key",
+            str(key),
+            "--remote-dir",
+            "/srv/ai-quant",
+            "--release-id",
+            "test-release",
+            "--run-console-e2e",
+        ],
+    )
+
+    assert deploy_v2.main() == 0
+
+    assert calls[0][0] == "subprocess"
+    assert calls[0][1][-2:] == ["run", "test:e2e"]
+    assert calls[0][2]["cwd"] == deploy_v2.REPO_ROOT / "console"
+    assert calls[1][0] == "run"
+    assert calls[1][1][0] == "scp"
+
+
+def test_release_v2_skips_console_e2e_by_default(monkeypatch, tmp_path) -> None:
+    import scripts.cloud_release_deploy_v2 as deploy_v2
+
+    key = tmp_path / "ssh-key"
+    key.write_text("placeholder", encoding="utf-8")
+    subprocess_calls: list[list[str]] = []
+
+    def fake_subprocess_run(command, **kwargs):
+        subprocess_calls.append(list(command))
+        return SimpleNamespace(stdout="")
+
+    monkeypatch.setattr(deploy_v2.subprocess, "run", fake_subprocess_run)
+    monkeypatch.setattr(deploy_v2, "run", lambda command: None)
+    monkeypatch.setattr(deploy_v2, "build_source_tar", lambda target: target.write_text("src", encoding="utf-8"))
+    monkeypatch.setattr(deploy_v2, "build_console_dist_tar", lambda target: target.write_text("console", encoding="utf-8"))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "cloud_release_deploy_v2.py",
+            "--host",
+            "root@example",
+            "--key",
+            str(key),
+            "--remote-dir",
+            "/srv/ai-quant",
+            "--release-id",
+            "test-release",
+        ],
+    )
+
+    assert deploy_v2.main() == 0
+
+    assert subprocess_calls == []
