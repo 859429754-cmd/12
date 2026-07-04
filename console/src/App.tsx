@@ -1165,6 +1165,7 @@ function WorkspaceBody({
         visibleSlots={visibleSlots}
         activeAccountSlot={activeAccountSlot}
         riskSummary={riskSummary}
+        readiness={readiness}
         isAdmin={isAdmin}
         busy={busy}
         postAction={postAction}
@@ -4177,6 +4178,7 @@ function ExecutionWorkspace({
   orders,
   accountSlots,
   riskSummary,
+  readiness,
   visibleSlots,
   activeAccountSlot,
   isAdmin,
@@ -4193,6 +4195,7 @@ function ExecutionWorkspace({
   orders: Array<DbRow>;
   accountSlots: ExecutionAccountSlot[];
   riskSummary: Record<string, unknown> | null;
+  readiness: SystemReadiness | null;
   visibleSlots: Array<"trend" | "follower" | "range">;
   activeAccountSlot: "trend" | "follower" | "range" | null;
   isAdmin: boolean;
@@ -4215,6 +4218,7 @@ function ExecutionWorkspace({
   const activeAccountLabel = activeAccountSlot === "follower" ? "账号2权益" : activeAccountSlot === "range" ? "震荡账户权益" : "账号1权益";
   const showFollowerEquity = activeAccountSlot !== "follower" && visibleSlots.includes("follower");
   const positionsReadFailed = positionsMeta?.ok === false;
+  const releaseRuns = readiness?.release_runs || [];
   return (
     <section className="min-h-0 space-y-4 overflow-auto sm:space-y-5 sm:pr-1">
       <Surface title={<><ShieldCheck size={13} /> 实盘安全链路</>}>
@@ -4297,6 +4301,8 @@ function ExecutionWorkspace({
           <PositionReviewControlPanel status={status} isAdmin={isAdmin} busy={busy} postAction={postAction} />
         </div>
       </div>
+
+      {isAdmin ? <ReleaseOperationsPanel readiness={readiness} releaseRuns={releaseRuns} /> : null}
 
       <AccountSlotManager accountSlots={accountSlots} visibleSlots={visibleSlots} isAdmin={isAdmin} busy={busy} postAction={postAction} />
 
@@ -4382,6 +4388,56 @@ function ExecutionWorkspace({
         </Surface>
       </div>
     </section>
+  );
+}
+
+function ReleaseOperationsPanel({ readiness, releaseRuns }: { readiness: SystemReadiness | null; releaseRuns: DbRow[] }) {
+  const latestPayload = readiness?.latest_release_run?.payload || {};
+  const latestBlocking = Array.isArray((latestPayload.readiness as Record<string, unknown> | undefined)?.blocking)
+    ? ((latestPayload.readiness as Record<string, unknown>).blocking as unknown[])
+    : [];
+  return (
+    <Surface title={<><ServerCog size={13} /> 云端发布与回滚审计</>}>
+      <div className="grid gap-3 xl:grid-cols-[320px_minmax(0,1fr)]">
+        <div className="rounded-xl border border-[#263246] bg-[#101a2d] p-3 text-xs">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <span className="font-semibold text-[#e5eefb]">当前成功发布</span>
+            <span className={`rounded-full px-2 py-1 text-[10px] ${releaseStatusTone(latestPayload.status)}`}>{releaseStatusLabel(latestPayload.status)}</span>
+          </div>
+          <BoundaryLine label="Release" value={String(latestPayload.release_id || "--")} />
+          <BoundaryLine label="Health" value={releaseHealthLabel(latestPayload.health)} />
+          <BoundaryLine label="Readiness" value={releaseReadinessLabel(latestPayload.readiness)} />
+          <BoundaryLine label="记录时间" value={latestPayload.recorded_at ? formatTime(String(latestPayload.recorded_at)) : "--"} />
+          <BoundaryLine label="阻断摘要" value={latestBlocking.length ? latestBlocking.map(String).join(" / ") : "无"} />
+        </div>
+        <div className="grid gap-2">
+          <div className="text-[11px] font-semibold text-[#cbd5e1]">最近发布历史与原始摘要</div>
+          {releaseRuns.length ? releaseRuns.slice(0, 8).map((row, index) => {
+            const payload = row.payload || {};
+            return (
+              <details key={`${row.id}-${String(payload.release_id || row.symbol || "release")}-${index}`} className="rounded-xl border border-[#263246] bg-[#101a2d] p-3 text-xs text-[#94a3b8]">
+                <summary className="cursor-pointer list-none">
+                  <div className="grid gap-2 sm:grid-cols-[1fr_120px_120px_150px]">
+                    <span className={`${mono} truncate font-semibold text-[#e5eefb]`}>{String(payload.release_id || row.symbol || "--")}</span>
+                    <span className={`w-fit rounded-full px-2 py-0.5 text-[10px] ${releaseStatusTone(payload.status)}`}>{releaseStatusLabel(payload.status)}</span>
+                    <span>{releaseReadinessLabel(payload.readiness)}</span>
+                    <span className="truncate">{payload.recorded_at ? formatTime(String(payload.recorded_at)) : formatTime(row.created_at)}</span>
+                  </div>
+                </summary>
+                <div className="mt-3">
+                  <JsonBlock data={payload} maxHeight="max-h-56" />
+                </div>
+              </details>
+            );
+          }) : (
+            <div className="rounded-xl border border-[#263246] bg-[#101a2d] p-3 text-xs text-[#94a3b8]">暂无发布历史。</div>
+          )}
+        </div>
+      </div>
+      <div className="mt-3 rounded-xl border border-[#263246] bg-[#0b1220] p-3 text-[11px] leading-5 text-[#94a3b8]">
+        这里是只读发布证据：用于确认当前 release、失败回滚和公网 E2E 摘要。它不提供部署、回滚或实盘交易按钮。
+      </div>
+    </Surface>
   );
 }
 

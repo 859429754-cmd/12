@@ -420,6 +420,7 @@ test("普通账号不能切换实盘或提交管理控制", async ({ page }) => 
   await page.getByRole("button", { name: "交易执行" }).click();
   await expect(page.getByText("当前账号只能查看交易链路和修改自己账户的杠杆上限").first()).toBeVisible();
   await expect(page.getByText("当前权限：只读账户").first()).toBeVisible();
+  await expect(page.getByText("云端发布与回滚审计")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "开启实盘" }).first()).toBeDisabled();
   await expect(page.getByRole("button", { name: /平仓 ETH/ })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "暂停开仓并一键全平" })).toHaveCount(0);
@@ -459,6 +460,10 @@ test("管理员能查看订单流、AI审计、复评和账户槽位", async ({ 
   await expect(page.getByText("持仓闭K复评").first()).toBeVisible();
   await expect(page.getByText("账户 API 与杠杆槽位").first()).toBeVisible();
   await expect(page.getByText("账号2跟随执行").first()).toBeVisible();
+  await expect(page.getByText("云端发布与回滚审计").first()).toBeVisible();
+  await expect(page.getByText("当前成功发布").first()).toBeVisible();
+  await expect(page.getByText("61f9752").first()).toBeVisible();
+  await expect(page.locator("details").filter({ hasText: "old999" }).filter({ hasText: "已回滚" }).first()).toBeVisible();
 
   await page.getByRole("button", { name: "AI 大脑" }).click();
   await expect(page.getByText("AI 不可越权边界").first()).toBeVisible();
