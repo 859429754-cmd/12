@@ -188,12 +188,16 @@ def run_group(group: AuditGroup) -> AuditGroupResult:
         )
 
     try:
+        env = os.environ.copy()
+        if group.id == "frontend_e2e":
+            env.pop("CONSOLE_URL", None)
         result = subprocess.run(
             list(group.command),
             cwd=group.cwd,
             text=True,
             encoding="utf-8",
             errors="replace",
+            env=env,
             capture_output=True,
             check=False,
             timeout=group.timeout_seconds,
@@ -226,13 +230,21 @@ def run_group(group: AuditGroup) -> AuditGroupResult:
         )
 
 
-def build_report(mode: str, results: Sequence[AuditGroupResult], started_at: float) -> dict[str, object]:
+def build_report(
+    mode: str,
+    results: Sequence[AuditGroupResult],
+    started_at: float,
+    *,
+    fail_on_skipped: bool = False,
+) -> dict[str, object]:
     failed = [item for item in results if item.status == "failed"]
     passed = [item for item in results if item.status == "passed"]
     skipped = [item for item in results if item.status == "skipped"]
+    ok = not failed and (not fail_on_skipped or not skipped)
     return {
-        "ok": not failed,
+        "ok": ok,
         "mode": mode,
+        "fail_on_skipped": fail_on_skipped,
         "group_count": len(results),
         "passed_count": len(passed),
         "failed_count": len(failed),
@@ -263,6 +275,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="Also run the read-only SSH cloud runtime audit. This is intentionally opt-in.",
     )
+    parser.add_argument(
+        "--fail-on-skipped",
+        action="store_true",
+        help="Fail the audit when any selected group is skipped. Use this for final acceptance gates.",
+    )
     parser.add_argument("--json-out", type=Path, default=None, help="Optional path to write the JSON audit report.")
     args = parser.parse_args(argv)
 
@@ -275,7 +292,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             include_cloud_runtime=args.include_cloud_runtime,
         )
     ]
-    report = build_report(args.mode, results, started_at)
+    report = build_report(args.mode, results, started_at, fail_on_skipped=args.fail_on_skipped)
     file_text = json.dumps(report, ensure_ascii=False, indent=2)
     console_text = json.dumps(report, ensure_ascii=True, indent=2)
     print_report(console_text)

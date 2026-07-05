@@ -100,6 +100,23 @@ def test_project_audit_board_forces_utf8_subprocess_decoding(monkeypatch) -> Non
     assert result.stdout_tail == ""
 
 
+def test_project_audit_board_local_e2e_does_not_inherit_cloud_url(monkeypatch) -> None:
+    seen_env: list[dict[str, str]] = []
+
+    def fake_run(command, **kwargs):  # noqa: ANN001, ANN003
+        seen_env.append(kwargs["env"])
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setenv("CONSOLE_URL", "http://8.209.200.19")
+    monkeypatch.setattr(project_audit_board.subprocess, "run", fake_run)
+    group = next(item for item in project_audit_board.audit_groups() if item.id == "frontend_e2e")
+
+    result = project_audit_board.run_group(group)
+
+    assert result.status == "passed"
+    assert "CONSOLE_URL" not in seen_env[0]
+
+
 def test_project_audit_board_fails_when_required_group_fails(monkeypatch) -> None:
     def fake_run(command, **kwargs):  # noqa: ANN001, ANN003
         return subprocess.CompletedProcess(command, 1, stdout="", stderr="boom")
@@ -138,3 +155,20 @@ def test_project_audit_board_skips_cloud_when_optional_env_missing(monkeypatch) 
     assert result.status == "skipped"
     assert result.skipped_reason is not None
     assert "CONSOLE_URL" in result.skipped_reason
+
+
+def test_project_audit_board_can_fail_on_skipped_cloud_group(monkeypatch) -> None:
+    for name in (
+        "CONSOLE_URL",
+        "AIQUANT_E2E_ACCOUNT1_PASSWORD",
+        "AIQUANT_E2E_ACCOUNT2_PASSWORD",
+        "AIQUANT_E2E_ADMIN_PASSWORD",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    def fake_run(command, **kwargs):  # noqa: ANN001, ANN003
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(project_audit_board.subprocess, "run", fake_run)
+
+    assert project_audit_board.main(["--mode", "full", "--fail-on-skipped"]) == 1
