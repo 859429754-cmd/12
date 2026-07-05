@@ -166,8 +166,8 @@ class TrendStrategyConfig(BaseModel):
     vma_length: int = 20
     atr_length: int = 14
     atr_stop_multiple: float = Field(default=1.5, gt=0, le=20)
-    volume_multiple: float = 2.0
-    position_fraction: float = Field(default=0.5, gt=0, le=1)
+    volume_multiple: float = 2.5
+    position_fraction: float = Field(default=1.0, gt=0, le=1)
     use_volume_filter: bool = True
     momentum_filter: Literal["none", "kdj"] = "kdj"
     kdj_length: int = Field(default=9, gt=1, le=100)

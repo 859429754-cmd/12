@@ -77,6 +77,28 @@ def test_atr_stop_multiple_defaults_and_can_be_proposed(tmp_path) -> None:
         store.close()
 
 
+def test_runtime_control_defaults_match_live_trend_contract(tmp_path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("strategy:\n  trend: {}\n", encoding="utf-8")
+    store = SQLiteStore(str(tmp_path / "test.sqlite3"), str(tmp_path / "audit.jsonl"))
+    try:
+        manager = RuntimeControlManager(store, str(config_path))
+        params = manager.effective_symbol_params(manager.read_config(), "ETH/USDT:USDT")
+        assert params["kc_length"] == 20
+        assert params["kc_scalar"] == 2.8
+        assert params["vma_length"] == 20
+        assert params["atr_length"] == 14
+        assert params["atr_stop_multiple"] == 1.5
+        assert params["volume_multiple"] == 2.5
+        assert params["position_fraction"] == 1.0
+        assert params["momentum_filter"] == "kdj"
+        assert params["kdj_length"] == 9
+        assert params["kdj_k_smooth"] == 3
+        assert params["kdj_d_smooth"] == 3
+    finally:
+        store.close()
+
+
 def test_symbol_strategy_profile_can_be_disabled(tmp_path) -> None:
     config_path = tmp_path / "config.yaml"
     config_path.write_text(

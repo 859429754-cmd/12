@@ -3430,7 +3430,7 @@ function BacktestPanel({
           vma_lengths: arrayValue<number>(opt.vma_lengths, [20]),
           volume_multiples: arrayValue<number>(opt.volume_multiples, [2.0, 2.2, 2.5, 2.8, 3.0]),
           atr_stop_multiples: arrayValue<number>(opt.atr_stop_multiples, [1.2, 1.5, 1.8, 2.0]),
-          position_fractions: arrayValue<number>(opt.position_fractions, [Number(profile?.params?.position_fraction) || 0.5]),
+          position_fractions: arrayValue<number>(opt.position_fractions, [Number(profile?.params?.position_fraction) || 1.0]),
           use_volume_filters: arrayValue<boolean>(opt.use_volume_filters, [true]),
           momentum_filters: arrayValue<string>(opt.momentum_filters, ["kdj"]),
           kdj_lengths: arrayValue<number>(opt.kdj_lengths, [7, 9, 14]),

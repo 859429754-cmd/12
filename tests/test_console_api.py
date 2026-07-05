@@ -15,6 +15,11 @@ from ai_quant_trader.core.models import NewsDigest, NewsItem, PositionSnapshot, 
 from ai_quant_trader.storage.sqlite import SQLiteStore
 
 
+def test_backtest_optimize_request_defaults_to_live_position_fraction() -> None:
+    request = server.BacktestOptimizeRequest(symbol="ETH/USDT:USDT")
+    assert request.position_fractions == [1.0]
+
+
 def write_config(path: Path, db_path: Path, audit_path: Path, symbols: list[str] | None = None) -> None:
     symbols = symbols or ["ETH/USDT:USDT", "BTC/USDT:USDT"]
     symbol_yaml = "\n".join(f'  - symbol: "{symbol}"\n    timeframe: "1h"' for symbol in symbols)

@@ -190,7 +190,7 @@ class BacktestOptimizeRequest(BacktestRequest):
     vma_lengths: list[int] = Field(default_factory=lambda: [20], min_length=1, max_length=8)
     volume_multiples: list[float] = Field(default_factory=lambda: [2.0, 2.2, 2.5, 2.8, 3.0], min_length=1, max_length=8)
     atr_stop_multiples: list[float] = Field(default_factory=lambda: [1.2, 1.5, 1.8, 2.0], min_length=1, max_length=8)
-    position_fractions: list[float] = Field(default_factory=lambda: [0.5], min_length=1, max_length=8)
+    position_fractions: list[float] = Field(default_factory=lambda: [1.0], min_length=1, max_length=8)
     use_volume_filters: list[bool] = Field(default_factory=lambda: [True], min_length=1, max_length=2)
     momentum_filters: list[Literal["none", "kdj"]] = Field(
         default_factory=lambda: ["kdj"],

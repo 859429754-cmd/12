@@ -14,6 +14,21 @@ from ai_quant_trader.strategy.indicators import atr, keltner_channel
 from ai_quant_trader.strategy.trend_state import TrendStateStore
 
 
+def test_trend_strategy_default_contract_matches_live_baseline() -> None:
+    config = TrendStrategyConfig()
+    assert config.kc_length == 20
+    assert config.kc_scalar == 2.8
+    assert config.vma_length == 20
+    assert config.atr_length == 14
+    assert config.atr_stop_multiple == 1.5
+    assert config.volume_multiple == 2.5
+    assert config.position_fraction == 1.0
+    assert config.momentum_filter == "kdj"
+    assert config.kdj_length == 9
+    assert config.kdj_k_smooth == 3
+    assert config.kdj_d_smooth == 3
+
+
 def _candles_with_breakout(direction: str) -> pd.DataFrame:
     rows = []
     price = 100.0
@@ -54,7 +69,7 @@ def test_trend_strategy_generates_long_signal() -> None:
     assert signal.signal_strength > 0.5
     assert signal.suggested_qty > 0
     assert signal.technical_evidence["atr_stop_multiple"] == 1.5
-    assert signal.technical_evidence["position_fraction"] == 0.5
+    assert signal.technical_evidence["position_fraction"] == 1.0
     assert signal.technical_evidence["stop_loss_estimate"] is not None
 
 
@@ -325,8 +340,8 @@ def test_trend_backtest_charges_entry_fee_once() -> None:
     )
 
     assert result["trade_count"] == 1
-    assert result["trades"][0]["pnl"] == pytest.approx(-1.0)
-    assert result["final_equity"] == pytest.approx(999.0)
+    assert result["trades"][0]["pnl"] == pytest.approx(-2.0)
+    assert result["final_equity"] == pytest.approx(998.0)
 
 
 def test_optimize_trend_parameters_returns_walk_forward_candidates() -> None:

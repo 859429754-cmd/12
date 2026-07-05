@@ -833,7 +833,7 @@ class DeepSeekBrain:
         price = signal.current_price
         atr_value = float(signal.technical_evidence.get("atr") or 0.0)
         tp = price + atr_value * 2 if direction == Side.LONG else price - atr_value * 2 if direction == Side.SHORT else None
-        atr_stop_multiple = float(signal.technical_evidence.get("atr_stop_multiple") or 3.0)
+        atr_stop_multiple = float(signal.technical_evidence.get("atr_stop_multiple") or 1.5)
         sl = price - atr_value * atr_stop_multiple if direction == Side.LONG else price + atr_value * atr_stop_multiple if direction == Side.SHORT else None
         return AiDecision(
             symbol=signal.symbol,

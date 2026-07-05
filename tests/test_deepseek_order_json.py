@@ -470,6 +470,7 @@ async def test_deepseek_unavailable_blocks_entry_even_when_signal_is_strong(monk
             current_price=3500.0,
             suggested_qty=0.5,
             signal_strength=0.9,
+            technical_evidence={"atr": 100.0},
         ),
         AggregatedOrderflow(symbol="ETH/USDT:USDT", alignment_hint="aligned", data_quality=0.95, source_count=3),
         DenseZone(
@@ -499,4 +500,5 @@ async def test_deepseek_unavailable_blocks_entry_even_when_signal_is_strong(monk
     assert decision.veto_action == "block"
     assert decision.action_suggestion == "block"
     assert decision.confidence == 0.0
+    assert decision.sl_estimate == 3350.0
     assert "missing_deepseek_api_key" in decision.reason_codes
