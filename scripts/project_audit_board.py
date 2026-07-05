@@ -123,13 +123,25 @@ def audit_groups() -> tuple[AuditGroup, ...]:
             ),
             timeout_seconds=480,
         ),
+        AuditGroup(
+            id="cloud_runtime_audit",
+            title="真实云端运行审计",
+            command=(sys.executable, "scripts/cloud_runtime_audit.py"),
+            cwd=ROOT,
+            modes=(),
+            requirement="Cloud current release, last-successful marker, systemd services, readiness, release_runs, and recent logs must be consistent.",
+            timeout_seconds=180,
+        ),
     )
 
 
-def selected_groups(mode: str, *, skip_cloud: bool = False) -> tuple[AuditGroup, ...]:
+def selected_groups(mode: str, *, skip_cloud: bool = False, include_cloud_runtime: bool = False) -> tuple[AuditGroup, ...]:
     groups = tuple(group for group in audit_groups() if mode in group.modes)
+    if include_cloud_runtime and not skip_cloud:
+        cloud_runtime = next(group for group in audit_groups() if group.id == "cloud_runtime_audit")
+        groups = (*groups, cloud_runtime)
     if skip_cloud:
-        groups = tuple(group for group in groups if group.id != "cloud_readonly_e2e")
+        groups = tuple(group for group in groups if group.id not in {"cloud_readonly_e2e", "cloud_runtime_audit"})
     return groups
 
 
@@ -237,11 +249,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="Do not run cloud readonly E2E even when cloud credentials are configured.",
     )
+    parser.add_argument(
+        "--include-cloud-runtime",
+        action="store_true",
+        help="Also run the read-only SSH cloud runtime audit. This is intentionally opt-in.",
+    )
     parser.add_argument("--json-out", type=Path, default=None, help="Optional path to write the JSON audit report.")
     args = parser.parse_args(argv)
 
     started_at = time.time()
-    results = [run_group(group) for group in selected_groups(args.mode, skip_cloud=args.skip_cloud)]
+    results = [
+        run_group(group)
+        for group in selected_groups(
+            args.mode,
+            skip_cloud=args.skip_cloud,
+            include_cloud_runtime=args.include_cloud_runtime,
+        )
+    ]
     report = build_report(args.mode, results, started_at)
     file_text = json.dumps(report, ensure_ascii=False, indent=2)
     console_text = json.dumps(report, ensure_ascii=True, indent=2)

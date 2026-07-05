@@ -31,6 +31,26 @@ def test_project_audit_board_skip_cloud_removes_cloud_group() -> None:
 
     assert "backend_full_pytest" in group_ids
     assert "cloud_readonly_e2e" not in group_ids
+    assert "cloud_runtime_audit" not in group_ids
+
+
+def test_project_audit_board_cloud_runtime_is_opt_in() -> None:
+    default_group_ids = {group.id for group in project_audit_board.selected_groups("full")}
+    included_group_ids = {
+        group.id for group in project_audit_board.selected_groups("full", include_cloud_runtime=True)
+    }
+    skipped_group_ids = {
+        group.id
+        for group in project_audit_board.selected_groups(
+            "full",
+            include_cloud_runtime=True,
+            skip_cloud=True,
+        )
+    }
+
+    assert "cloud_runtime_audit" not in default_group_ids
+    assert "cloud_runtime_audit" in included_group_ids
+    assert "cloud_runtime_audit" not in skipped_group_ids
 
 
 def test_project_audit_board_writes_json_and_returns_success(tmp_path, monkeypatch, capsys) -> None:
