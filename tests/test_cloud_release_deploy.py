@@ -182,6 +182,7 @@ def test_release_v2_can_run_cloud_readonly_e2e_after_remote_release(monkeypatch,
     assert ".last_successful_release" in calls[-2][1][-1]
     assert calls[-1][0] == "cloud_runtime_audit"
     assert calls[-1][2]["expected_release"] == "test-release"
+    assert calls[-1][2]["log_minutes"] == 3
 
 
 def test_release_v2_fails_when_post_release_cloud_runtime_audit_fails(monkeypatch, tmp_path) -> None:

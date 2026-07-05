@@ -51,8 +51,15 @@ def run_cloud_console_readonly_e2e(console_url: str) -> None:
     subprocess.run([npm, "run", "test:e2e:cloud"], cwd=REPO_ROOT / "console", check=True, env=env)
 
 
-def run_post_release_cloud_runtime_audit(host: str, key: Path, remote_dir: str, release_id: str) -> None:
-    report = run_cloud_audit(host=host, key=key, remote_dir=remote_dir, expected_release=release_id)
+def run_post_release_cloud_runtime_audit(
+    host: str,
+    key: Path,
+    remote_dir: str,
+    release_id: str,
+    *,
+    log_minutes: int = 3,
+) -> None:
+    report = run_cloud_audit(host=host, key=key, remote_dir=remote_dir, expected_release=release_id, log_minutes=log_minutes)
     report_path = REPO_ROOT / "output" / "audit" / f"cloud_runtime_audit_{release_id}.json"
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(
@@ -223,7 +230,7 @@ def main() -> int:
     parser.add_argument("--release-id", default=None)
     parser.add_argument("--install-deps", action="store_true")
     parser.add_argument("--restart", action="store_true")
-    parser.add_argument("--health-timeout", type=int, default=8)
+    parser.add_argument("--health-timeout", type=int, default=20)
     parser.add_argument(
         "--run-console-e2e",
         action="store_true",
