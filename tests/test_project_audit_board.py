@@ -52,9 +52,13 @@ def test_project_audit_board_writes_json_and_returns_success(tmp_path, monkeypat
     assert payload["ok"] is True
     assert payload["mode"] == "core"
     assert payload["failed_count"] == 0
+    assert payload["groups"][0]["title"] == "公开仓库防泄露检查"
     assert "sk-[REDACTED]" in json.dumps(payload, ensure_ascii=False)
     assert "sk-1234567890abcdef" not in json.dumps(payload, ensure_ascii=False)
-    console_payload = json.loads(capsys.readouterr().out)
+    console_output = capsys.readouterr().out
+    assert all(ord(ch) < 128 for ch in console_output)
+    assert "\\u516c\\u5f00\\u4ed3\\u5e93" in console_output
+    console_payload = json.loads(console_output)
     assert console_payload["ok"] is True
 
 

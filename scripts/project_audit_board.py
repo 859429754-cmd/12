@@ -243,11 +243,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     started_at = time.time()
     results = [run_group(group) for group in selected_groups(args.mode, skip_cloud=args.skip_cloud)]
     report = build_report(args.mode, results, started_at)
-    text = json.dumps(report, ensure_ascii=False, indent=2)
-    print_report(text)
+    file_text = json.dumps(report, ensure_ascii=False, indent=2)
+    console_text = json.dumps(report, ensure_ascii=True, indent=2)
+    print_report(console_text)
     if args.json_out is not None:
         args.json_out.parent.mkdir(parents=True, exist_ok=True)
-        args.json_out.write_text(text + "\n", encoding="utf-8")
+        args.json_out.write_text(file_text + "\n", encoding="utf-8")
     return 0 if report["ok"] else 1
 
 
