@@ -354,3 +354,12 @@ BTC 仍是 ETH 重要风向标，但不能只看绝对涨跌。系统必须同�
 - `ai_quant_trader/api/server.py::_walk_forward_acceptance`
 - `console/src/App.tsx::WalkForwardProposalPanel`
 - `tests/test_console_api.py::test_walk_forward_proposal_is_needs_review_without_auto_apply`
+- `ai_quant_trader/research/walk_forward.py::evaluate_walk_forward_harness`
+- `scripts/walk_forward_harness.py`
+
+新增 harness 口径：
+
+- `signal_count` 是历史信号数；`trade_count` 是 overlay 后实际执行数。
+- baseline trend、AI veto、AI reduce、AI strict consensus 和候选策略必须在 train / validation / out-of-sample 三段同时报告。
+- 候选若只改善训练集，或验证/OOS 交易数不足、PF 不达标、回撤恶化、参数稳定性差，必须自动 `rejected`。
+- harness 不允许逐 K 调用 DeepSeek，不允许自动修改实盘参数。
