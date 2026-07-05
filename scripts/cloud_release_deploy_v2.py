@@ -123,6 +123,8 @@ previous_target='{previous_target}'
 current_link="$remote_dir/current"
 if [ -n "$previous_target" ] && [ -e "$previous_target" ]; then
   ln -sfn "$previous_target" "$current_link"
+  previous_release_id="$(basename "$previous_target")"
+  echo "$previous_release_id" > "$remote_dir/releases/.last_successful_release"
   {restart_block}echo 'cloud_console_e2e_failed_rolled_back' >&2
   exit 0
 fi
@@ -284,7 +286,11 @@ def main() -> int:
             run([*ssh_base, remote_rollback_script(args.remote_dir, previous_target_for_local_gate, restart=args.restart)])
             raise
         run([*ssh_base, remote_mark_success_script(args.remote_dir, release_id)])
-        run_post_release_cloud_runtime_audit(args.host, key, args.remote_dir, release_id)
+        try:
+            run_post_release_cloud_runtime_audit(args.host, key, args.remote_dir, release_id)
+        except Exception:
+            run([*ssh_base, remote_rollback_script(args.remote_dir, previous_target_for_local_gate, restart=args.restart)])
+            raise
     return 0
 
 

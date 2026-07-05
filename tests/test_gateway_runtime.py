@@ -111,6 +111,43 @@ async def test_gate_contract_positions_are_normalized_to_base_qty() -> None:
 
 
 @pytest.mark.asyncio
+async def test_gate_markets_are_loaded_once_for_repeated_runtime_reads() -> None:
+    class FakeGateExchange:
+        def __init__(self):
+            self.load_markets_calls = 0
+
+        async def load_markets(self):
+            self.load_markets_calls += 1
+            return None
+
+        async def fetch_positions(self, symbols):
+            return [{"symbol": "ETH/USDT:USDT", "contracts": 1, "side": "long", "markPrice": 2000.0}]
+
+        def market(self, symbol):
+            return {
+                "symbol": symbol,
+                "contract": True,
+                "contractSize": 0.01,
+                "precision": {"amount": 0},
+                "limits": {"amount": {"min": 1}},
+            }
+
+        async def close(self):
+            return None
+
+    client = GateExecutionClient(dry_run=False)
+    await client.exchange.close()
+    fake = FakeGateExchange()
+    client.exchange = fake
+
+    await client.fetch_positions(["ETH/USDT:USDT"])
+    await client.fetch_positions(["ETH/USDT:USDT"])
+    await client._normalize_order_amount("ETH/USDT:USDT", 0.025, reduce_only=False)
+
+    assert fake.load_markets_calls == 1
+
+
+@pytest.mark.asyncio
 async def test_gate_balance_missing_usdt_total_does_not_return_fake_zero(monkeypatch) -> None:
     class FakeGateExchange:
         async def fetch_balance(self):

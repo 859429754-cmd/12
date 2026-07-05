@@ -32,6 +32,7 @@ class GateExecutionClient:
         self.api_secret_env = api_secret_env
         self.account_slot = account_slot
         self.exchange = self._new_exchange()
+        self._markets_loaded = False
 
     def _new_exchange(self):
         return ccxt.gateio(
@@ -46,6 +47,13 @@ class GateExecutionClient:
     async def reload_from_env(self) -> None:
         await self.close()
         self.exchange = self._new_exchange()
+        self._markets_loaded = False
+
+    async def _ensure_markets_loaded(self) -> None:
+        if self.dry_run or self._markets_loaded:
+            return
+        await self.exchange.load_markets()
+        self._markets_loaded = True
 
     async def check_connectivity(self) -> bool:
         if self.dry_run:
@@ -78,7 +86,7 @@ class GateExecutionClient:
     async def fetch_positions(self, symbols: list[str]) -> list[PositionSnapshot]:
         if self.dry_run:
             return [PositionSnapshot(symbol=symbol, side=Side.FLAT, qty=0.0, mark_price=0.0) for symbol in symbols]
-        await self.exchange.load_markets()
+        await self._ensure_markets_loaded()
         raw_positions = await self.exchange.fetch_positions(symbols)
         by_symbol: dict[str, PositionSnapshot] = {}
         for item in raw_positions:
@@ -115,7 +123,7 @@ class GateExecutionClient:
     async def fetch_open_orders(self, symbols: list[str]) -> list[dict[str, Any]]:
         if self.dry_run:
             return []
-        await self.exchange.load_markets()
+        await self._ensure_markets_loaded()
         output: list[dict[str, Any]] = []
         for symbol in symbols:
             try:
@@ -128,7 +136,7 @@ class GateExecutionClient:
     async def find_order_by_client_order_id(self, symbol: str, client_order_id: str) -> OrderResult | None:
         if self.dry_run:
             return None
-        await self.exchange.load_markets()
+        await self._ensure_markets_loaded()
         gate_text = self._gate_text(client_order_id)
         for fetcher_name in ("fetch_open_orders", "fetch_closed_orders"):
             fetcher = getattr(self.exchange, fetcher_name, None)
@@ -150,7 +158,7 @@ class GateExecutionClient:
     async def fetch_order_by_exchange_id(self, symbol: str, exchange_order_id: str) -> OrderResult | None:
         if self.dry_run or not exchange_order_id:
             return None
-        await self.exchange.load_markets()
+        await self._ensure_markets_loaded()
         try:
             order = await self.exchange.fetch_order(exchange_order_id, symbol)
         except ccxt.OrderNotFound:
@@ -193,7 +201,7 @@ class GateExecutionClient:
         if self.dry_run:
             reference_price = max(float(price or 0.0), 1e-9)
             return max(5.0 / reference_price, 0.0001)
-        await self.exchange.load_markets()
+        await self._ensure_markets_loaded()
         market = self.exchange.market(symbol)
         if market.get("contract"):
             precision_amount = (market.get("precision") or {}).get("amount")
@@ -355,7 +363,7 @@ class GateExecutionClient:
     async def _contract_size(self, symbol: str) -> float:
         if self.dry_run:
             return 1.0
-        await self.exchange.load_markets()
+        await self._ensure_markets_loaded()
         market = self.exchange.market(symbol)
         return float(market.get("contractSize") or 1.0) if market.get("contract") else 1.0
 
@@ -395,7 +403,7 @@ class GateExecutionClient:
     async def _normalize_order_amount(self, symbol: str, amount: float, reduce_only: bool) -> float:
         if self.dry_run:
             return float(amount)
-        await self.exchange.load_markets()
+        await self._ensure_markets_loaded()
         market = self.exchange.market(symbol)
         raw_amount = float(amount)
         if not market.get("contract"):

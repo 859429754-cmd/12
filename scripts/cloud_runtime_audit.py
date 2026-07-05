@@ -122,7 +122,8 @@ def _readiness(host: str, key: Path, remote_dir: str) -> tuple[dict[str, object]
     failures: list[str] = []
     payload: dict[str, object] | None = None
     if not result.ok:
-        failures.append(f"readiness_check_failed:{result.exit_code}:{result.stderr}")
+        detail = result.stderr.strip() or result.stdout.strip()
+        failures.append(f"readiness_check_failed:{result.exit_code}:{detail}")
         return None, failures
     try:
         payload = _parse_json_line(result.stdout)

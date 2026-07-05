@@ -193,6 +193,7 @@ def test_release_v2_fails_when_post_release_cloud_runtime_audit_fails(monkeypatc
     monkeypatch.setenv("AIQUANT_E2E_ACCOUNT1_PASSWORD", "account1-password")
     monkeypatch.setenv("AIQUANT_E2E_ACCOUNT2_PASSWORD", "account2-password")
     monkeypatch.setenv("AIQUANT_E2E_ADMIN_PASSWORD", "admin-password")
+    calls: list[list[str]] = []
 
     def fake_subprocess_run(command, **kwargs):
         if "readlink -f '/srv/ai-quant/current'" in list(command)[-1]:
@@ -215,8 +216,11 @@ def test_release_v2_fails_when_post_release_cloud_runtime_audit_fails(monkeypatc
             duration_seconds=0.1,
         )
 
+    def fake_run(command: list[str]) -> None:
+        calls.append(command)
+
     monkeypatch.setattr(deploy_v2.subprocess, "run", fake_subprocess_run)
-    monkeypatch.setattr(deploy_v2, "run", lambda command: None)
+    monkeypatch.setattr(deploy_v2, "run", fake_run)
     monkeypatch.setattr(deploy_v2, "run_cloud_audit", fake_cloud_audit)
     monkeypatch.setattr(deploy_v2, "build_source_tar", lambda target: target.write_text("src", encoding="utf-8"))
     monkeypatch.setattr(deploy_v2, "build_console_dist_tar", lambda target: target.write_text("console", encoding="utf-8"))
@@ -240,6 +244,11 @@ def test_release_v2_fails_when_post_release_cloud_runtime_audit_fails(monkeypatc
 
     with pytest.raises(RuntimeError, match="Post-release cloud runtime audit failed"):
         deploy_v2.main()
+
+    rollback_calls = [call for call in calls if "cloud_console_e2e_failed_rolled_back" in call[-1]]
+    assert len(rollback_calls) == 1
+    assert "/srv/ai-quant/releases/previous" in rollback_calls[0][-1]
+    assert ".last_successful_release" in rollback_calls[0][-1]
 
 
 def test_release_v2_rolls_back_when_cloud_readonly_e2e_fails(monkeypatch, tmp_path) -> None:
