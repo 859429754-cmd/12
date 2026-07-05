@@ -73,6 +73,15 @@ def audit_groups() -> tuple[AuditGroup, ...]:
             timeout_seconds=180,
         ),
         AuditGroup(
+            id="ai_brain_contract",
+            title="AI 大脑契约审计",
+            command=(sys.executable, "scripts/ai_brain_contract_audit.py", "--mode", "extended"),
+            cwd=ROOT,
+            modes=("core", "full"),
+            requirement="DeepSeek output normalization, budget guards, credential failover, news alignment, and five-tier sizing must remain deterministic and fail closed.",
+            timeout_seconds=420,
+        ),
+        AuditGroup(
             id="trading_chain_extended",
             title="交易链路 extended 审计",
             command=(sys.executable, "scripts/trading_chain_audit.py", "--mode", "extended"),

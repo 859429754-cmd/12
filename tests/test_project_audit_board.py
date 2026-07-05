@@ -12,6 +12,7 @@ def test_project_audit_board_core_groups_cover_required_gates() -> None:
 
     assert "public_repo_preflight" in group_ids
     assert "compileall" in group_ids
+    assert "ai_brain_contract" in group_ids
     assert "trading_chain_extended" in group_ids
     assert "frontend_build" in group_ids
     assert "frontend_e2e" in group_ids
