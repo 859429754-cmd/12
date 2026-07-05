@@ -116,6 +116,7 @@ def test_release_v2_can_run_console_e2e_before_remote_upload(monkeypatch, tmp_pa
 
 def test_release_v2_can_run_cloud_readonly_e2e_after_remote_release(monkeypatch, tmp_path) -> None:
     import scripts.cloud_release_deploy_v2 as deploy_v2
+    from scripts.cloud_runtime_audit import CloudRuntimeAudit
 
     key = tmp_path / "ssh-key"
     key.write_text("placeholder", encoding="utf-8")
@@ -131,8 +132,26 @@ def test_release_v2_can_run_cloud_readonly_e2e_after_remote_release(monkeypatch,
     def fake_run(command: list[str]) -> None:
         calls.append(("run", command, {}))
 
+    def fake_cloud_audit(**kwargs):  # noqa: ANN003
+        calls.append(("cloud_runtime_audit", [], kwargs))
+        return CloudRuntimeAudit(
+            ok=True,
+            host=kwargs["host"],
+            remote_dir=kwargs["remote_dir"],
+            expected_release=kwargs["expected_release"],
+            current_target=f'{kwargs["remote_dir"]}/releases/{kwargs["expected_release"]}',
+            last_successful_release=kwargs["expected_release"],
+            service_statuses={"ai-quant-trader.service": "active"},
+            readiness={"overall": "ok"},
+            latest_release_runs=[],
+            recent_error_log_tail="",
+            failures=[],
+            duration_seconds=0.1,
+        )
+
     monkeypatch.setattr(deploy_v2.subprocess, "run", fake_subprocess_run)
     monkeypatch.setattr(deploy_v2, "run", fake_run)
+    monkeypatch.setattr(deploy_v2, "run_cloud_audit", fake_cloud_audit)
     monkeypatch.setattr(deploy_v2, "build_source_tar", lambda target: target.write_text("src", encoding="utf-8"))
     monkeypatch.setattr(deploy_v2, "build_console_dist_tar", lambda target: target.write_text("console", encoding="utf-8"))
     monkeypatch.setattr(
@@ -159,8 +178,68 @@ def test_release_v2_can_run_cloud_readonly_e2e_after_remote_release(monkeypatch,
     cloud_e2e_calls = [call for call in calls if call[0] == "subprocess" and call[1][-2:] == ["run", "test:e2e:cloud"]]
     assert len(cloud_e2e_calls) == 1
     assert cloud_e2e_calls[0][2]["env"]["CONSOLE_URL"] == "https://example.test"
-    assert calls[-1][0] == "run"
-    assert ".last_successful_release" in calls[-1][1][-1]
+    assert calls[-2][0] == "run"
+    assert ".last_successful_release" in calls[-2][1][-1]
+    assert calls[-1][0] == "cloud_runtime_audit"
+    assert calls[-1][2]["expected_release"] == "test-release"
+
+
+def test_release_v2_fails_when_post_release_cloud_runtime_audit_fails(monkeypatch, tmp_path) -> None:
+    import scripts.cloud_release_deploy_v2 as deploy_v2
+    from scripts.cloud_runtime_audit import CloudRuntimeAudit
+
+    key = tmp_path / "ssh-key"
+    key.write_text("placeholder", encoding="utf-8")
+    monkeypatch.setenv("AIQUANT_E2E_ACCOUNT1_PASSWORD", "account1-password")
+    monkeypatch.setenv("AIQUANT_E2E_ACCOUNT2_PASSWORD", "account2-password")
+    monkeypatch.setenv("AIQUANT_E2E_ADMIN_PASSWORD", "admin-password")
+
+    def fake_subprocess_run(command, **kwargs):
+        if "readlink -f '/srv/ai-quant/current'" in list(command)[-1]:
+            return SimpleNamespace(stdout="/srv/ai-quant/releases/previous\n")
+        return SimpleNamespace(stdout="")
+
+    def fake_cloud_audit(**kwargs):  # noqa: ANN003
+        return CloudRuntimeAudit(
+            ok=False,
+            host=kwargs["host"],
+            remote_dir=kwargs["remote_dir"],
+            expected_release=kwargs["expected_release"],
+            current_target="/srv/ai-quant/releases/old",
+            last_successful_release="old",
+            service_statuses={"ai-quant-trader.service": "active"},
+            readiness={"overall": "ok"},
+            latest_release_runs=[],
+            recent_error_log_tail="",
+            failures=["current_target_mismatch:/srv/ai-quant/releases/old!=test-release"],
+            duration_seconds=0.1,
+        )
+
+    monkeypatch.setattr(deploy_v2.subprocess, "run", fake_subprocess_run)
+    monkeypatch.setattr(deploy_v2, "run", lambda command: None)
+    monkeypatch.setattr(deploy_v2, "run_cloud_audit", fake_cloud_audit)
+    monkeypatch.setattr(deploy_v2, "build_source_tar", lambda target: target.write_text("src", encoding="utf-8"))
+    monkeypatch.setattr(deploy_v2, "build_console_dist_tar", lambda target: target.write_text("console", encoding="utf-8"))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "cloud_release_deploy_v2.py",
+            "--host",
+            "root@example",
+            "--key",
+            str(key),
+            "--remote-dir",
+            "/srv/ai-quant",
+            "--release-id",
+            "test-release",
+            "--cloud-console-readonly-e2e-url",
+            "https://example.test",
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="Post-release cloud runtime audit failed"):
+        deploy_v2.main()
 
 
 def test_release_v2_rolls_back_when_cloud_readonly_e2e_fails(monkeypatch, tmp_path) -> None:

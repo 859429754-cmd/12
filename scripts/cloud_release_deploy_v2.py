@@ -9,8 +9,10 @@ from pathlib import Path
 
 try:
     from scripts.cloud_release_deploy import REPO_ROOT, build_console_dist_tar, build_source_tar, run
+    from scripts.cloud_runtime_audit import run_audit as run_cloud_audit
 except ModuleNotFoundError:  # pragma: no cover - direct script execution path
     from cloud_release_deploy import REPO_ROOT, build_console_dist_tar, build_source_tar, run
+    from cloud_runtime_audit import run_audit as run_cloud_audit
 
 
 def git_sha() -> str:
@@ -47,6 +49,25 @@ def run_cloud_console_readonly_e2e(console_url: str) -> None:
     if missing:
         raise RuntimeError(f"Missing cloud console E2E credential env var(s): {', '.join(missing)}")
     subprocess.run([npm, "run", "test:e2e:cloud"], cwd=REPO_ROOT / "console", check=True, env=env)
+
+
+def run_post_release_cloud_runtime_audit(host: str, key: Path, remote_dir: str, release_id: str) -> None:
+    report = run_cloud_audit(host=host, key=key, remote_dir=remote_dir, expected_release=release_id)
+    report_path = REPO_ROOT / "output" / "audit" / f"cloud_runtime_audit_{release_id}.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(
+        json_dumps_report(report) + "\n",
+        encoding="utf-8",
+    )
+    if not report.ok:
+        raise RuntimeError(f"Post-release cloud runtime audit failed: {', '.join(report.failures)}")
+
+
+def json_dumps_report(report) -> str:  # noqa: ANN001
+    import json
+    from dataclasses import asdict
+
+    return json.dumps(asdict(report), ensure_ascii=False, indent=2)
 
 
 def run_full_local_validation() -> None:
@@ -263,6 +284,7 @@ def main() -> int:
             run([*ssh_base, remote_rollback_script(args.remote_dir, previous_target_for_local_gate, restart=args.restart)])
             raise
         run([*ssh_base, remote_mark_success_script(args.remote_dir, release_id)])
+        run_post_release_cloud_runtime_audit(args.host, key, args.remote_dir, release_id)
     return 0
 
 

@@ -227,7 +227,9 @@ def run_audit(
     if expected_release:
         if last_success != expected_release:
             failures.append(f"last_successful_release_mismatch:{last_success}!={expected_release}")
-        if current_target and not current_target.rstrip("/").endswith(f"/{expected_release}"):
+        if not current_target:
+            failures.append("current_target_missing")
+        elif not current_target.rstrip("/").endswith(f"/{expected_release}"):
             failures.append(f"current_target_mismatch:{current_target}!={expected_release}")
         if release_runs and release_runs[0].get("release_id") != expected_release:
             failures.append(f"latest_release_run_mismatch:{release_runs[0].get('release_id')}!={expected_release}")

@@ -90,6 +90,44 @@ def test_cloud_runtime_audit_fails_on_release_mismatch(tmp_path: Path, monkeypat
     assert "latest_release_run_mismatch:old!=new" in report.failures
 
 
+def test_cloud_runtime_audit_fails_when_current_target_missing(tmp_path: Path, monkeypatch) -> None:
+    key = tmp_path / "ssh-key"
+    key.write_text("placeholder", encoding="utf-8")
+
+    def fake_run(command, **kwargs):  # noqa: ANN001, ANN003
+        script = command[-1]
+        if "readlink -f" in script:
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        if ".last_successful_release" in script:
+            return subprocess.CompletedProcess(command, 0, stdout="abc123\n", stderr="")
+        if "systemctl is-active" in script:
+            return subprocess.CompletedProcess(command, 0, stdout="active\nactive\nactive\nactive\n", stderr="")
+        if "http_readiness_check.py" in script:
+            return subprocess.CompletedProcess(command, 0, stdout='{"ok": true, "overall": "ok", "blocking": []}\n', stderr="")
+        if "select created_at,payload from release_runs" in script:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=json.dumps({"rows": [{"created_at": "now", "release_id": "abc123", "status": "success"}]}) + "\n",
+                stderr="",
+            )
+        if "journalctl" in script:
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        raise AssertionError(script)
+
+    monkeypatch.setattr(cloud_runtime_audit.subprocess, "run", fake_run)
+
+    report = cloud_runtime_audit.run_audit(
+        host="root@example",
+        key=key,
+        remote_dir="/root/ai-quant-trader",
+        expected_release="abc123",
+    )
+
+    assert report.ok is False
+    assert "current_target_missing" in report.failures
+
+
 def test_cloud_runtime_audit_fails_on_recent_service_errors(tmp_path: Path, monkeypatch) -> None:
     key = tmp_path / "ssh-key"
     key.write_text("placeholder", encoding="utf-8")
