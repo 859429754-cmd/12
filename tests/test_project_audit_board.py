@@ -26,6 +26,13 @@ def test_project_audit_board_full_groups_include_cloud_and_full_pytest() -> None
     assert "cloud_readonly_e2e" in group_ids
 
 
+def test_project_audit_board_skip_cloud_removes_cloud_group() -> None:
+    group_ids = {group.id for group in project_audit_board.selected_groups("full", skip_cloud=True)}
+
+    assert "backend_full_pytest" in group_ids
+    assert "cloud_readonly_e2e" not in group_ids
+
+
 def test_project_audit_board_writes_json_and_returns_success(tmp_path, monkeypatch, capsys) -> None:
     calls: list[list[str]] = []
 

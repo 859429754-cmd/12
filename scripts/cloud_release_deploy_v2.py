@@ -50,16 +50,19 @@ def run_cloud_console_readonly_e2e(console_url: str) -> None:
 
 
 def run_full_local_validation() -> None:
-    npm = "npm.cmd" if os.name == "nt" else "npm"
     subprocess.run(
-        [sys.executable, "-m", "compileall", "ai_quant_trader", "tests", "scripts"],
+        [
+            sys.executable,
+            "scripts/project_audit_board.py",
+            "--mode",
+            "full",
+            "--skip-cloud",
+            "--json-out",
+            "output/audit/project_audit_board_release_gate.json",
+        ],
         cwd=REPO_ROOT,
         check=True,
     )
-    subprocess.run([sys.executable, "-m", "pytest", "-q"], cwd=REPO_ROOT, check=True)
-    subprocess.run([npm, "run", "build"], cwd=REPO_ROOT / "console", check=True)
-    subprocess.run([sys.executable, "scripts/public_repo_preflight.py"], cwd=REPO_ROOT, check=True)
-    subprocess.run([npm, "run", "test:e2e"], cwd=REPO_ROOT / "console", check=True, env=playwright_env())
 
 
 def remote_current_target(host: str, key: Path, remote_dir: str) -> str:

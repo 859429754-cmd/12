@@ -126,8 +126,11 @@ def audit_groups() -> tuple[AuditGroup, ...]:
     )
 
 
-def selected_groups(mode: str) -> tuple[AuditGroup, ...]:
-    return tuple(group for group in audit_groups() if mode in group.modes)
+def selected_groups(mode: str, *, skip_cloud: bool = False) -> tuple[AuditGroup, ...]:
+    groups = tuple(group for group in audit_groups() if mode in group.modes)
+    if skip_cloud:
+        groups = tuple(group for group in groups if group.id != "cloud_readonly_e2e")
+    return groups
 
 
 def _redact(text: str | bytes | None) -> str:
@@ -229,11 +232,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         description="Run the AI quant project audit board without reading runtime secrets or submitting real orders.",
     )
     parser.add_argument("--mode", choices=["core", "full"], default="core")
+    parser.add_argument(
+        "--skip-cloud",
+        action="store_true",
+        help="Do not run cloud readonly E2E even when cloud credentials are configured.",
+    )
     parser.add_argument("--json-out", type=Path, default=None, help="Optional path to write the JSON audit report.")
     args = parser.parse_args(argv)
 
     started_at = time.time()
-    results = [run_group(group) for group in selected_groups(args.mode)]
+    results = [run_group(group) for group in selected_groups(args.mode, skip_cloud=args.skip_cloud)]
     report = build_report(args.mode, results, started_at)
     text = json.dumps(report, ensure_ascii=False, indent=2)
     print_report(text)
