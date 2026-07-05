@@ -960,7 +960,19 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
                 rows = ctx.table("news_summaries", limit=limit)
                 latest = rows[0] if rows else None
                 if _news_row_is_stale(latest, max_age_minutes):
-                    digest = await _collect_news_digest(ctx.config_path)
+                    try:
+                        digest = await _collect_news_digest(ctx.config_path)
+                    except Exception as exc:  # noqa: BLE001
+                        rows = ctx.table("news_summaries", limit=limit)
+                        return _news_latest_response(
+                            rows,
+                            None,
+                            max_age_minutes,
+                            compact=compact,
+                            include_payload=include_payload,
+                            timeline_limit=limit,
+                            refresh_error=f"refresh_failed:{type(exc).__name__}",
+                        )
                     rows = ctx.table("news_summaries", limit=limit)
                     return _news_latest_response(
                         rows,
@@ -3561,6 +3573,7 @@ def _news_latest_response(
     compact: bool = False,
     include_payload: bool = False,
     timeline_limit: int | None = None,
+    refresh_error: str | None = None,
 ) -> dict[str, Any]:
     latest_payload = fresh_digest.model_dump(mode="json") if fresh_digest else ((rows[0].get("payload") if rows else None) or {})
     generated_at = latest_payload.get("generated_at") or (rows[0].get("created_at") if rows else None)
@@ -3568,11 +3581,13 @@ def _news_latest_response(
     item_limit = max(1, timeline_limit or len(rows) or 1)
     timeline = [_sanitize_news_item(item) for item in (latest_payload.get("items") or [])[:item_limit]]
     warnings = _user_facing_news_warnings(latest_payload.get("warnings") or [])
+    if refresh_error:
+        warnings = [*warnings, refresh_error]
     if timeline and any(str(item.get("title") or item.get("summary") or "").strip() for item in timeline):
         warnings = [warning for warning in warnings if not str(warning).startswith(("rss_error:", "scrape_error:"))]
     stale = age_minutes is None or age_minutes > max_age_minutes
     items_count = len(latest_payload.get("items") or []) or len(timeline) or len(rows)
-    source_status = "refresh_failed" if fresh_digest is None and not rows else ("stale" if stale else "fresh")
+    source_status = "refresh_failed" if refresh_error or (fresh_digest is None and not rows) else ("stale" if stale else "fresh")
     response = {
         "ok": bool(latest_payload or rows or fresh_digest),
         "source": "fresh_refresh" if fresh_digest else "news_cache",
@@ -3643,10 +3658,17 @@ def _user_facing_news_warnings(warnings: Iterable[Any]) -> list[Any]:
 def _sanitize_news_item(item: Any) -> dict[str, Any]:
     if not isinstance(item, dict):
         return {}
+    raw_title = _short_news_text(item.get("raw_title") or item.get("title") or item.get("headline") or item.get("summary"), 360)
+    raw_summary = _short_news_text(item.get("raw_summary") or item.get("summary") or item.get("title") or item.get("headline"), 1200)
+    title = _short_news_text(item.get("title") or item.get("headline") or item.get("summary"), 240)
+    summary = _short_news_text(item.get("summary") or item.get("title") or item.get("headline"), 900)
+    fact_text = f"{raw_title} {raw_summary} {title} {summary}"
     output = {
-        "title": _short_news_text(item.get("title") or item.get("headline") or item.get("summary"), 240),
+        "title": title,
         "headline": _short_news_text(item.get("headline") or item.get("title") or item.get("summary"), 240),
-        "summary": _short_news_text(item.get("summary") or item.get("title") or item.get("headline"), 900),
+        "summary": summary,
+        "raw_title": raw_title,
+        "raw_summary": raw_summary,
         "source": _short_news_text(item.get("source") or "新闻源", 80),
         "published_at": item.get("published_at"),
         "time": item.get("time"),
@@ -3656,8 +3678,70 @@ def _sanitize_news_item(item: Any) -> dict[str, Any]:
         "importance": item.get("importance"),
         "bias": item.get("bias"),
         "news_direction": item.get("news_direction"),
+        "direction_label": item.get("news_direction") or _news_item_direction_label(fact_text),
+        "actor": _news_item_actor(fact_text, str(item.get("source") or "")),
+        "action": _news_item_action(fact_text),
+        "concrete_data": _news_item_concrete_data(fact_text),
+        "concrete_fact": _short_news_text(summary or title or raw_summary or raw_title, 900),
     }
     return {key: value for key, value in output.items() if value is not None and value != ""}
+
+
+def _news_item_actor(text: str, source: str) -> str:
+    lowered = text.lower()
+    patterns: tuple[tuple[str, tuple[str, ...]], ...] = (
+        ("鲍威尔", ("powell", "鲍威尔")),
+        ("美联储", ("fed", "fomc", "federal reserve", "美联储", "联储")),
+        ("白宫", ("white house", "白宫")),
+        ("美国财政部", ("treasury", "财政部")),
+        ("美国证监会", ("sec", "证监会")),
+        ("交易所或加密机构", ("exchange", "交易所", "bitcoin", "ethereum", "比特币", "以太坊")),
+    )
+    for actor, aliases in patterns:
+        if any(alias in lowered or alias in text for alias in aliases):
+            return actor
+    return _short_news_text(source or "公开消息源", 80)
+
+
+def _news_item_action(text: str) -> str:
+    lowered = text.lower()
+    if any(token in text for token in ("表示", "称", "警告", "暗示", "宣布", "批准", "拒绝", "制裁")):
+        return "statement_or_policy_action"
+    if any(token in lowered for token in ("said", "says", "warn", "signal", "announce", "approve", "reject", "sanction")):
+        return "statement_or_policy_action"
+    if any(token in lowered for token in ("rose", "rises", "surged", "jumped", "fell", "falls", "dropped", "slumped", "上涨", "下跌")):
+        return "market_price_move"
+    return "news_update"
+
+
+def _news_item_concrete_data(text: str) -> str:
+    matches = re.findall(
+        r"(?i)(?:\d+(?:\.\d+)?\s?%|\d+\s?(?:bp|bps|个基点)|[$€¥]?\d+(?:,\d{3})*(?:\.\d+)?\s?(?:bn|billion|m|million|万|亿|亿美元)?)",
+        text,
+    )
+    deduped: list[str] = []
+    for match in matches:
+        cleaned = str(match).strip()
+        if cleaned and cleaned not in deduped:
+            deduped.append(cleaned)
+    return "；".join(deduped[:6])
+
+
+def _news_item_direction_label(text: str) -> str:
+    lowered = text.lower()
+    bullish = sum(
+        lowered.count(token)
+        for token in ("rate cut", "dovish", "etf approval", "inflow", "ceasefire", "降息", "鸽派", "批准", "资金流入", "停火")
+    )
+    bearish = sum(
+        lowered.count(token)
+        for token in ("rate hike", "hawkish", "sanction", "war", "hack", "outflow", "加息", "鹰派", "制裁", "战争", "资金流出")
+    )
+    if bullish > bearish:
+        return "bullish"
+    if bearish > bullish:
+        return "bearish"
+    return "neutral" if bullish or bearish else "unknown"
 
 
 def _short_news_text(value: Any, limit: int) -> str:

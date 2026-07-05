@@ -1836,7 +1836,8 @@ def test_news_latest_limits_timeline_payload_size(tmp_path: Path) -> None:
     body = response.json()
     assert len(body["timeline"]) == 3
     assert len(body["timeline"][0]["summary"]) <= 900
-    assert "raw_summary" not in body["timeline"][0]
+    assert len(body["timeline"][0]["raw_summary"]) <= 1200
+    assert body["timeline"][0]["concrete_fact"]
 
 
 def test_news_row_age_detects_stale_cache() -> None:

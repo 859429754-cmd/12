@@ -5,10 +5,14 @@ import re
 from datetime import UTC, datetime, timedelta, timezone
 
 from ai_quant_trader.app import TradingApp
+from ai_quant_trader.api import server
+from ai_quant_trader.api.server import create_app
 from ai_quant_trader.core.models import Alignment, NewsDigest, NewsDirection, NewsItem
 from ai_quant_trader.data.news import NewsCollector
 from ai_quant_trader.data.news_memory import DailyNewsFlashStore, NewsMemoryStore
 from ai_quant_trader.reporting.hourly import HourlyReportBuilder
+from ai_quant_trader.storage.sqlite import SQLiteStore
+from fastapi.testclient import TestClient
 from tests.test_console_api import write_config
 
 
@@ -324,3 +328,94 @@ def test_trading_app_reads_cached_news_digest(tmp_path) -> None:
     assert cached.summary == "美国GDP增长2.4%"
     assert cached.items[0].source == "金十数据"
     app.store.close()
+
+
+def test_news_latest_falls_back_to_cached_timeline_when_refresh_fails(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CONSOLE_AUTH_DISABLED", "1")
+    config_path = tmp_path / "config.yaml"
+    db_path = tmp_path / "trader.sqlite3"
+    audit_path = tmp_path / "audit.jsonl"
+    write_config(config_path, db_path, audit_path, symbols=["ETH/USDT:USDT"])
+    store = SQLiteStore(str(db_path), str(audit_path))
+    try:
+        store.insert(
+            "news_summaries",
+            NewsDigest(
+                generated_at=datetime.now(UTC) - timedelta(minutes=8),
+                summary="缓存新闻摘要",
+                items=[
+                    NewsItem(
+                        title="美联储暗示更高利率",
+                        raw_title="Fed signals higher rates",
+                        summary="鲍威尔表示通胀仍高，核心PCE维持在2.8%。",
+                        raw_summary="Powell said inflation remains high and core PCE holds at 2.8%.",
+                        source="金十数据",
+                        published_at=datetime.now(UTC) - timedelta(minutes=8),
+                        category="macro",
+                        credibility=0.95,
+                        important=True,
+                    )
+                ],
+            ).model_dump(mode="json"),
+        )
+    finally:
+        store.close()
+
+    async def fail_collect(_config_path: str) -> NewsDigest:
+        raise RuntimeError("rss timeout")
+
+    monkeypatch.setattr(server, "_collect_news_digest", fail_collect)
+    client = TestClient(create_app(str(config_path)))
+
+    response = client.get("/api/news/latest?limit=5&max_age_minutes=1&auto_refresh=true")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["source_status"] == "refresh_failed"
+    assert any("refresh_failed" in str(warning) for warning in body["warnings"])
+    assert body["timeline"][0]["source"] == "金十数据"
+    assert body["timeline"][0]["title"] == "美联储暗示更高利率"
+
+
+def test_news_latest_timeline_preserves_raw_facts_and_structured_labels(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CONSOLE_AUTH_DISABLED", "1")
+    config_path = tmp_path / "config.yaml"
+    db_path = tmp_path / "trader.sqlite3"
+    audit_path = tmp_path / "audit.jsonl"
+    write_config(config_path, db_path, audit_path, symbols=["ETH/USDT:USDT"])
+    store = SQLiteStore(str(db_path), str(audit_path))
+    try:
+        store.insert(
+            "news_summaries",
+            NewsDigest(
+                summary="缓存新闻摘要",
+                items=[
+                    NewsItem(
+                        title="鲍威尔表示核心PCE维持在2.8%，降息预期下降",
+                        raw_title="Powell says core PCE remains at 2.8%, rate-cut bets decline",
+                        summary="美联储主席鲍威尔表示通胀仍偏高，交易员降低降息预期。",
+                        raw_summary="Fed Chair Powell said inflation remains high as traders reduce rate-cut bets.",
+                        source="金十数据",
+                        published_at=datetime(2026, 6, 15, 12, 30, tzinfo=UTC),
+                        category="macro",
+                        credibility=0.95,
+                        important=True,
+                    )
+                ],
+            ).model_dump(mode="json"),
+        )
+    finally:
+        store.close()
+
+    client = TestClient(create_app(str(config_path)))
+    response = client.get("/api/news/latest?limit=5&auto_refresh=false")
+
+    assert response.status_code == 200
+    item = response.json()["timeline"][0]
+    assert item["raw_title"] == "Powell says core PCE remains at 2.8%, rate-cut bets decline"
+    assert item["raw_summary"].startswith("Fed Chair Powell")
+    assert item["actor"] in {"鲍威尔", "美联储"}
+    assert item["action"]
+    assert "2.8%" in item["concrete_data"]
+    assert item["direction_label"] in {"bullish", "bearish", "neutral", "unknown"}
