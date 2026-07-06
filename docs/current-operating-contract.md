@@ -1,6 +1,6 @@
 # AI 量化系统当前运行合同
 
-更新时间：2026-06-04
+更新时间：2026-07-07
 
 本文件记录当前必须遵守的策略、AI、账户、控制台安全和部署合同。以后以本文件、`CONTEXT.md`、ADR-0005 和代码测试为准，忽略旧对话里关于 Trade PIN、操作验证码、EMA 前置过滤、`range` 账户兼容 `follower` 的方案。
 
@@ -227,6 +227,64 @@ python scripts/trading_chain_audit.py --mode extended
 - `order_lifecycle` readiness 不能只看最新一条事件。系统必须按 `client_order_id` 检查每个订单的最新状态；任何仍未解决的 `unknown`、`cancel_failed`、或 stop-loss `rejected/failed` 都必须进入 readiness 告警，live 下阻断新开仓。
 - 账户2/follower 是“跟随账户”，不是可忽略的展示层。live 下 follower 开仓、平仓或订单状态刷新失败，必须写入 `exchange_health` 并 fail-closed，直到人工确认账户2状态。
 - Gate 仍有持仓且本地存在 `native_stop_order_id` 时，reconciliation 必须通过 `fetch_order_by_exchange_id()` 校验交易所侧止损单存在、方向与持仓相反、reduce-only、数量覆盖当前 Gate 净持仓、触发价匹配本地固定 ATR 止损价。查不到、查询失败、非 reduce-only、方向不匹配、数量不足或触发价漂移都必须进入 `reconciliation_required`。
+
+## 2026-07-07 最终验收审计板合同
+
+以后以本节为准：完整验收必须使用严格审计板，不允许 selected group 被跳过后仍返回成功。
+
+固定命令：
+
+```powershell
+$env:CONSOLE_URL='http://8.209.200.19'
+$env:AIQUANT_E2E_ACCOUNT1_PASSWORD='yx'
+$env:AIQUANT_E2E_ACCOUNT2_PASSWORD='wx'
+$env:AIQUANT_E2E_ADMIN_PASSWORD='1234567'
+python scripts\project_audit_board.py --mode full --include-cloud-runtime --fail-on-skipped --json-out output\audit\project_audit_board_full_cloud.json
+```
+
+审计要求：
+
+- `--fail-on-skipped` 必须开启。
+- `frontend_e2e` 必须只打本地 Vite 服务，不得继承 `CONSOLE_URL` 打到公网云端。
+- `cloud_readonly_e2e` 必须显式使用 `CONSOLE_URL` 和账号密码环境变量。
+- 若云端只读 E2E、cloud runtime audit、公开仓库防泄露、后端全量测试、前端 build 任一失败，不得发布或宣称验收完成。
+
+## 2026-07-07 回测 trade ledger 字段合同
+
+以后以本节为准：回测账本字段是对外 API/CSV 合同，不得静默删除或改名。
+
+每笔 `trade_ledger` 至少必须包含：
+
+```text
+entry_time
+exit_time
+side
+entry_price
+exit_price
+qty
+pnl
+fee_paid
+slippage_paid
+exit_reason
+stop_loss_price
+stop_price
+max_adverse_excursion
+max_adverse_excursion_pct
+intrabar_path
+```
+
+字段说明：
+
+- `stop_loss_price` 是当前固定 ATR 止损的主字段。
+- `stop_price` 是外部消费者兼容别名，值必须等于 `stop_loss_price`。
+- `max_adverse_excursion` 是最大不利波动的绝对 PnL 值。
+- `max_adverse_excursion_pct` 是最大不利波动百分比。
+- CSV 导出必须同时包含 `stop_price` 和 `max_adverse_excursion`，不能只导出 `stop_loss_price` 或百分比 MAE。
+
+相关测试：
+
+- `tests/test_strategy_trend.py::test_trend_backtest_trade_ledger_reports_required_prd_fields`
+- `tests/test_strategy_trend.py::test_trend_backtest_uses_atr_stop_multiple_in_trade_ledger`
 
 ## 3. 多账户执行模型
 
