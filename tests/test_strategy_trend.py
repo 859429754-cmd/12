@@ -160,8 +160,68 @@ def test_trend_backtest_uses_atr_stop_multiple_in_trade_ledger() -> None:
     trade = result["trades"][-1]
     assert trade["exit_reason"] == "atr_stop"
     assert trade["stop_loss_price"] is not None
+    assert trade["stop_price"] == trade["stop_loss_price"]
     assert trade["max_adverse_excursion"] < 0
     assert trade["intrabar_path"] == "open->low->high->close"
+
+
+def test_trend_backtest_trade_ledger_reports_required_prd_fields() -> None:
+    candles = _candles_with_breakout("long")
+    entry_probe = TrendStrategy(TrendStrategyConfig()).add_indicators(candles).iloc[-1]
+    atr_value = float(entry_probe["atr"])
+    entry_close = float(candles.iloc[-1]["close"])
+    candles = pd.concat(
+        [
+            candles,
+            pd.DataFrame(
+                [
+                    {
+                        "timestamp": len(candles),
+                        "open": entry_close,
+                        "high": entry_close * 1.01,
+                        "low": entry_close - atr_value * 2.0,
+                        "close": entry_close * 1.005,
+                        "volume": 1000,
+                    }
+                ]
+            ),
+        ],
+        ignore_index=True,
+    )
+
+    result = backtest_trend_strategy(
+        candles,
+        "ETH/USDT:USDT",
+        "1h",
+        TrendStrategyConfig(),
+        fee_rate=0.0006,
+        slippage_bps=2.0,
+    )
+
+    assert result["trade_ledger"], "fixture must produce at least one closed trade"
+    trade = result["trade_ledger"][-1]
+    required_fields = {
+        "entry_time",
+        "exit_time",
+        "side",
+        "entry_price",
+        "exit_price",
+        "qty",
+        "pnl",
+        "fee_paid",
+        "slippage_paid",
+        "exit_reason",
+        "stop_loss_price",
+        "stop_price",
+        "max_adverse_excursion",
+        "max_adverse_excursion_pct",
+        "intrabar_path",
+    }
+    assert required_fields.issubset(trade.keys())
+    assert trade["stop_price"] == trade["stop_loss_price"]
+    assert trade["fee_paid"] > 0
+    assert trade["slippage_paid"] > 0
+    assert trade["max_adverse_excursion"] <= 0
 
 
 def test_trend_backtest_respects_configured_leverage() -> None:

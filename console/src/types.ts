@@ -356,6 +356,7 @@ export type BacktestTrade = {
   holding_bars?: number;
   exit_reason?: string;
   stop_loss_price?: number;
+  stop_price?: number;
   max_adverse_excursion?: number;
   max_adverse_excursion_pct?: number;
   intrabar_path?: string;

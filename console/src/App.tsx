@@ -3683,6 +3683,7 @@ function exportTradesCsv(trades: BacktestTrade[], filename: string) {
     "entry_price",
     "qty",
     "stop_loss_price",
+    "stop_price",
     "exit_time",
     "exit_price",
     "exit_reason",
@@ -3696,6 +3697,7 @@ function exportTradesCsv(trades: BacktestTrade[], filename: string) {
     "fill_ratio",
     "holding_bars",
     "intrabar_path",
+    "max_adverse_excursion",
     "max_adverse_excursion_pct",
   ];
   const lines = [

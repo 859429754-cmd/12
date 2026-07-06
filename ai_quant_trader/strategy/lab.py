@@ -72,6 +72,13 @@ class BacktestTrade:
     funding_paid: float = 0.0
     holding_bars: int = 0
 
+    def to_ledger_dict(self) -> dict[str, Any]:
+        payload = self.__dict__.copy()
+        # Compatibility alias for external CSV/API consumers. The canonical
+        # field remains stop_loss_price because it is a fixed ATR stop.
+        payload["stop_price"] = self.stop_loss_price
+        return payload
+
 
 @dataclass(frozen=True)
 class BacktestCostModel:
@@ -1513,8 +1520,8 @@ def _summarize_backtest(
             "cost_pct_of_initial_equity": total_cost_paid / max(initial_equity, 1e-9) * 100,
         },
         "skipped_orders": skipped_orders or [],
-        "trade_ledger": [trade.__dict__ for trade in trades],
-        "trades": [trade.__dict__ for trade in trades],
+        "trade_ledger": [trade.to_ledger_dict() for trade in trades],
+        "trades": [trade.to_ledger_dict() for trade in trades],
         "equity_curve_tail": equity_curve[-300:],
         "note": note,
     }
