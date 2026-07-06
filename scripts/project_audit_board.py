@@ -154,6 +154,44 @@ def selected_groups(mode: str, *, skip_cloud: bool = False, include_cloud_runtim
     return groups
 
 
+def _git_short_head() -> str | None:
+    result = subprocess.run(
+        ["git", "rev-parse", "--short", "HEAD"],
+        cwd=ROOT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
+def _with_expected_cloud_release(groups: Sequence[AuditGroup], expected_release: str | None) -> tuple[AuditGroup, ...]:
+    if not expected_release:
+        return tuple(groups)
+    updated: list[AuditGroup] = []
+    for group in groups:
+        if group.id != "cloud_runtime_audit":
+            updated.append(group)
+            continue
+        updated.append(
+            AuditGroup(
+                id=group.id,
+                title=group.title,
+                command=(*group.command, "--expected-release", expected_release),
+                cwd=group.cwd,
+                modes=group.modes,
+                requirement=f"{group.requirement} Expected release must match {expected_release}.",
+                optional_env=group.optional_env,
+                timeout_seconds=group.timeout_seconds,
+            )
+        )
+    return tuple(updated)
+
+
 def _redact(text: str | bytes | None) -> str:
     if text is None:
         return ""
@@ -280,17 +318,35 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="Fail the audit when any selected group is skipped. Use this for final acceptance gates.",
     )
+    parser.add_argument(
+        "--expected-cloud-release",
+        default=None,
+        help=(
+            "Expected cloud release id for cloud_runtime_audit. If omitted while "
+            "--include-cloud-runtime and --fail-on-skipped are both set, the current git short HEAD is used."
+        ),
+    )
     parser.add_argument("--json-out", type=Path, default=None, help="Optional path to write the JSON audit report.")
     args = parser.parse_args(argv)
 
     started_at = time.time()
+    groups = selected_groups(
+        args.mode,
+        skip_cloud=args.skip_cloud,
+        include_cloud_runtime=args.include_cloud_runtime,
+    )
+    expected_cloud_release = args.expected_cloud_release
+    if (
+        expected_cloud_release is None
+        and args.include_cloud_runtime
+        and not args.skip_cloud
+        and args.fail_on_skipped
+    ):
+        expected_cloud_release = _git_short_head()
+    groups = _with_expected_cloud_release(groups, expected_cloud_release)
     results = [
         run_group(group)
-        for group in selected_groups(
-            args.mode,
-            skip_cloud=args.skip_cloud,
-            include_cloud_runtime=args.include_cloud_runtime,
-        )
+        for group in groups
     ]
     report = build_report(args.mode, results, started_at, fail_on_skipped=args.fail_on_skipped)
     file_text = json.dumps(report, ensure_ascii=False, indent=2)
