@@ -114,9 +114,17 @@ def _service_statuses(host: str, key: Path, services: Sequence[str]) -> tuple[di
 
 def _readiness(host: str, key: Path, remote_dir: str) -> tuple[dict[str, object] | None, list[str]]:
     command = (
-        f"cd '{remote_dir}' && "
-        ".venv/bin/python current/scripts/http_readiness_check.py "
-        "--base-url http://127.0.0.1:8090 --mode readiness --allow-warn --timeout 5"
+        "python3 - <<'PY'\n"
+        "import json\n"
+        "import urllib.request\n"
+        "payload = json.load(urllib.request.urlopen('http://127.0.0.1:8090/api/system/readiness', timeout=5))\n"
+        "keys = [\n"
+        "    'ok', 'overall', 'blocking', 'execution_mode', 'trade_mode',\n"
+        "    'profile_count', 'enabled_profile_count', 'authorized_profile_count', 'live_ready_profile_count',\n"
+        "    'deepseek_ready',\n"
+        "]\n"
+        "print(json.dumps({key: payload.get(key) for key in keys}, ensure_ascii=True))\n"
+        "PY"
     )
     result = run_remote(host, key, command, timeout=45)
     failures: list[str] = []
@@ -189,6 +197,7 @@ def run_audit(
     key: Path,
     remote_dir: str,
     expected_release: str | None = None,
+    expect_live_ready: bool = False,
     log_minutes: int = 15,
     release_run_limit: int = 3,
     services: Sequence[str] = DEFAULT_SERVICES,
@@ -237,6 +246,25 @@ def run_audit(
         if release_runs and release_runs[0].get("status") != "success":
             failures.append(f"latest_release_run_not_success:{release_runs[0].get('status')}")
 
+    if expect_live_ready:
+        if not readiness:
+            failures.append("live_ready_readiness_missing")
+        else:
+            if readiness.get("execution_mode") != "live":
+                failures.append(f"execution_mode_not_live:{readiness.get('execution_mode')}")
+            try:
+                authorized_count = int(readiness.get("authorized_profile_count") or 0)
+            except (TypeError, ValueError):
+                authorized_count = 0
+            try:
+                live_ready_count = int(readiness.get("live_ready_profile_count") or 0)
+            except (TypeError, ValueError):
+                live_ready_count = 0
+            if authorized_count < 1:
+                failures.append(f"authorized_profile_count_too_low:{authorized_count}")
+            if live_ready_count < 1:
+                failures.append(f"live_ready_profile_count_too_low:{live_ready_count}")
+
     return CloudRuntimeAudit(
         ok=not failures,
         host=host,
@@ -264,6 +292,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--key", type=Path, default=ROOT / ".ssh" / "aiquant_aliyun")
     parser.add_argument("--remote-dir", default="/root/ai-quant-trader")
     parser.add_argument("--expected-release", default=None)
+    parser.add_argument(
+        "--expect-live-ready",
+        action="store_true",
+        help="Fail unless cloud readiness reports live mode with at least one authorized and live-ready profile.",
+    )
     parser.add_argument("--log-minutes", type=int, default=15)
     parser.add_argument("--json-out", type=Path, default=None)
     args = parser.parse_args(argv)
@@ -273,6 +306,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         key=args.key,
         remote_dir=args.remote_dir,
         expected_release=args.expected_release,
+        expect_live_ready=args.expect_live_ready,
         log_minutes=args.log_minutes,
     )
     payload = asdict(report)

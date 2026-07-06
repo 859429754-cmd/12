@@ -239,7 +239,7 @@ $env:CONSOLE_URL='http://8.209.200.19'
 $env:AIQUANT_E2E_ACCOUNT1_PASSWORD='yx'
 $env:AIQUANT_E2E_ACCOUNT2_PASSWORD='wx'
 $env:AIQUANT_E2E_ADMIN_PASSWORD='1234567'
-python scripts\project_audit_board.py --mode full --include-cloud-runtime --fail-on-skipped --json-out output\audit\project_audit_board_full_cloud.json
+python scripts\project_audit_board.py --mode full --include-cloud-runtime --fail-on-skipped --expect-cloud-live-ready --json-out output\audit\project_audit_board_full_cloud.json
 ```
 
 审计要求：
@@ -248,6 +248,7 @@ python scripts\project_audit_board.py --mode full --include-cloud-runtime --fail
 - `frontend_e2e` 必须只打本地 Vite 服务，不得继承 `CONSOLE_URL` 打到公网云端。
 - `cloud_readonly_e2e` 必须显式使用 `CONSOLE_URL` 和账号密码环境变量。
 - `cloud_runtime_audit` 必须校验云端当前 release、`.last_successful_release` 和最新 `release_runs` 等于 expected release。`--include-cloud-runtime --fail-on-skipped` 未显式传 `--expected-cloud-release` 时，审计板默认使用当前 Git short HEAD。
+- 大资金/无人值守实盘验收必须开启 `--expect-cloud-live-ready`，证明云端 readiness 处于 `execution_mode=live`，且至少存在一个已授权并 live-ready 的策略档案。
 - 若云端只读 E2E、cloud runtime audit、公开仓库防泄露、后端全量测试、前端 build 任一失败，不得发布或宣称验收完成。
 
 ## 2026-07-07 回测 trade ledger 字段合同

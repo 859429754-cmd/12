@@ -169,22 +169,35 @@ def _git_short_head() -> str | None:
     return result.stdout.strip() or None
 
 
-def _with_expected_cloud_release(groups: Sequence[AuditGroup], expected_release: str | None) -> tuple[AuditGroup, ...]:
-    if not expected_release:
+def _with_cloud_runtime_expectations(
+    groups: Sequence[AuditGroup],
+    expected_release: str | None,
+    *,
+    expect_live_ready: bool = False,
+) -> tuple[AuditGroup, ...]:
+    if not expected_release and not expect_live_ready:
         return tuple(groups)
     updated: list[AuditGroup] = []
     for group in groups:
         if group.id != "cloud_runtime_audit":
             updated.append(group)
             continue
+        command = group.command
+        requirement = group.requirement
+        if expected_release:
+            command = (*command, "--expected-release", expected_release)
+            requirement = f"{requirement} Expected release must match {expected_release}."
+        if expect_live_ready:
+            command = (*command, "--expect-live-ready")
+            requirement = f"{requirement} Cloud readiness must report live mode with at least one authorized live-ready profile."
         updated.append(
             AuditGroup(
                 id=group.id,
                 title=group.title,
-                command=(*group.command, "--expected-release", expected_release),
+                command=command,
                 cwd=group.cwd,
                 modes=group.modes,
-                requirement=f"{group.requirement} Expected release must match {expected_release}.",
+                requirement=requirement,
                 optional_env=group.optional_env,
                 timeout_seconds=group.timeout_seconds,
             )
@@ -326,6 +339,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             "--include-cloud-runtime and --fail-on-skipped are both set, the current git short HEAD is used."
         ),
     )
+    parser.add_argument(
+        "--expect-cloud-live-ready",
+        action="store_true",
+        help="For final live acceptance, require cloud runtime audit to prove live mode and at least one authorized live-ready profile.",
+    )
     parser.add_argument("--json-out", type=Path, default=None, help="Optional path to write the JSON audit report.")
     args = parser.parse_args(argv)
 
@@ -343,7 +361,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         and args.fail_on_skipped
     ):
         expected_cloud_release = _git_short_head()
-    groups = _with_expected_cloud_release(groups, expected_cloud_release)
+    groups = _with_cloud_runtime_expectations(
+        groups,
+        expected_cloud_release,
+        expect_live_ready=args.expect_cloud_live_ready,
+    )
     results = [
         run_group(group)
         for group in groups

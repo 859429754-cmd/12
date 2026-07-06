@@ -21,8 +21,13 @@ def test_cloud_runtime_audit_passes_expected_release(tmp_path: Path, monkeypatch
             return subprocess.CompletedProcess(command, 0, stdout="abc123\n", stderr="")
         if "systemctl is-active" in script:
             return subprocess.CompletedProcess(command, 0, stdout="active\nactive\nactive\nactive\n", stderr="")
-        if "http_readiness_check.py" in script:
-            return subprocess.CompletedProcess(command, 0, stdout='{"ok": true, "overall": "ok", "blocking": []}\n', stderr="")
+        if "api/system/readiness" in script:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout='{"ok": true, "overall": "ok", "blocking": [], "execution_mode": "live", "authorized_profile_count": 1, "live_ready_profile_count": 1}\n',
+                stderr="",
+            )
         if "select created_at,payload from release_runs" in script:
             return subprocess.CompletedProcess(
                 command,
@@ -50,6 +55,84 @@ def test_cloud_runtime_audit_passes_expected_release(tmp_path: Path, monkeypatch
     assert any("journalctl" in item for item in commands)
 
 
+def test_cloud_runtime_audit_can_require_live_ready_profile(tmp_path: Path, monkeypatch) -> None:
+    key = tmp_path / "ssh-key"
+    key.write_text("placeholder", encoding="utf-8")
+
+    def fake_run(command, **kwargs):  # noqa: ANN001, ANN003
+        script = command[-1]
+        if "readlink -f" in script:
+            return subprocess.CompletedProcess(command, 0, stdout="/root/ai-quant-trader/releases/abc123\n", stderr="")
+        if ".last_successful_release" in script:
+            return subprocess.CompletedProcess(command, 0, stdout="abc123\n", stderr="")
+        if "systemctl is-active" in script:
+            return subprocess.CompletedProcess(command, 0, stdout="active\nactive\nactive\nactive\n", stderr="")
+        if "api/system/readiness" in script:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout='{"ok": true, "overall": "ok", "blocking": [], "execution_mode": "live", "authorized_profile_count": 1, "live_ready_profile_count": 1}\n',
+                stderr="",
+            )
+        if "select created_at,payload from release_runs" in script:
+            return subprocess.CompletedProcess(command, 0, stdout=json.dumps({"rows": []}) + "\n", stderr="")
+        if "journalctl" in script:
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        raise AssertionError(script)
+
+    monkeypatch.setattr(cloud_runtime_audit.subprocess, "run", fake_run)
+
+    report = cloud_runtime_audit.run_audit(
+        host="root@example",
+        key=key,
+        remote_dir="/root/ai-quant-trader",
+        expect_live_ready=True,
+    )
+
+    assert report.ok is True
+    assert report.failures == []
+
+
+def test_cloud_runtime_audit_fails_when_live_ready_profile_missing(tmp_path: Path, monkeypatch) -> None:
+    key = tmp_path / "ssh-key"
+    key.write_text("placeholder", encoding="utf-8")
+
+    def fake_run(command, **kwargs):  # noqa: ANN001, ANN003
+        script = command[-1]
+        if "readlink -f" in script:
+            return subprocess.CompletedProcess(command, 0, stdout="/root/ai-quant-trader/releases/abc123\n", stderr="")
+        if ".last_successful_release" in script:
+            return subprocess.CompletedProcess(command, 0, stdout="abc123\n", stderr="")
+        if "systemctl is-active" in script:
+            return subprocess.CompletedProcess(command, 0, stdout="active\nactive\nactive\nactive\n", stderr="")
+        if "api/system/readiness" in script:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout='{"ok": true, "overall": "ok", "blocking": [], "execution_mode": "mock", "authorized_profile_count": 0, "live_ready_profile_count": 0}\n',
+                stderr="",
+            )
+        if "select created_at,payload from release_runs" in script:
+            return subprocess.CompletedProcess(command, 0, stdout=json.dumps({"rows": []}) + "\n", stderr="")
+        if "journalctl" in script:
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        raise AssertionError(script)
+
+    monkeypatch.setattr(cloud_runtime_audit.subprocess, "run", fake_run)
+
+    report = cloud_runtime_audit.run_audit(
+        host="root@example",
+        key=key,
+        remote_dir="/root/ai-quant-trader",
+        expect_live_ready=True,
+    )
+
+    assert report.ok is False
+    assert "execution_mode_not_live:mock" in report.failures
+    assert "authorized_profile_count_too_low:0" in report.failures
+    assert "live_ready_profile_count_too_low:0" in report.failures
+
+
 def test_cloud_runtime_audit_fails_on_release_mismatch(tmp_path: Path, monkeypatch) -> None:
     key = tmp_path / "ssh-key"
     key.write_text("placeholder", encoding="utf-8")
@@ -62,7 +145,7 @@ def test_cloud_runtime_audit_fails_on_release_mismatch(tmp_path: Path, monkeypat
             return subprocess.CompletedProcess(command, 0, stdout="old\n", stderr="")
         if "systemctl is-active" in script:
             return subprocess.CompletedProcess(command, 0, stdout="active\nactive\nactive\nactive\n", stderr="")
-        if "http_readiness_check.py" in script:
+        if "api/system/readiness" in script:
             return subprocess.CompletedProcess(command, 0, stdout='{"ok": true, "overall": "ok", "blocking": []}\n', stderr="")
         if "select created_at,payload from release_runs" in script:
             return subprocess.CompletedProcess(
@@ -102,7 +185,7 @@ def test_cloud_runtime_audit_fails_when_current_target_missing(tmp_path: Path, m
             return subprocess.CompletedProcess(command, 0, stdout="abc123\n", stderr="")
         if "systemctl is-active" in script:
             return subprocess.CompletedProcess(command, 0, stdout="active\nactive\nactive\nactive\n", stderr="")
-        if "http_readiness_check.py" in script:
+        if "api/system/readiness" in script:
             return subprocess.CompletedProcess(command, 0, stdout='{"ok": true, "overall": "ok", "blocking": []}\n', stderr="")
         if "select created_at,payload from release_runs" in script:
             return subprocess.CompletedProcess(
@@ -140,7 +223,7 @@ def test_cloud_runtime_audit_includes_readiness_stdout_on_failure(tmp_path: Path
             return subprocess.CompletedProcess(command, 0, stdout="abc123\n", stderr="")
         if "systemctl is-active" in script:
             return subprocess.CompletedProcess(command, 0, stdout="active\nactive\nactive\nactive\n", stderr="")
-        if "http_readiness_check.py" in script:
+        if "api/system/readiness" in script:
             return subprocess.CompletedProcess(command, 1, stdout='{"overall":"block","blocking":["exchange"]}\n', stderr="")
         if "select created_at,payload from release_runs" in script:
             return subprocess.CompletedProcess(command, 0, stdout=json.dumps({"rows": []}) + "\n", stderr="")
@@ -168,7 +251,7 @@ def test_cloud_runtime_audit_fails_on_recent_service_errors(tmp_path: Path, monk
             return subprocess.CompletedProcess(command, 0, stdout="abc123\n", stderr="")
         if "systemctl is-active" in script:
             return subprocess.CompletedProcess(command, 0, stdout="active\nactive\nactive\nactive\n", stderr="")
-        if "http_readiness_check.py" in script:
+        if "api/system/readiness" in script:
             return subprocess.CompletedProcess(command, 0, stdout='{"ok": true, "overall": "ok", "blocking": []}\n', stderr="")
         if "select created_at,payload from release_runs" in script:
             return subprocess.CompletedProcess(command, 0, stdout=json.dumps({"rows": []}) + "\n", stderr="")
@@ -197,7 +280,7 @@ def test_cloud_runtime_audit_main_writes_utf8_file_but_ascii_console(tmp_path: P
             return subprocess.CompletedProcess(command, 0, stdout="abc123\n", stderr="")
         if "systemctl is-active" in script:
             return subprocess.CompletedProcess(command, 0, stdout="active\nactive\nactive\nactive\n", stderr="")
-        if "http_readiness_check.py" in script:
+        if "api/system/readiness" in script:
             return subprocess.CompletedProcess(command, 0, stdout='{"ok": true, "overall": "ok", "blocking": []}\n', stderr="")
         if "select created_at,payload from release_runs" in script:
             return subprocess.CompletedProcess(command, 0, stdout=json.dumps({"rows": []}) + "\n", stderr="")
