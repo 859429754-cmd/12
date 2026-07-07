@@ -177,6 +177,7 @@ def _with_cloud_runtime_expectations(
     cloud_host: str | None = None,
     cloud_runtime_env_mode: str = "cloud-live",
     cloud_allow_weak_passwords: bool = False,
+    cloud_expect_peak_pricing_guard: bool = False,
     cloud_log_minutes: int | None = None,
 ) -> tuple[AuditGroup, ...]:
     if (
@@ -185,6 +186,7 @@ def _with_cloud_runtime_expectations(
         and not cloud_host
         and cloud_runtime_env_mode == "cloud-live"
         and not cloud_allow_weak_passwords
+        and not cloud_expect_peak_pricing_guard
         and cloud_log_minutes is None
     ):
         return tuple(groups)
@@ -213,6 +215,12 @@ def _with_cloud_runtime_expectations(
             requirement = (
                 f"{requirement} Weak console passwords are explicitly allowed for small-funds gray testing; "
                 "this is not a large-funds unattended acceptance."
+            )
+        if cloud_expect_peak_pricing_guard:
+            command = (*command, "--expect-peak-pricing-guard")
+            requirement = (
+                f"{requirement} Remote config must enable DeepSeek peak-pricing avoidance for noncritical calls "
+                "without blocking trading_cycle."
             )
         if cloud_log_minutes is not None:
             command = (*command, "--log-minutes", str(cloud_log_minutes))
@@ -396,6 +404,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=None,
         help="Recent journal window passed to cloud_runtime_audit. Defaults to cloud_runtime_audit.py default.",
     )
+    parser.add_argument(
+        "--cloud-expect-peak-pricing-guard",
+        action="store_true",
+        help="Pass --expect-peak-pricing-guard to cloud_runtime_audit.",
+    )
     parser.add_argument("--json-out", type=Path, default=None, help="Optional path to write the JSON audit report.")
     args = parser.parse_args(argv)
 
@@ -420,6 +433,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         cloud_host=args.cloud_host,
         cloud_runtime_env_mode=args.cloud_runtime_env_mode,
         cloud_allow_weak_passwords=args.cloud_allow_weak_passwords,
+        cloud_expect_peak_pricing_guard=args.cloud_expect_peak_pricing_guard,
         cloud_log_minutes=args.cloud_log_minutes,
     )
     results = [

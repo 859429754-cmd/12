@@ -202,6 +202,32 @@ async def test_major_news_review_skips_deepseek_without_signal_or_position(
 
 
 @pytest.mark.asyncio
+async def test_reload_runtime_config_refreshes_deepseek_credentials_from_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    _write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl")
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_BACKUP_API_KEY", raising=False)
+    app = TradingApp(str(config_path))
+    try:
+        app.brain.api_key = None
+        app.brain.backup_api_key = None
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-primary-after-reload")
+        monkeypatch.setenv("DEEPSEEK_BACKUP_API_KEY", "sk-backup-after-reload")
+
+        await app.reload_runtime_config()
+
+        assert app.brain.api_key == "sk-primary-after-reload"
+        assert app.brain.backup_api_key == "sk-backup-after-reload"
+        assert app.brain.base_url == app.config.ai.base_url.rstrip("/")
+        assert app.brain.model == app.config.ai.decision_model
+    finally:
+        await app.close()
+
+
+@pytest.mark.asyncio
 async def test_major_news_review_with_strategy_signal_stays_out_of_trade_decisions(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

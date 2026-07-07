@@ -955,7 +955,10 @@ class TradingApp:
         self.risk.state = self.state
         self.position_review.config = self.config.risk.position_review
         self.deepseek_budget = DeepSeekBudgetGuard.from_config(self.store, self.config.ai)
+        self.brain.reload_from_env()
         self.brain.backup_api_key = os.getenv(self.config.ai.backup_api_key_env)
+        self.brain.base_url = self.config.ai.base_url.rstrip("/")
+        self.brain.model = self.config.ai.decision_model
         self._refresh_symbol_strategies()
         self.news.rss_sources = self.config.news.rss_sources
         self.news.scrape_sources = self.config.news.scrape_sources

@@ -42,6 +42,7 @@ class CloudRuntimeAudit:
     service_statuses: dict[str, str]
     readiness: dict[str, object] | None
     runtime_env: dict[str, object] | None
+    peak_pricing_guard: dict[str, object] | None
     latest_release_runs: list[dict[str, object]]
     recent_error_log_tail: str
     failures: list[str]
@@ -298,6 +299,66 @@ PY"""
     return payload, failures
 
 
+def _peak_pricing_guard_contract(host: str, key: Path, remote_dir: str) -> tuple[dict[str, object] | None, list[str]]:
+    config_path = f"{remote_dir.rstrip('/')}/config/config.yaml"
+    script = f"""python3 - <<'PY'
+import json
+from pathlib import Path
+
+try:
+    import yaml
+except Exception as exc:
+    print(json.dumps({{"ok": False, "failures": ["yaml_import_failed:" + str(exc)]}}, ensure_ascii=True))
+    raise SystemExit(0)
+
+path = Path({config_path!r})
+failures = []
+if not path.exists():
+    print(json.dumps({{"ok": False, "config_file": str(path), "failures": ["config_missing"]}}, ensure_ascii=True))
+    raise SystemExit(0)
+
+config = yaml.safe_load(path.read_text(encoding="utf-8", errors="replace")) or {{}}
+ai = config.get("ai") or {{}}
+windows = ai.get("peak_pricing_windows") or []
+blocked = ai.get("peak_pricing_blocked_call_types") or []
+if ai.get("avoid_peak_pricing") is not True:
+    failures.append("avoid_peak_pricing_not_enabled")
+if ai.get("peak_pricing_timezone_offset_hours") != 8:
+    failures.append("peak_pricing_timezone_offset_not_beijing")
+for window in ["09:00-12:00", "14:00-18:00"]:
+    if window not in windows:
+        failures.append("missing_peak_window:" + window)
+for call_type in ["major_news_risk_review", "price_wakeup", "optimization_proposal"]:
+    if call_type not in blocked:
+        failures.append("missing_blocked_call_type:" + call_type)
+if "trading_cycle" in blocked:
+    failures.append("trading_cycle_must_not_be_peak_blocked")
+print(json.dumps({{
+    "ok": not failures,
+    "config_file": str(path),
+    "failures": failures,
+    "ai": {{
+        "avoid_peak_pricing": ai.get("avoid_peak_pricing"),
+        "peak_pricing_timezone_offset_hours": ai.get("peak_pricing_timezone_offset_hours"),
+        "peak_pricing_windows": windows,
+        "peak_pricing_blocked_call_types": blocked,
+    }},
+}}, ensure_ascii=True))
+PY"""
+    result = run_remote(host, key, script, timeout=45)
+    if not result.ok:
+        detail = result.stderr.strip() or result.stdout.strip()
+        return None, [f"peak_pricing_guard_audit_failed:{result.exit_code}:{detail}"]
+    try:
+        payload = _parse_json_line(result.stdout)
+    except json.JSONDecodeError as exc:
+        return None, [f"peak_pricing_guard_json_invalid:{exc}"]
+    failures: list[str] = []
+    if not payload or payload.get("ok") is not True:
+        failures.append("peak_pricing_guard_not_ready")
+    return payload, failures
+
+
 def _recent_errors(host: str, key: Path, minutes: int) -> tuple[str, list[str]]:
     command = (
         "journalctl -u ai-quant-trader.service -u ai-quant-console.service "
@@ -322,6 +383,7 @@ def run_audit(
     expect_live_ready: bool = False,
     runtime_env_mode: str = "cloud-live",
     allow_weak_passwords: bool = False,
+    expect_peak_pricing_guard: bool = False,
     log_minutes: int = 15,
     release_run_limit: int = 3,
     services: Sequence[str] = DEFAULT_SERVICES,
@@ -340,6 +402,7 @@ def run_audit(
             service_statuses={},
             readiness=None,
             runtime_env=None,
+            peak_pricing_guard=None,
             latest_release_runs=[],
             recent_error_log_tail="",
             failures=failures,
@@ -363,6 +426,10 @@ def run_audit(
             runtime_env_mode,
             allow_weak_passwords=allow_weak_passwords,
         )
+        failures.extend(step_failures)
+    peak_pricing_guard: dict[str, object] | None = None
+    if expect_peak_pricing_guard:
+        peak_pricing_guard, step_failures = _peak_pricing_guard_contract(host, key, remote_dir)
         failures.extend(step_failures)
     release_runs, step_failures = _latest_release_runs(host, key, remote_dir, release_run_limit)
     failures.extend(step_failures)
@@ -410,6 +477,7 @@ def run_audit(
         service_statuses=service_statuses,
         readiness=readiness,
         runtime_env=runtime_env,
+        peak_pricing_guard=peak_pricing_guard,
         latest_release_runs=release_runs,
         recent_error_log_tail=error_tail,
         failures=failures,
@@ -447,6 +515,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             "Use only for small-funds gray testing; large-funds unattended acceptance must omit this flag."
         ),
     )
+    parser.add_argument(
+        "--expect-peak-pricing-guard",
+        action="store_true",
+        help="Fail unless remote config enables DeepSeek peak-pricing avoidance for noncritical calls only.",
+    )
     parser.add_argument("--log-minutes", type=int, default=15)
     parser.add_argument("--json-out", type=Path, default=None)
     args = parser.parse_args(argv)
@@ -459,6 +532,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         expect_live_ready=args.expect_live_ready,
         runtime_env_mode=args.runtime_env_mode,
         allow_weak_passwords=args.allow_weak_passwords,
+        expect_peak_pricing_guard=args.expect_peak_pricing_guard,
         log_minutes=args.log_minutes,
     )
     payload = asdict(report)

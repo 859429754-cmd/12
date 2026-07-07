@@ -41,6 +41,29 @@ def weak_runtime_env_payload(mode: str = "trend-live") -> str:
     return json.dumps(payload) + "\n"
 
 
+def peak_pricing_payload(ok: bool = True) -> str:
+    payload = {
+        "ok": ok,
+        "config_file": "/root/ai-quant-trader/config/config.yaml",
+        "failures": []
+        if ok
+        else [
+            "avoid_peak_pricing_not_enabled",
+            "missing_peak_window:09:00-12:00",
+            "missing_blocked_call_type:major_news_risk_review",
+        ],
+        "ai": {
+            "avoid_peak_pricing": ok,
+            "peak_pricing_timezone_offset_hours": 8,
+            "peak_pricing_windows": ["09:00-12:00", "14:00-18:00"] if ok else ["14:00-18:00"],
+            "peak_pricing_blocked_call_types": ["major_news_risk_review", "price_wakeup", "optimization_proposal"]
+            if ok
+            else ["price_wakeup"],
+        },
+    }
+    return json.dumps(payload) + "\n"
+
+
 def test_cloud_runtime_audit_passes_expected_release(tmp_path: Path, monkeypatch) -> None:
     key = tmp_path / "ssh-key"
     key.write_text("placeholder", encoding="utf-8")
@@ -256,6 +279,98 @@ def test_cloud_runtime_audit_trend_live_env_mode_can_pass_without_backup_or_foll
     assert report.runtime_env is not None
     assert report.runtime_env["mode"] == "trend-live"
     assert "require_backup = False" in runtime_env_scripts[0]
+
+
+def test_cloud_runtime_audit_can_require_deepseek_peak_pricing_guard(tmp_path: Path, monkeypatch) -> None:
+    key = tmp_path / "ssh-key"
+    key.write_text("placeholder", encoding="utf-8")
+
+    def fake_run(command, **kwargs):  # noqa: ANN001, ANN003
+        script = command[-1]
+        if "readlink -f" in script:
+            return subprocess.CompletedProcess(command, 0, stdout="/root/ai-quant-trader/releases/abc123\n", stderr="")
+        if ".last_successful_release" in script:
+            return subprocess.CompletedProcess(command, 0, stdout="abc123\n", stderr="")
+        if "systemctl is-active" in script:
+            return subprocess.CompletedProcess(command, 0, stdout="active\nactive\nactive\nactive\n", stderr="")
+        if "api/system/readiness" in script:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout='{"ok": true, "overall": "ok", "blocking": [], "execution_mode": "live", "authorized_profile_count": 1, "live_ready_profile_count": 1}\n',
+                stderr="",
+            )
+        if ".env.runtime" in script:
+            return subprocess.CompletedProcess(command, 0, stdout=weak_runtime_env_payload(), stderr="")
+        if "peak_pricing_windows" in script:
+            return subprocess.CompletedProcess(command, 0, stdout=peak_pricing_payload(ok=True), stderr="")
+        if "select created_at,payload from release_runs" in script:
+            return subprocess.CompletedProcess(command, 0, stdout=json.dumps({"rows": []}) + "\n", stderr="")
+        if "journalctl" in script:
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        raise AssertionError(script)
+
+    monkeypatch.setattr(cloud_runtime_audit.subprocess, "run", fake_run)
+
+    report = cloud_runtime_audit.run_audit(
+        host="root@example",
+        key=key,
+        remote_dir="/root/ai-quant-trader",
+        expect_live_ready=True,
+        runtime_env_mode="trend-live",
+        allow_weak_passwords=True,
+        expect_peak_pricing_guard=True,
+    )
+
+    assert report.ok is True
+    assert report.peak_pricing_guard is not None
+    assert report.peak_pricing_guard["ok"] is True
+
+
+def test_cloud_runtime_audit_fails_when_peak_pricing_guard_missing(tmp_path: Path, monkeypatch) -> None:
+    key = tmp_path / "ssh-key"
+    key.write_text("placeholder", encoding="utf-8")
+
+    def fake_run(command, **kwargs):  # noqa: ANN001, ANN003
+        script = command[-1]
+        if "readlink -f" in script:
+            return subprocess.CompletedProcess(command, 0, stdout="/root/ai-quant-trader/releases/abc123\n", stderr="")
+        if ".last_successful_release" in script:
+            return subprocess.CompletedProcess(command, 0, stdout="abc123\n", stderr="")
+        if "systemctl is-active" in script:
+            return subprocess.CompletedProcess(command, 0, stdout="active\nactive\nactive\nactive\n", stderr="")
+        if "api/system/readiness" in script:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout='{"ok": true, "overall": "ok", "blocking": [], "execution_mode": "live", "authorized_profile_count": 1, "live_ready_profile_count": 1}\n',
+                stderr="",
+            )
+        if ".env.runtime" in script:
+            return subprocess.CompletedProcess(command, 0, stdout=weak_runtime_env_payload(), stderr="")
+        if "peak_pricing_windows" in script:
+            return subprocess.CompletedProcess(command, 0, stdout=peak_pricing_payload(ok=False), stderr="")
+        if "select created_at,payload from release_runs" in script:
+            return subprocess.CompletedProcess(command, 0, stdout=json.dumps({"rows": []}) + "\n", stderr="")
+        if "journalctl" in script:
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        raise AssertionError(script)
+
+    monkeypatch.setattr(cloud_runtime_audit.subprocess, "run", fake_run)
+
+    report = cloud_runtime_audit.run_audit(
+        host="root@example",
+        key=key,
+        remote_dir="/root/ai-quant-trader",
+        expect_live_ready=True,
+        runtime_env_mode="trend-live",
+        allow_weak_passwords=True,
+        expect_peak_pricing_guard=True,
+    )
+
+    assert report.ok is False
+    assert report.peak_pricing_guard is not None
+    assert "peak_pricing_guard_not_ready" in report.failures
 
 
 def test_cloud_runtime_audit_can_explicitly_allow_weak_passwords_for_gray_live(tmp_path: Path, monkeypatch) -> None:
