@@ -235,6 +235,9 @@ python scripts/trading_chain_audit.py --mode extended
 固定命令：
 
 ```powershell
+$env:RUNTIME_ENV_FILE='C:\path\to\.env.runtime'
+python scripts\runtime_env_audit.py --env-file $env:RUNTIME_ENV_FILE --mode cloud-live --json-out output\audit\runtime_env_audit_cloud_live.json
+
 $env:CONSOLE_URL='http://47.84.92.81'
 $env:AIQUANT_E2E_ACCOUNT1_PASSWORD='yx'
 $env:AIQUANT_E2E_ACCOUNT2_PASSWORD='wx'
@@ -244,6 +247,9 @@ python scripts\project_audit_board.py --mode full --include-cloud-runtime --clou
 
 审计要求：
 
+- `runtime_env_audit.py --mode cloud-live` 必须先通过。该脚本只报告变量是否存在/非空和长度，不打印任何密钥值。
+- 大资金/无人值守验收默认不允许 `CONSOLE_AUTH_DISABLED=1`，不允许缺失 `DEEPSEEK_BACKUP_API_KEY`、`GATEIO_TREND_*`、`GATEIO_FOLLOWER_*`、控制台账号密码和 `CONSOLE_PASSWORD_STRENGTH_CONFIRMED`。
+- `yx`、`wx`、`1234567` 这类弱密码只允许小资金灰度或历史 E2E 兼容；大资金无人值守必须替换为强且唯一的账号密码。若临时灰度必须使用弱密码，只能显式传 `--allow-weak-passwords`，并不得宣称通过大资金无人值守验收。
 - `--fail-on-skipped` 必须开启。
 - `frontend_e2e` 必须只打本地 Vite 服务，不得继承 `CONSOLE_URL` 打到公网云端。
 - `cloud_readonly_e2e` 必须显式使用 `CONSOLE_URL` 和账号密码环境变量。
