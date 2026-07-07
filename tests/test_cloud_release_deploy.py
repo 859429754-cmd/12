@@ -411,3 +411,19 @@ def test_release_v2_records_health_and_readiness_in_release_runs() -> None:
     assert "AIQUANT_HEALTH_JSON=\"$health_json\"" in script
     assert "AIQUANT_READINESS_JSON=\"$readiness_json\"" in script
     assert "release_audit_record_failed_rolled_back" in script
+
+
+def test_release_v2_bootstraps_empty_remote_runtime_root_without_overwriting_config() -> None:
+    import scripts.cloud_release_deploy_v2 as deploy_v2
+
+    script = deploy_v2.remote_release_script(
+        "/srv/ai-quant",
+        "abc123",
+        restart=False,
+        install_deps=False,
+        health_timeout=1,
+    )
+
+    assert 'mkdir -p "$remote_dir/config" "$remote_dir/data" "$remote_dir/logs" "$remote_dir/output" "$remote_dir/backups"' in script
+    assert 'if [ ! -f "$remote_dir/config/config.yaml" ] && [ -f "$release_dir/config/config.yaml" ]; then' in script
+    assert 'cp "$release_dir/config/config.yaml" "$remote_dir/config/config.yaml"' in script

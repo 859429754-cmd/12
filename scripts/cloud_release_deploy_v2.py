@@ -210,6 +210,10 @@ mkdir -p "$src_stage" "$console_stage" "$release_dir" "$release_root"
 tar -xf /tmp/aiquant-src-current.tar -C "$src_stage"
 tar -xf /tmp/aiquant-console-dist.tar -C "$console_stage"
 rsync -a --delete "$src_stage"/ "$release_dir"/
+mkdir -p "$remote_dir/config" "$remote_dir/data" "$remote_dir/logs" "$remote_dir/output" "$remote_dir/backups"
+if [ ! -f "$remote_dir/config/config.yaml" ] && [ -f "$release_dir/config/config.yaml" ]; then
+  cp "$release_dir/config/config.yaml" "$remote_dir/config/config.yaml"
+fi
 rm -rf "$remote_dir/console/dist"
 mkdir -p "$remote_dir/console/dist"
 rsync -a --delete "$console_stage"/ "$remote_dir/console/dist"/
