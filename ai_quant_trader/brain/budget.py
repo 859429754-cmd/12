@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta, timezone
 from typing import Any
 
 from ai_quant_trader.core.models import AiConfig
@@ -38,6 +38,10 @@ class DeepSeekBudgetGuard:
         max_major_news_reviews_per_day: int = 24,
         event_dedupe_hours: int = 48,
         failure_cooldown_minutes: int = 20,
+        avoid_peak_pricing: bool = False,
+        peak_pricing_timezone_offset_hours: int = 8,
+        peak_pricing_windows: list[str] | None = None,
+        peak_pricing_blocked_call_types: list[str] | None = None,
     ) -> None:
         self.store = store
         self.enabled = enabled
@@ -47,6 +51,12 @@ class DeepSeekBudgetGuard:
         self.max_major_news_reviews_per_day = max_major_news_reviews_per_day
         self.event_dedupe_hours = event_dedupe_hours
         self.failure_cooldown_minutes = failure_cooldown_minutes
+        self.avoid_peak_pricing = avoid_peak_pricing
+        self.peak_pricing_timezone_offset_hours = peak_pricing_timezone_offset_hours
+        self.peak_pricing_windows = peak_pricing_windows or ["09:00-12:00", "14:00-18:00"]
+        self.peak_pricing_blocked_call_types = set(
+            peak_pricing_blocked_call_types or ["major_news_risk_review", "price_wakeup", "optimization_proposal"]
+        )
 
     @classmethod
     def from_config(cls, store: SQLiteStore, config: AiConfig) -> "DeepSeekBudgetGuard":
@@ -59,10 +69,21 @@ class DeepSeekBudgetGuard:
             max_major_news_reviews_per_day=config.max_major_news_reviews_per_day,
             event_dedupe_hours=config.event_dedupe_hours,
             failure_cooldown_minutes=config.failure_cooldown_minutes,
+            avoid_peak_pricing=config.avoid_peak_pricing,
+            peak_pricing_timezone_offset_hours=config.peak_pricing_timezone_offset_hours,
+            peak_pricing_windows=config.peak_pricing_windows,
+            peak_pricing_blocked_call_types=config.peak_pricing_blocked_call_types,
         )
 
-    def reserve(self, *, symbol: str, call_type: str, event_key: str | None = None) -> DeepSeekBudgetReservation:
-        now = datetime.now(UTC)
+    def reserve(
+        self,
+        *,
+        symbol: str,
+        call_type: str,
+        event_key: str | None = None,
+        now: datetime | None = None,
+    ) -> DeepSeekBudgetReservation:
+        now = now or datetime.now(UTC)
         payload = {
             "symbol": symbol,
             "call_type": call_type,
@@ -125,6 +146,9 @@ class DeepSeekBudgetGuard:
         return self.store.insert(self.table, payload, symbol)
 
     def _blocking_reason(self, *, symbol: str, call_type: str, event_key: str | None, now: datetime) -> str | None:
+        if self._peak_pricing_blocks(call_type=call_type, now=now):
+            return "peak_pricing_window_active"
+
         if event_key:
             duplicate = self._find_event_key(
                 symbol=symbol,
@@ -150,6 +174,34 @@ class DeepSeekBudgetGuard:
             if self._attempt_count(since=now - timedelta(days=1), call_type=call_type) >= self.max_major_news_reviews_per_day:
                 return "major_news_daily_limit_exceeded"
         return None
+
+    def _peak_pricing_blocks(self, *, call_type: str, now: datetime) -> bool:
+        if not self.avoid_peak_pricing:
+            return False
+        if call_type not in self.peak_pricing_blocked_call_types:
+            return False
+        local_now = now.astimezone(timezone(timedelta(hours=self.peak_pricing_timezone_offset_hours)))
+        current = local_now.time()
+        for window in self.peak_pricing_windows:
+            parsed = self._parse_window(window)
+            if parsed is None:
+                continue
+            start, end = parsed
+            if start <= end:
+                if start <= current < end:
+                    return True
+            elif current >= start or current < end:
+                return True
+        return False
+
+    def _parse_window(self, window: str) -> tuple[time, time] | None:
+        try:
+            start_text, end_text = [part.strip() for part in window.split("-", 1)]
+            start_hour, start_minute = [int(part) for part in start_text.split(":", 1)]
+            end_hour, end_minute = [int(part) for part in end_text.split(":", 1)]
+            return time(start_hour, start_minute), time(end_hour, end_minute)
+        except (ValueError, TypeError):
+            return None
 
     def _attempt_count(self, *, since: datetime, call_type: str | None = None) -> int:
         count = 0

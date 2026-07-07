@@ -49,6 +49,15 @@ ai:
   max_major_news_reviews_per_day: 80
   event_dedupe_hours: 48
   failure_cooldown_minutes: 20
+  avoid_peak_pricing: true
+  peak_pricing_timezone_offset_hours: 8
+  peak_pricing_windows:
+  - 09:00-12:00
+  - 14:00-18:00
+  peak_pricing_blocked_call_types:
+  - major_news_risk_review
+  - price_wakeup
+  - optimization_proposal
   ai_enabled_symbols:
   - ETH/USDT:USDT
   - BTC/USDT:USDT

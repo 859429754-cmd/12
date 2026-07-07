@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -247,6 +248,55 @@ def test_deepseek_budget_failure_cooldown_blocks_followup_calls(tmp_path: Path) 
 
         assert second.allowed is False
         assert second.reason == "failure_cooldown_active"
+    finally:
+        store.close()
+
+
+def test_deepseek_budget_skips_noncritical_calls_during_deepseek_peak_pricing(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    try:
+        guard = DeepSeekBudgetGuard(
+            store,
+            failure_cooldown_minutes=0,
+            avoid_peak_pricing=True,
+            peak_pricing_timezone_offset_hours=8,
+            peak_pricing_windows=["09:00-12:00", "14:00-18:00"],
+            peak_pricing_blocked_call_types=["major_news_risk_review", "price_wakeup", "optimization_proposal"],
+        )
+        peak_beijing = datetime(2026, 7, 8, 2, 30, tzinfo=UTC)  # 10:30 Asia/Shanghai.
+
+        news = guard.reserve(symbol="ETH/USDT:USDT", call_type="major_news_risk_review", now=peak_beijing)
+        price = guard.reserve(symbol="ETH/USDT:USDT", call_type="price_wakeup", now=peak_beijing)
+        optimize = guard.reserve(symbol="ai_optimization", call_type="optimization_proposal", now=peak_beijing)
+        trade = guard.reserve(symbol="ETH/USDT:USDT", call_type="trading_cycle", now=peak_beijing)
+
+        assert news.allowed is False
+        assert news.reason == "peak_pricing_window_active"
+        assert price.allowed is False
+        assert price.reason == "peak_pricing_window_active"
+        assert optimize.allowed is False
+        assert optimize.reason == "peak_pricing_window_active"
+        assert trade.allowed is True
+    finally:
+        store.close()
+
+
+def test_deepseek_budget_allows_noncritical_calls_outside_peak_pricing(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    try:
+        guard = DeepSeekBudgetGuard(
+            store,
+            failure_cooldown_minutes=0,
+            avoid_peak_pricing=True,
+            peak_pricing_timezone_offset_hours=8,
+            peak_pricing_windows=["09:00-12:00", "14:00-18:00"],
+            peak_pricing_blocked_call_types=["major_news_risk_review"],
+        )
+        offpeak_beijing = datetime(2026, 7, 8, 4, 30, tzinfo=UTC)  # 12:30 Asia/Shanghai.
+
+        reservation = guard.reserve(symbol="ETH/USDT:USDT", call_type="major_news_risk_review", now=offpeak_beijing)
+
+        assert reservation.allowed is True
     finally:
         store.close()
 

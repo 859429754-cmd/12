@@ -303,6 +303,44 @@ intrabar_path
 - `tests/test_strategy_trend.py::test_trend_backtest_trade_ledger_reports_required_prd_fields`
 - `tests/test_strategy_trend.py::test_trend_backtest_uses_atr_stop_multiple_in_trade_ledger`
 
+## 2026-07-08 DeepSeek 峰谷定价避让合同
+
+以后以本节为准：系统必须降低 DeepSeek 北京时间高峰定价时段的非关键调用，但不得为了省调用费让真实策略信号失去 AI 风控。
+
+当前 DeepSeek 高峰定价窗口按北京时间处理：
+
+```text
+09:00-12:00
+14:00-18:00
+```
+
+云端趋势实盘默认开启：
+
+```yaml
+ai:
+  avoid_peak_pricing: true
+  peak_pricing_timezone_offset_hours: 8
+  peak_pricing_windows:
+    - 09:00-12:00
+    - 14:00-18:00
+  peak_pricing_blocked_call_types:
+    - major_news_risk_review
+    - price_wakeup
+    - optimization_proposal
+```
+
+规则：
+
+- 高峰窗口内，重大新闻独立复评、价格唤醒复评、优化建议等非关键调用被 `DeepSeekBudgetGuard` 阻断，原因写入 `ai_call_budget_events.reason=peak_pricing_window_active`。
+- `trading_cycle` 真实策略信号仍允许调用 DeepSeek；否则会产生“有信号但为省钱跳过 AI 风控”的实盘漏洞。
+- 无信号、无持仓场景本来就不调用 DeepSeek，继续只写本地跳过审计。
+- 若未来要连真实策略信号也避开高峰时段，必须另立 ADR，因为那会改变开仓时效和漏单风险。
+
+相关测试：
+
+- `tests/test_deepseek_budget.py::test_deepseek_budget_skips_noncritical_calls_during_deepseek_peak_pricing`
+- `tests/test_deepseek_budget.py::test_deepseek_budget_allows_noncritical_calls_outside_peak_pricing`
+
 ## 3. 多账户执行模型
 
 当前采用“一次策略信号 + 一次 DeepSeek 决策 + 多账户独立裁剪”：

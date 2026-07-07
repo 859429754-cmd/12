@@ -218,6 +218,12 @@ class AiConfig(BaseModel):
     max_major_news_reviews_per_day: int = Field(default=24, ge=1, le=1000)
     event_dedupe_hours: int = Field(default=48, ge=1, le=168)
     failure_cooldown_minutes: int = Field(default=20, ge=0, le=1440)
+    avoid_peak_pricing: bool = False
+    peak_pricing_timezone_offset_hours: int = Field(default=8, ge=-12, le=14)
+    peak_pricing_windows: list[str] = Field(default_factory=lambda: ["09:00-12:00", "14:00-18:00"])
+    peak_pricing_blocked_call_types: list[str] = Field(
+        default_factory=lambda: ["major_news_risk_review", "price_wakeup", "optimization_proposal"]
+    )
 
 
 class SecurityConfig(BaseModel):
