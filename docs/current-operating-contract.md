@@ -254,7 +254,7 @@ python scripts\project_audit_board.py --mode full --include-cloud-runtime --clou
 - `frontend_e2e` 必须只打本地 Vite 服务，不得继承 `CONSOLE_URL` 打到公网云端。
 - `cloud_readonly_e2e` 必须显式使用 `CONSOLE_URL` 和账号密码环境变量。
 - `cloud_runtime_audit` 必须校验云端当前 release、`.last_successful_release` 和最新 `release_runs` 等于 expected release。`--include-cloud-runtime --fail-on-skipped` 未显式传 `--expected-cloud-release` 时，审计板默认使用当前 Git short HEAD。更换云服务器后，最终验收必须显式传 `--cloud-host`，避免误审旧服务器。
-- 大资金/无人值守实盘验收必须开启 `--expect-cloud-live-ready`，证明云端 readiness 处于 `execution_mode=live`，且至少存在一个已授权并 live-ready 的策略档案。
+- 大资金/无人值守实盘验收必须开启 `--expect-cloud-live-ready`，证明云端 readiness 处于 `execution_mode=live`，至少存在一个已授权并 live-ready 的策略档案，并且远端 `.env.runtime` 满足 cloud-live 合同。
 - 若云端只读 E2E、cloud runtime audit、公开仓库防泄露、后端全量测试、前端 build 任一失败，不得发布或宣称验收完成。
 
 ## 2026-07-07 回测 trade ledger 字段合同

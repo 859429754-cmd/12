@@ -7,6 +7,22 @@ from pathlib import Path
 from scripts import cloud_runtime_audit
 
 
+def runtime_env_payload(ok: bool = True) -> str:
+    payload = {
+        "ok": ok,
+        "env_file": "/root/ai-quant-trader/.env.runtime",
+        "missing": [] if ok else ["DEEPSEEK_BACKUP_API_KEY"],
+        "empty": [],
+        "failures": [] if ok else ["password_strength_not_confirmed"],
+        "warnings": [],
+        "keys": {
+            "DEEPSEEK_API_KEY": {"present": True, "nonempty": True, "length": 24},
+            "DEEPSEEK_BACKUP_API_KEY": {"present": ok, "nonempty": ok, "length": 24 if ok else 0},
+        },
+    }
+    return json.dumps(payload) + "\n"
+
+
 def test_cloud_runtime_audit_passes_expected_release(tmp_path: Path, monkeypatch) -> None:
     key = tmp_path / "ssh-key"
     key.write_text("placeholder", encoding="utf-8")
@@ -74,6 +90,8 @@ def test_cloud_runtime_audit_can_require_live_ready_profile(tmp_path: Path, monk
                 stdout='{"ok": true, "overall": "ok", "blocking": [], "execution_mode": "live", "authorized_profile_count": 1, "live_ready_profile_count": 1}\n',
                 stderr="",
             )
+        if ".env.runtime" in script:
+            return subprocess.CompletedProcess(command, 0, stdout=runtime_env_payload(), stderr="")
         if "select created_at,payload from release_runs" in script:
             return subprocess.CompletedProcess(command, 0, stdout=json.dumps({"rows": []}) + "\n", stderr="")
         if "journalctl" in script:
@@ -112,6 +130,8 @@ def test_cloud_runtime_audit_fails_when_live_ready_profile_missing(tmp_path: Pat
                 stdout='{"ok": true, "overall": "ok", "blocking": [], "execution_mode": "mock", "authorized_profile_count": 0, "live_ready_profile_count": 0}\n',
                 stderr="",
             )
+        if ".env.runtime" in script:
+            return subprocess.CompletedProcess(command, 0, stdout=runtime_env_payload(), stderr="")
         if "select created_at,payload from release_runs" in script:
             return subprocess.CompletedProcess(command, 0, stdout=json.dumps({"rows": []}) + "\n", stderr="")
         if "journalctl" in script:
@@ -131,6 +151,48 @@ def test_cloud_runtime_audit_fails_when_live_ready_profile_missing(tmp_path: Pat
     assert "execution_mode_not_live:mock" in report.failures
     assert "authorized_profile_count_too_low:0" in report.failures
     assert "live_ready_profile_count_too_low:0" in report.failures
+
+
+def test_cloud_runtime_audit_expect_live_ready_fails_when_runtime_env_incomplete(tmp_path: Path, monkeypatch) -> None:
+    key = tmp_path / "ssh-key"
+    key.write_text("placeholder", encoding="utf-8")
+
+    def fake_run(command, **kwargs):  # noqa: ANN001, ANN003
+        script = command[-1]
+        if "readlink -f" in script:
+            return subprocess.CompletedProcess(command, 0, stdout="/root/ai-quant-trader/releases/abc123\n", stderr="")
+        if ".last_successful_release" in script:
+            return subprocess.CompletedProcess(command, 0, stdout="abc123\n", stderr="")
+        if "systemctl is-active" in script:
+            return subprocess.CompletedProcess(command, 0, stdout="active\nactive\nactive\nactive\n", stderr="")
+        if "api/system/readiness" in script:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout='{"ok": true, "overall": "ok", "blocking": [], "execution_mode": "live", "authorized_profile_count": 1, "live_ready_profile_count": 1}\n',
+                stderr="",
+            )
+        if ".env.runtime" in script:
+            return subprocess.CompletedProcess(command, 0, stdout=runtime_env_payload(ok=False), stderr="")
+        if "select created_at,payload from release_runs" in script:
+            return subprocess.CompletedProcess(command, 0, stdout=json.dumps({"rows": []}) + "\n", stderr="")
+        if "journalctl" in script:
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        raise AssertionError(script)
+
+    monkeypatch.setattr(cloud_runtime_audit.subprocess, "run", fake_run)
+
+    report = cloud_runtime_audit.run_audit(
+        host="root@example",
+        key=key,
+        remote_dir="/root/ai-quant-trader",
+        expect_live_ready=True,
+    )
+
+    assert report.ok is False
+    assert "runtime_env_not_cloud_live_ready" in report.failures
+    assert report.runtime_env is not None
+    assert report.runtime_env["missing"] == ["DEEPSEEK_BACKUP_API_KEY"]
 
 
 def test_cloud_runtime_audit_fails_on_release_mismatch(tmp_path: Path, monkeypatch) -> None:

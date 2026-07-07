@@ -41,6 +41,7 @@ class CloudRuntimeAudit:
     last_successful_release: str | None
     service_statuses: dict[str, str]
     readiness: dict[str, object] | None
+    runtime_env: dict[str, object] | None
     latest_release_runs: list[dict[str, object]]
     recent_error_log_tail: str
     failures: list[str]
@@ -176,6 +177,107 @@ PY"""
     return rows, failures
 
 
+def _runtime_env_contract(host: str, key: Path, remote_dir: str) -> tuple[dict[str, object] | None, list[str]]:
+    env_path = f"{remote_dir.rstrip('/')}/.env.runtime"
+    script = f"""python3 - <<'PY'
+import json
+import re
+from pathlib import Path
+
+path = Path({env_path!r})
+values = {{}}
+if path.exists():
+    for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].strip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip().strip('"').strip("'")
+
+required = [
+    "DEEPSEEK_API_KEY",
+    "DEEPSEEK_BACKUP_API_KEY",
+    "DEEPSEEK_BASE_URL",
+    "GATEIO_TREND_API_KEY",
+    "GATEIO_TREND_API_SECRET",
+    "GATEIO_FOLLOWER_API_KEY",
+    "GATEIO_FOLLOWER_API_SECRET",
+    "CONSOLE_ADMIN_USER",
+    "CONSOLE_ADMIN_PASSWORD",
+    "CONSOLE_ACCOUNT1_USER",
+    "CONSOLE_ACCOUNT1_PASSWORD",
+    "CONSOLE_ACCOUNT2_USER",
+    "CONSOLE_ACCOUNT2_PASSWORD",
+    "CONSOLE_PASSWORD_STRENGTH_CONFIRMED",
+]
+tracked = sorted(set(required + [
+    "CONSOLE_AUTH_DISABLED",
+    "CONSOLE_CORS_ORIGINS",
+    "GATEIO_API_KEY",
+    "GATEIO_API_SECRET",
+    "GATEIO_RANGE_API_KEY",
+    "GATEIO_RANGE_API_SECRET",
+]))
+weak_values = {{"123456", "1234567", "12345678", "password", "admin", "account1", "account2", "yx", "wx"}}
+
+def truthy(value):
+    return (value or "").strip().lower() in {{"1", "true", "yes", "on"}}
+
+def weak_password(value):
+    normalized = (value or "").strip().lower()
+    return bool(value) and (normalized in weak_values or len(value) < 10 or not re.search(r"[A-Za-z]", value) or not re.search(r"\\d", value))
+
+missing = [key for key in required if key not in values]
+empty = [key for key in required if key in values and not values.get(key, "").strip()]
+failures = []
+warnings = []
+if not path.exists():
+    failures.append("env_file_missing")
+if truthy(values.get("CONSOLE_AUTH_DISABLED")):
+    failures.append("console_auth_disabled")
+if not truthy(values.get("CONSOLE_PASSWORD_STRENGTH_CONFIRMED")):
+    failures.append("password_strength_not_confirmed")
+for key in ["CONSOLE_ADMIN_PASSWORD", "CONSOLE_ACCOUNT1_PASSWORD", "CONSOLE_ACCOUNT2_PASSWORD"]:
+    if weak_password(values.get(key, "")):
+        failures.append("weak_password:" + key)
+if not values.get("CONSOLE_CORS_ORIGINS", "").strip():
+    warnings.append("console_cors_origins_empty")
+keys = {{
+    key: {{
+        "present": key in values,
+        "nonempty": bool(values.get(key, "").strip()),
+        "length": len(values.get(key, "")),
+    }}
+    for key in tracked
+}}
+print(json.dumps({{
+    "ok": not missing and not empty and not failures,
+    "env_file": str(path),
+    "missing": missing,
+    "empty": empty,
+    "failures": failures,
+    "warnings": warnings,
+    "keys": keys,
+}}, ensure_ascii=True))
+PY"""
+    result = run_remote(host, key, script, timeout=45)
+    if not result.ok:
+        detail = result.stderr.strip() or result.stdout.strip()
+        return None, [f"runtime_env_audit_failed:{result.exit_code}:{detail}"]
+    try:
+        payload = _parse_json_line(result.stdout)
+    except json.JSONDecodeError as exc:
+        return None, [f"runtime_env_json_invalid:{exc}"]
+    failures: list[str] = []
+    if not payload or payload.get("ok") is not True:
+        failures.append("runtime_env_not_cloud_live_ready")
+    return payload, failures
+
+
 def _recent_errors(host: str, key: Path, minutes: int) -> tuple[str, list[str]]:
     command = (
         "journalctl -u ai-quant-trader.service -u ai-quant-console.service "
@@ -215,6 +317,7 @@ def run_audit(
             last_successful_release=None,
             service_statuses={},
             readiness=None,
+            runtime_env=None,
             latest_release_runs=[],
             recent_error_log_tail="",
             failures=failures,
@@ -229,6 +332,10 @@ def run_audit(
     failures.extend(step_failures)
     readiness, step_failures = _readiness(host, key, remote_dir)
     failures.extend(step_failures)
+    runtime_env: dict[str, object] | None = None
+    if expect_live_ready:
+        runtime_env, step_failures = _runtime_env_contract(host, key, remote_dir)
+        failures.extend(step_failures)
     release_runs, step_failures = _latest_release_runs(host, key, remote_dir, release_run_limit)
     failures.extend(step_failures)
     error_tail, step_failures = _recent_errors(host, key, log_minutes)
@@ -274,6 +381,7 @@ def run_audit(
         last_successful_release=last_success,
         service_statuses=service_statuses,
         readiness=readiness,
+        runtime_env=runtime_env,
         latest_release_runs=release_runs,
         recent_error_log_tail=error_tail,
         failures=failures,
