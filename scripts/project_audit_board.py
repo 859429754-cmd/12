@@ -174,8 +174,9 @@ def _with_cloud_runtime_expectations(
     expected_release: str | None,
     *,
     expect_live_ready: bool = False,
+    cloud_host: str | None = None,
 ) -> tuple[AuditGroup, ...]:
-    if not expected_release and not expect_live_ready:
+    if not expected_release and not expect_live_ready and not cloud_host:
         return tuple(groups)
     updated: list[AuditGroup] = []
     for group in groups:
@@ -184,6 +185,9 @@ def _with_cloud_runtime_expectations(
             continue
         command = group.command
         requirement = group.requirement
+        if cloud_host:
+            command = (*command, "--host", cloud_host)
+            requirement = f"{requirement} Cloud host must be {cloud_host}."
         if expected_release:
             command = (*command, "--expected-release", expected_release)
             requirement = f"{requirement} Expected release must match {expected_release}."
@@ -340,6 +344,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--cloud-host",
+        default=None,
+        help="SSH host for cloud_runtime_audit, for example root@47.84.92.81. Defaults to cloud_runtime_audit.py default.",
+    )
+    parser.add_argument(
         "--expect-cloud-live-ready",
         action="store_true",
         help="For final live acceptance, require cloud runtime audit to prove live mode and at least one authorized live-ready profile.",
@@ -365,6 +374,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         groups,
         expected_cloud_release,
         expect_live_ready=args.expect_cloud_live_ready,
+        cloud_host=args.cloud_host,
     )
     results = [
         run_group(group)

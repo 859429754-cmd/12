@@ -272,3 +272,35 @@ def test_project_audit_board_can_require_cloud_live_ready(monkeypatch) -> None:
     )
     cloud_call = next(call for call in calls if call[:2] == [sys.executable, "scripts/cloud_runtime_audit.py"])
     assert cloud_call[-3:] == ["--expected-release", "abc1234", "--expect-live-ready"]
+
+
+def test_project_audit_board_can_target_explicit_cloud_host(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):  # noqa: ANN001, ANN003
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(project_audit_board.subprocess, "run", fake_run)
+    monkeypatch.setenv("CONSOLE_URL", "http://47.84.92.81")
+    monkeypatch.setenv("AIQUANT_E2E_ACCOUNT1_PASSWORD", "x")
+    monkeypatch.setenv("AIQUANT_E2E_ACCOUNT2_PASSWORD", "x")
+    monkeypatch.setenv("AIQUANT_E2E_ADMIN_PASSWORD", "x")
+
+    assert (
+        project_audit_board.main(
+            [
+                "--mode",
+                "full",
+                "--include-cloud-runtime",
+                "--expected-cloud-release",
+                "abc1234",
+                "--cloud-host",
+                "root@47.84.92.81",
+            ]
+        )
+        == 0
+    )
+    cloud_call = next(call for call in calls if call[:2] == [sys.executable, "scripts/cloud_runtime_audit.py"])
+    assert "--host" in cloud_call
+    assert cloud_call[cloud_call.index("--host") + 1] == "root@47.84.92.81"
