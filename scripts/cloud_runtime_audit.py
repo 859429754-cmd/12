@@ -196,7 +196,7 @@ if path.exists():
         if "=" not in line:
             continue
         key, value = line.split("=", 1)
-        values[key.strip()] = value.strip().strip('"').strip("'")
+        values[key.strip().lstrip("\\ufeff")] = value.strip().strip('"').strip("'")
 
 required = [
     "DEEPSEEK_API_KEY",

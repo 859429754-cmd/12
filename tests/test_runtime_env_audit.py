@@ -50,6 +50,23 @@ def test_runtime_env_audit_base_accepts_legacy_gate_pair(tmp_path: Path) -> None
     assert "using_legacy_gate_credentials" in result.warnings
 
 
+def test_runtime_env_audit_strips_utf8_bom_from_first_key(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env.runtime"
+    env_file.write_text(
+        "\ufeffDEEPSEEK_API_KEY=deepseek-primary\n"
+        "DEEPSEEK_BASE_URL=https://api.deepseek.com\n"
+        "GATEIO_API_KEY=legacy-key\n"
+        "GATEIO_API_SECRET=legacy-secret\n",
+        encoding="utf-8",
+    )
+
+    result = audit_runtime_env(env_file, mode="base")
+
+    assert result.ok is True
+    assert result.keys["DEEPSEEK_API_KEY"].present is True
+    assert result.keys["DEEPSEEK_API_KEY"].nonempty is True
+
+
 def test_runtime_env_audit_cloud_live_requires_backup_follower_and_console(tmp_path: Path) -> None:
     env_file = tmp_path / ".env.runtime"
     write_env(
