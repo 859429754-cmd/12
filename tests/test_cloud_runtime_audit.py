@@ -24,6 +24,23 @@ def runtime_env_payload(ok: bool = True, mode: str = "cloud-live") -> str:
     return json.dumps(payload) + "\n"
 
 
+def weak_runtime_env_payload(mode: str = "trend-live") -> str:
+    payload = {
+        "ok": True,
+        "mode": mode,
+        "env_file": "/root/ai-quant-trader/.env.runtime",
+        "missing": [],
+        "empty": [],
+        "failures": [],
+        "warnings": ["weak_password_allowed:CONSOLE_ACCOUNT1_PASSWORD"],
+        "keys": {
+            "DEEPSEEK_API_KEY": {"present": True, "nonempty": True, "length": 24},
+            "GATEIO_TREND_API_KEY": {"present": True, "nonempty": True, "length": 24},
+        },
+    }
+    return json.dumps(payload) + "\n"
+
+
 def test_cloud_runtime_audit_passes_expected_release(tmp_path: Path, monkeypatch) -> None:
     key = tmp_path / "ssh-key"
     key.write_text("placeholder", encoding="utf-8")
@@ -239,6 +256,52 @@ def test_cloud_runtime_audit_trend_live_env_mode_can_pass_without_backup_or_foll
     assert report.runtime_env is not None
     assert report.runtime_env["mode"] == "trend-live"
     assert "require_backup = False" in runtime_env_scripts[0]
+
+
+def test_cloud_runtime_audit_can_explicitly_allow_weak_passwords_for_gray_live(tmp_path: Path, monkeypatch) -> None:
+    key = tmp_path / "ssh-key"
+    key.write_text("placeholder", encoding="utf-8")
+    runtime_env_scripts: list[str] = []
+
+    def fake_run(command, **kwargs):  # noqa: ANN001, ANN003
+        script = command[-1]
+        if "readlink -f" in script:
+            return subprocess.CompletedProcess(command, 0, stdout="/root/ai-quant-trader/releases/abc123\n", stderr="")
+        if ".last_successful_release" in script:
+            return subprocess.CompletedProcess(command, 0, stdout="abc123\n", stderr="")
+        if "systemctl is-active" in script:
+            return subprocess.CompletedProcess(command, 0, stdout="active\nactive\nactive\nactive\n", stderr="")
+        if "api/system/readiness" in script:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout='{"ok": true, "overall": "ok", "blocking": [], "execution_mode": "live", "authorized_profile_count": 1, "live_ready_profile_count": 1}\n',
+                stderr="",
+            )
+        if ".env.runtime" in script:
+            runtime_env_scripts.append(script)
+            return subprocess.CompletedProcess(command, 0, stdout=weak_runtime_env_payload(), stderr="")
+        if "select created_at,payload from release_runs" in script:
+            return subprocess.CompletedProcess(command, 0, stdout=json.dumps({"rows": []}) + "\n", stderr="")
+        if "journalctl" in script:
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        raise AssertionError(script)
+
+    monkeypatch.setattr(cloud_runtime_audit.subprocess, "run", fake_run)
+
+    report = cloud_runtime_audit.run_audit(
+        host="root@example",
+        key=key,
+        remote_dir="/root/ai-quant-trader",
+        expect_live_ready=True,
+        runtime_env_mode="trend-live",
+        allow_weak_passwords=True,
+    )
+
+    assert report.ok is True
+    assert report.runtime_env is not None
+    assert report.runtime_env["warnings"] == ["weak_password_allowed:CONSOLE_ACCOUNT1_PASSWORD"]
+    assert "allow_weak_passwords = True" in runtime_env_scripts[0]
 
 
 def test_cloud_runtime_audit_fails_on_release_mismatch(tmp_path: Path, monkeypatch) -> None:

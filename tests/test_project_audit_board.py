@@ -306,6 +306,66 @@ def test_project_audit_board_can_pass_trend_live_env_mode_to_cloud_runtime(monke
     assert cloud_call[-5:] == ["--expected-release", "abc1234", "--expect-live-ready", "--runtime-env-mode", "trend-live"]
 
 
+def test_project_audit_board_can_explicitly_allow_cloud_weak_passwords(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):  # noqa: ANN001, ANN003
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(project_audit_board.subprocess, "run", fake_run)
+    monkeypatch.setenv("CONSOLE_URL", "http://127.0.0.1")
+    monkeypatch.setenv("AIQUANT_E2E_ACCOUNT1_PASSWORD", "x")
+    monkeypatch.setenv("AIQUANT_E2E_ACCOUNT2_PASSWORD", "x")
+    monkeypatch.setenv("AIQUANT_E2E_ADMIN_PASSWORD", "x")
+
+    assert (
+        project_audit_board.main(
+            [
+                "--mode",
+                "full",
+                "--include-cloud-runtime",
+                "--expected-cloud-release",
+                "abc1234",
+                "--expect-cloud-live-ready",
+                "--cloud-runtime-env-mode",
+                "trend-live",
+                "--cloud-allow-weak-passwords",
+            ]
+        )
+        == 0
+    )
+    cloud_call = next(call for call in calls if call[:2] == [sys.executable, "scripts/cloud_runtime_audit.py"])
+    assert "--allow-weak-passwords" in cloud_call
+
+
+def test_project_audit_board_can_pass_cloud_log_window(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):  # noqa: ANN001, ANN003
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(project_audit_board.subprocess, "run", fake_run)
+
+    assert (
+        project_audit_board.main(
+            [
+                "--mode",
+                "core",
+                "--include-cloud-runtime",
+                "--expected-cloud-release",
+                "abc1234",
+                "--cloud-log-minutes",
+                "1",
+            ]
+        )
+        == 0
+    )
+    cloud_call = next(call for call in calls if call[:2] == [sys.executable, "scripts/cloud_runtime_audit.py"])
+    assert cloud_call[-2:] == ["--log-minutes", "1"]
+
+
 def test_project_audit_board_can_target_explicit_cloud_host(monkeypatch) -> None:
     calls: list[list[str]] = []
 

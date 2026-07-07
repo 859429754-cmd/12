@@ -176,8 +176,17 @@ def _with_cloud_runtime_expectations(
     expect_live_ready: bool = False,
     cloud_host: str | None = None,
     cloud_runtime_env_mode: str = "cloud-live",
+    cloud_allow_weak_passwords: bool = False,
+    cloud_log_minutes: int | None = None,
 ) -> tuple[AuditGroup, ...]:
-    if not expected_release and not expect_live_ready and not cloud_host and cloud_runtime_env_mode == "cloud-live":
+    if (
+        not expected_release
+        and not expect_live_ready
+        and not cloud_host
+        and cloud_runtime_env_mode == "cloud-live"
+        and not cloud_allow_weak_passwords
+        and cloud_log_minutes is None
+    ):
         return tuple(groups)
     updated: list[AuditGroup] = []
     for group in groups:
@@ -199,6 +208,15 @@ def _with_cloud_runtime_expectations(
                 f"{requirement} Cloud readiness must report live mode with at least one authorized live-ready profile "
                 f"and runtime env mode {cloud_runtime_env_mode}."
             )
+        if cloud_allow_weak_passwords:
+            command = (*command, "--allow-weak-passwords")
+            requirement = (
+                f"{requirement} Weak console passwords are explicitly allowed for small-funds gray testing; "
+                "this is not a large-funds unattended acceptance."
+            )
+        if cloud_log_minutes is not None:
+            command = (*command, "--log-minutes", str(cloud_log_minutes))
+            requirement = f"{requirement} Recent service log window is {cloud_log_minutes} minute(s)."
         updated.append(
             AuditGroup(
                 id=group.id,
@@ -364,6 +382,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         default="cloud-live",
         help="Runtime env contract passed to cloud_runtime_audit when --expect-cloud-live-ready is set.",
     )
+    parser.add_argument(
+        "--cloud-allow-weak-passwords",
+        action="store_true",
+        help=(
+            "Pass --allow-weak-passwords to cloud_runtime_audit. Use only for small-funds gray testing; "
+            "large-funds unattended acceptance must omit this flag."
+        ),
+    )
+    parser.add_argument(
+        "--cloud-log-minutes",
+        type=int,
+        default=None,
+        help="Recent journal window passed to cloud_runtime_audit. Defaults to cloud_runtime_audit.py default.",
+    )
     parser.add_argument("--json-out", type=Path, default=None, help="Optional path to write the JSON audit report.")
     args = parser.parse_args(argv)
 
@@ -387,6 +419,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         expect_live_ready=args.expect_cloud_live_ready,
         cloud_host=args.cloud_host,
         cloud_runtime_env_mode=args.cloud_runtime_env_mode,
+        cloud_allow_weak_passwords=args.cloud_allow_weak_passwords,
+        cloud_log_minutes=args.cloud_log_minutes,
     )
     results = [
         run_group(group)

@@ -177,7 +177,14 @@ PY"""
     return rows, failures
 
 
-def _runtime_env_contract(host: str, key: Path, remote_dir: str, mode: str) -> tuple[dict[str, object] | None, list[str]]:
+def _runtime_env_contract(
+    host: str,
+    key: Path,
+    remote_dir: str,
+    mode: str,
+    *,
+    allow_weak_passwords: bool = False,
+) -> tuple[dict[str, object] | None, list[str]]:
     env_path = f"{remote_dir.rstrip('/')}/.env.runtime"
     require_backup = mode == "cloud-live"
     require_follower = mode == "cloud-live"
@@ -192,6 +199,7 @@ mode = {mode!r}
 require_backup = {require_backup!r}
 require_follower = {require_follower!r}
 require_account2 = {require_account2!r}
+allow_weak_passwords = {allow_weak_passwords!r}
 values = {{}}
 if path.exists():
     for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -251,7 +259,10 @@ if not truthy(values.get("CONSOLE_PASSWORD_STRENGTH_CONFIRMED")):
     failures.append("password_strength_not_confirmed")
 for key in ["CONSOLE_ADMIN_PASSWORD", "CONSOLE_ACCOUNT1_PASSWORD", "CONSOLE_ACCOUNT2_PASSWORD"]:
     if weak_password(values.get(key, "")):
-        failures.append("weak_password:" + key)
+        if allow_weak_passwords:
+            warnings.append("weak_password_allowed:" + key)
+        else:
+            failures.append("weak_password:" + key)
 if not values.get("CONSOLE_CORS_ORIGINS", "").strip():
     warnings.append("console_cors_origins_empty")
 keys = {{
@@ -310,6 +321,7 @@ def run_audit(
     expected_release: str | None = None,
     expect_live_ready: bool = False,
     runtime_env_mode: str = "cloud-live",
+    allow_weak_passwords: bool = False,
     log_minutes: int = 15,
     release_run_limit: int = 3,
     services: Sequence[str] = DEFAULT_SERVICES,
@@ -344,7 +356,13 @@ def run_audit(
     failures.extend(step_failures)
     runtime_env: dict[str, object] | None = None
     if expect_live_ready:
-        runtime_env, step_failures = _runtime_env_contract(host, key, remote_dir, runtime_env_mode)
+        runtime_env, step_failures = _runtime_env_contract(
+            host,
+            key,
+            remote_dir,
+            runtime_env_mode,
+            allow_weak_passwords=allow_weak_passwords,
+        )
         failures.extend(step_failures)
     release_runs, step_failures = _latest_release_runs(host, key, remote_dir, release_run_limit)
     failures.extend(step_failures)
@@ -421,6 +439,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         default="cloud-live",
         help="Remote .env.runtime contract to enforce when --expect-live-ready is set.",
     )
+    parser.add_argument(
+        "--allow-weak-passwords",
+        action="store_true",
+        help=(
+            "Allow explicitly accepted weak console passwords in runtime env audit. "
+            "Use only for small-funds gray testing; large-funds unattended acceptance must omit this flag."
+        ),
+    )
     parser.add_argument("--log-minutes", type=int, default=15)
     parser.add_argument("--json-out", type=Path, default=None)
     args = parser.parse_args(argv)
@@ -432,6 +458,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         expected_release=args.expected_release,
         expect_live_ready=args.expect_live_ready,
         runtime_env_mode=args.runtime_env_mode,
+        allow_weak_passwords=args.allow_weak_passwords,
         log_minutes=args.log_minutes,
     )
     payload = asdict(report)
