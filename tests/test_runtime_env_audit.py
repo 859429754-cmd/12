@@ -87,6 +87,30 @@ def test_runtime_env_audit_cloud_live_requires_backup_follower_and_console(tmp_p
     assert "CONSOLE_ADMIN_PASSWORD" in result.missing
 
 
+def test_runtime_env_audit_trend_live_does_not_require_backup_or_follower(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env.runtime"
+    write_env(
+        env_file,
+        {
+            "DEEPSEEK_API_KEY": "deepseek-primary",
+            "DEEPSEEK_BASE_URL": "https://api.deepseek.com",
+            "GATEIO_TREND_API_KEY": "trend-key",
+            "GATEIO_TREND_API_SECRET": "trend-secret",
+            "CONSOLE_ADMIN_USER": "admin",
+            "CONSOLE_ADMIN_PASSWORD": "AdminStrong123",
+            "CONSOLE_ACCOUNT1_USER": "account1",
+            "CONSOLE_ACCOUNT1_PASSWORD": "AccountOne123",
+            "CONSOLE_PASSWORD_STRENGTH_CONFIRMED": "1",
+        },
+    )
+
+    result = audit_runtime_env(env_file, mode="trend-live")
+
+    assert result.ok is True
+    assert "DEEPSEEK_BACKUP_API_KEY" not in result.missing
+    assert "GATEIO_FOLLOWER_API_KEY" not in result.missing
+
+
 def test_runtime_env_audit_cloud_live_rejects_auth_disabled_and_weak_passwords(tmp_path: Path) -> None:
     env_file = tmp_path / ".env.runtime"
     values = complete_cloud_values()

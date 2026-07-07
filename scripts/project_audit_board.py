@@ -175,8 +175,9 @@ def _with_cloud_runtime_expectations(
     *,
     expect_live_ready: bool = False,
     cloud_host: str | None = None,
+    cloud_runtime_env_mode: str = "cloud-live",
 ) -> tuple[AuditGroup, ...]:
-    if not expected_release and not expect_live_ready and not cloud_host:
+    if not expected_release and not expect_live_ready and not cloud_host and cloud_runtime_env_mode == "cloud-live":
         return tuple(groups)
     updated: list[AuditGroup] = []
     for group in groups:
@@ -193,7 +194,11 @@ def _with_cloud_runtime_expectations(
             requirement = f"{requirement} Expected release must match {expected_release}."
         if expect_live_ready:
             command = (*command, "--expect-live-ready")
-            requirement = f"{requirement} Cloud readiness must report live mode with at least one authorized live-ready profile."
+            command = (*command, "--runtime-env-mode", cloud_runtime_env_mode)
+            requirement = (
+                f"{requirement} Cloud readiness must report live mode with at least one authorized live-ready profile "
+                f"and runtime env mode {cloud_runtime_env_mode}."
+            )
         updated.append(
             AuditGroup(
                 id=group.id,
@@ -353,6 +358,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="For final live acceptance, require cloud runtime audit to prove live mode and at least one authorized live-ready profile.",
     )
+    parser.add_argument(
+        "--cloud-runtime-env-mode",
+        choices=["trend-live", "cloud-live"],
+        default="cloud-live",
+        help="Runtime env contract passed to cloud_runtime_audit when --expect-cloud-live-ready is set.",
+    )
     parser.add_argument("--json-out", type=Path, default=None, help="Optional path to write the JSON audit report.")
     args = parser.parse_args(argv)
 
@@ -375,6 +386,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         expected_cloud_release,
         expect_live_ready=args.expect_cloud_live_ready,
         cloud_host=args.cloud_host,
+        cloud_runtime_env_mode=args.cloud_runtime_env_mode,
     )
     results = [
         run_group(group)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,21 @@ from ai_quant_trader.execution.gateway.gate_real import GateRealGateway
 from ai_quant_trader.execution.gateway.mock import MockExchangeGateway
 from ai_quant_trader.strategy.trend_state import TrendStateStore
 from tests.test_console_api import write_config
+
+
+def test_gate_execution_client_supports_ccxt_gate_alias(monkeypatch: pytest.MonkeyPatch) -> None:
+    created: list[dict[str, object]] = []
+
+    class FakeGate:
+        def __init__(self, payload):
+            created.append(payload)
+
+    monkeypatch.setattr(gateio_module, "ccxt", SimpleNamespace(gate=FakeGate), raising=False)
+
+    client = GateExecutionClient(dry_run=False)
+
+    assert isinstance(client.exchange, FakeGate)
+    assert created[0]["options"] == {"defaultType": "swap", "defaultSettle": "USDT"}
 
 
 @pytest.mark.asyncio

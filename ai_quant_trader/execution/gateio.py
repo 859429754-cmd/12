@@ -35,7 +35,10 @@ class GateExecutionClient:
         self._markets_loaded = False
 
     def _new_exchange(self):
-        return ccxt.gateio(
+        exchange_cls = getattr(ccxt, "gateio", None) or getattr(ccxt, "gate", None)
+        if exchange_cls is None:
+            raise RuntimeError("ccxt_gate_exchange_not_available")
+        return exchange_cls(
             {
                 "apiKey": os.getenv(self.api_key_env),
                 "secret": os.getenv(self.api_secret_env),

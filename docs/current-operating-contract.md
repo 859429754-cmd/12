@@ -248,6 +248,7 @@ python scripts\project_audit_board.py --mode full --include-cloud-runtime --clou
 审计要求：
 
 - `runtime_env_audit.py --mode cloud-live` 必须先通过。该脚本只报告变量是否存在/非空和长度，不打印任何密钥值。
+- 若用户明确暂不配置账号2和备用 DeepSeek，本轮只能使用 `runtime_env_audit.py --mode trend-live` 和 `--cloud-runtime-env-mode trend-live` 验收账号1趋势实盘；这不等同于多账户跟随或 DeepSeek 主备生产验收。
 - 大资金/无人值守验收默认不允许 `CONSOLE_AUTH_DISABLED=1`，不允许缺失 `DEEPSEEK_BACKUP_API_KEY`、`GATEIO_TREND_*`、`GATEIO_FOLLOWER_*`、控制台账号密码和 `CONSOLE_PASSWORD_STRENGTH_CONFIRMED`。
 - `yx`、`wx`、`1234567` 这类弱密码只允许小资金灰度或历史 E2E 兼容；大资金无人值守必须替换为强且唯一的账号密码。若临时灰度必须使用弱密码，只能显式传 `--allow-weak-passwords`，并不得宣称通过大资金无人值守验收。
 - `--fail-on-skipped` 必须开启。

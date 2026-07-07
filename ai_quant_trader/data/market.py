@@ -606,7 +606,10 @@ class MarketDataClient:
         if source in self._exchanges:
             return self._exchanges[source]
         if source == "gateio":
-            exchange = ccxt.gateio(
+            exchange_cls = getattr(ccxt, "gateio", None) or getattr(ccxt, "gate", None)
+            if exchange_cls is None:
+                raise RuntimeError("ccxt_gate_exchange_not_available")
+            exchange = exchange_cls(
                 {
                     "enableRateLimit": True,
                     "options": {"defaultType": "swap", "defaultSettle": "USDT"},

@@ -15,11 +15,14 @@ TREND_GATE_KEYS = ["GATEIO_TREND_API_KEY", "GATEIO_TREND_API_SECRET"]
 FOLLOWER_GATE_KEYS = ["GATEIO_FOLLOWER_API_KEY", "GATEIO_FOLLOWER_API_SECRET"]
 LEGACY_GATE_KEYS = ["GATEIO_API_KEY", "GATEIO_API_SECRET"]
 
-CONSOLE_ACCOUNT_KEYS = [
+CONSOLE_ADMIN_ACCOUNT1_KEYS = [
     "CONSOLE_ADMIN_USER",
     "CONSOLE_ADMIN_PASSWORD",
     "CONSOLE_ACCOUNT1_USER",
     "CONSOLE_ACCOUNT1_PASSWORD",
+]
+
+CONSOLE_MULTI_ACCOUNT_KEYS = [
     "CONSOLE_ACCOUNT2_USER",
     "CONSOLE_ACCOUNT2_PASSWORD",
 ]
@@ -123,15 +126,17 @@ def weak_console_passwords(values: dict[str, str]) -> list[str]:
 def audit_runtime_env(path: Path, mode: str = "base", allow_weak_passwords: bool = False) -> RuntimeEnvAuditResult:
     values = parse_env_file(path)
     mode = mode.lower().replace("_", "-")
-    if mode not in {"base", "cloud-live"}:
+    if mode not in {"base", "trend-live", "cloud-live"}:
         raise ValueError(f"unsupported mode: {mode}")
 
     required: list[str] = [*PRIMARY_DEEPSEEK_KEYS]
     warnings: list[str] = []
     failures: list[str] = []
 
+    if mode == "trend-live":
+        required.extend([*TREND_GATE_KEYS, *CONSOLE_ADMIN_ACCOUNT1_KEYS, *LARGE_FUNDS_KEYS])
     if mode == "cloud-live":
-        required.extend([*BACKUP_DEEPSEEK_KEYS, *TREND_GATE_KEYS, *FOLLOWER_GATE_KEYS, *CONSOLE_ACCOUNT_KEYS, *LARGE_FUNDS_KEYS])
+        required.extend([*BACKUP_DEEPSEEK_KEYS, *TREND_GATE_KEYS, *FOLLOWER_GATE_KEYS, *CONSOLE_ADMIN_ACCOUNT1_KEYS, *CONSOLE_MULTI_ACCOUNT_KEYS, *LARGE_FUNDS_KEYS])
     missing, empty = missing_or_empty(values, required)
 
     if not path.exists():
@@ -143,7 +148,7 @@ def audit_runtime_env(path: Path, mode: str = "base", allow_weak_passwords: bool
         if has_pair(values, LEGACY_GATE_KEYS) and not has_pair(values, TREND_GATE_KEYS):
             warnings.append("using_legacy_gate_credentials")
 
-    if mode == "cloud-live":
+    if mode in {"trend-live", "cloud-live"}:
         if truthy(values.get("CONSOLE_AUTH_DISABLED")):
             failures.append("console_auth_disabled")
         if not truthy(values.get("CONSOLE_PASSWORD_STRENGTH_CONFIRMED")):
@@ -177,7 +182,7 @@ def audit_runtime_env(path: Path, mode: str = "base", allow_weak_passwords: bool
 def main() -> None:
     parser = argparse.ArgumentParser(description="Audit .env.runtime completeness without printing secret values.")
     parser.add_argument("--env-file", default=".env.runtime", help="Path to .env.runtime.")
-    parser.add_argument("--mode", choices=["base", "cloud-live"], default="base")
+    parser.add_argument("--mode", choices=["base", "trend-live", "cloud-live"], default="base")
     parser.add_argument("--allow-weak-passwords", action="store_true", help="Allow weak console passwords for small-funds grey testing only.")
     parser.add_argument("--json-out", help="Optional JSON output path.")
     args = parser.parse_args()

@@ -177,14 +177,21 @@ PY"""
     return rows, failures
 
 
-def _runtime_env_contract(host: str, key: Path, remote_dir: str) -> tuple[dict[str, object] | None, list[str]]:
+def _runtime_env_contract(host: str, key: Path, remote_dir: str, mode: str) -> tuple[dict[str, object] | None, list[str]]:
     env_path = f"{remote_dir.rstrip('/')}/.env.runtime"
+    require_backup = mode == "cloud-live"
+    require_follower = mode == "cloud-live"
+    require_account2 = mode == "cloud-live"
     script = f"""python3 - <<'PY'
 import json
 import re
 from pathlib import Path
 
 path = Path({env_path!r})
+mode = {mode!r}
+require_backup = {require_backup!r}
+require_follower = {require_follower!r}
+require_account2 = {require_account2!r}
 values = {{}}
 if path.exists():
     for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -200,20 +207,21 @@ if path.exists():
 
 required = [
     "DEEPSEEK_API_KEY",
-    "DEEPSEEK_BACKUP_API_KEY",
     "DEEPSEEK_BASE_URL",
     "GATEIO_TREND_API_KEY",
     "GATEIO_TREND_API_SECRET",
-    "GATEIO_FOLLOWER_API_KEY",
-    "GATEIO_FOLLOWER_API_SECRET",
     "CONSOLE_ADMIN_USER",
     "CONSOLE_ADMIN_PASSWORD",
     "CONSOLE_ACCOUNT1_USER",
     "CONSOLE_ACCOUNT1_PASSWORD",
-    "CONSOLE_ACCOUNT2_USER",
-    "CONSOLE_ACCOUNT2_PASSWORD",
     "CONSOLE_PASSWORD_STRENGTH_CONFIRMED",
 ]
+if require_backup:
+    required.append("DEEPSEEK_BACKUP_API_KEY")
+if require_follower:
+    required.extend(["GATEIO_FOLLOWER_API_KEY", "GATEIO_FOLLOWER_API_SECRET"])
+if require_account2:
+    required.extend(["CONSOLE_ACCOUNT2_USER", "CONSOLE_ACCOUNT2_PASSWORD"])
 tracked = sorted(set(required + [
     "CONSOLE_AUTH_DISABLED",
     "CONSOLE_CORS_ORIGINS",
@@ -256,6 +264,7 @@ keys = {{
 }}
 print(json.dumps({{
     "ok": not missing and not empty and not failures,
+    "mode": mode,
     "env_file": str(path),
     "missing": missing,
     "empty": empty,
@@ -300,6 +309,7 @@ def run_audit(
     remote_dir: str,
     expected_release: str | None = None,
     expect_live_ready: bool = False,
+    runtime_env_mode: str = "cloud-live",
     log_minutes: int = 15,
     release_run_limit: int = 3,
     services: Sequence[str] = DEFAULT_SERVICES,
@@ -334,7 +344,7 @@ def run_audit(
     failures.extend(step_failures)
     runtime_env: dict[str, object] | None = None
     if expect_live_ready:
-        runtime_env, step_failures = _runtime_env_contract(host, key, remote_dir)
+        runtime_env, step_failures = _runtime_env_contract(host, key, remote_dir, runtime_env_mode)
         failures.extend(step_failures)
     release_runs, step_failures = _latest_release_runs(host, key, remote_dir, release_run_limit)
     failures.extend(step_failures)
@@ -405,6 +415,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="Fail unless cloud readiness reports live mode with at least one authorized and live-ready profile.",
     )
+    parser.add_argument(
+        "--runtime-env-mode",
+        choices=["trend-live", "cloud-live"],
+        default="cloud-live",
+        help="Remote .env.runtime contract to enforce when --expect-live-ready is set.",
+    )
     parser.add_argument("--log-minutes", type=int, default=15)
     parser.add_argument("--json-out", type=Path, default=None)
     args = parser.parse_args(argv)
@@ -415,6 +431,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         remote_dir=args.remote_dir,
         expected_release=args.expected_release,
         expect_live_ready=args.expect_live_ready,
+        runtime_env_mode=args.runtime_env_mode,
         log_minutes=args.log_minutes,
     )
     payload = asdict(report)
