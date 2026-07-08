@@ -456,6 +456,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         latest_news_risk = ctx.store.fetch_latest("news_risk_reviews")
         latest_position_review = ctx.store.fetch_latest("position_reviews", primary_symbol)
         latest_ai_budget = ctx.store.fetch_latest("ai_call_budget_events")
+        latest_ai_usage = ctx.store.fetch_latest("ai_call_usage_events")
         latest_worker_heartbeats = _worker_heartbeat_rows(ctx)
         worker_heartbeat_details = _worker_heartbeat_details(ctx, latest_worker_heartbeats)
         latest_maintenance = ctx.store.fetch_latest("maintenance_runs")
@@ -467,7 +468,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         reconciliation_ok = execution_mode == "mock" or _latest_payload_status_fresh(ctx, latest_reconciliation, "ok")
         data_health_status = str(((latest_data_health or {}).get("payload") or {}).get("status") or "warn")
         ai_drift_status = str(((latest_ai_drift or {}).get("payload") or {}).get("status") or "warn")
-        deepseek_status, deepseek_detail = _deepseek_readiness_status(deepseek_ready, latest_ai_decision, execution_mode)
+        deepseek_status, deepseek_detail = _deepseek_readiness_status(deepseek_ready, latest_ai_decision, latest_ai_usage, execution_mode)
         ai_budget_status, ai_budget_detail = _ai_budget_readiness_status(latest_ai_budget, execution_mode)
         news_status, news_detail = _news_readiness_status(
             latest_news,
@@ -634,6 +635,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
             "latest_news_risk_review": latest_news_risk,
             "latest_position_review": latest_position_review,
             "latest_ai_budget": latest_ai_budget,
+            "latest_ai_usage": latest_ai_usage,
             "latest_worker_heartbeats": latest_worker_heartbeats,
             "latest_maintenance": latest_maintenance,
             "checks": checks,
@@ -673,6 +675,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
             "latest_news_risk_review": latest_news_risk,
             "latest_position_review": latest_position_review,
             "latest_ai_budget": latest_ai_budget,
+            "latest_ai_usage": latest_ai_usage,
             "latest_worker_heartbeats": latest_worker_heartbeats,
             "worker_heartbeat_details": worker_heartbeat_details,
             "latest_maintenance": latest_maintenance,
@@ -2973,10 +2976,18 @@ def _is_audit_only_ai_payload(payload: dict[str, Any]) -> bool:
 def _deepseek_readiness_status(
     api_key_configured: bool,
     latest_ai_decision: dict[str, Any] | None,
+    latest_ai_usage: dict[str, Any] | None,
     execution_mode: str,
 ) -> tuple[Literal["ok", "warn", "block"], str]:
     if not api_key_configured:
         return "warn", "DeepSeek API key is missing; AI decisions will degrade."
+    usage_payload = (latest_ai_usage or {}).get("payload") or {}
+    if usage_payload.get("status") == "failure":
+        error_category = str(usage_payload.get("error_category") or "")
+        error_type = str(usage_payload.get("error_type") or "")
+        if error_category in {"invalid_auth", "quota_exhausted"}:
+            status: Literal["ok", "warn", "block"] = "block" if execution_mode == "live" else "warn"
+            return status, f"Latest DeepSeek credential check failed closed: {error_category or error_type}."
     if _latest_ai_decision_has_deepseek_error(latest_ai_decision):
         status: Literal["ok", "warn", "block"] = "block" if execution_mode == "live" else "warn"
         return status, "Latest AI decision used DeepSeek error fallback; live entries must fail closed until a successful AI decision is recorded."
