@@ -441,6 +441,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         enabled_profiles = [profile for profile in profiles if profile.get("enabled")]
         authorized_profiles = [profile for profile in profiles if profile.get("opening_authorized")]
         live_ready_profiles = [profile for profile in profiles if profile.get("live_ready")]
+        primary_symbol = _primary_readiness_symbol(live_ready_profiles, enabled_profiles, profiles)
         execution_mode = execution_mode_from_config(ctx.config)
         deepseek_ready = bool(os.getenv("DEEPSEEK_API_KEY"))
         latest_news = ctx.store.fetch_latest("news_summaries")
@@ -449,11 +450,11 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         latest_reconciliation = ctx.store.fetch_latest("reconciliation_runs")
         latest_order_lifecycle = ctx.store.fetch_latest("order_lifecycle")
         unresolved_order_lifecycle = _unresolved_order_lifecycle_issues(ctx)
-        latest_data_health = ctx.store.fetch_latest("data_health")
-        latest_ai_drift = ctx.store.fetch_latest("ai_drift_checks")
-        latest_ai_decision = _latest_trade_ai_decision(ctx)
+        latest_data_health = ctx.store.fetch_latest("data_health", primary_symbol)
+        latest_ai_drift = ctx.store.fetch_latest("ai_drift_checks", primary_symbol)
+        latest_ai_decision = _latest_trade_ai_decision(ctx, primary_symbol)
         latest_news_risk = ctx.store.fetch_latest("news_risk_reviews")
-        latest_position_review = ctx.store.fetch_latest("position_reviews")
+        latest_position_review = ctx.store.fetch_latest("position_reviews", primary_symbol)
         latest_ai_budget = ctx.store.fetch_latest("ai_call_budget_events")
         latest_worker_heartbeats = _worker_heartbeat_rows(ctx)
         worker_heartbeat_details = _worker_heartbeat_details(ctx, latest_worker_heartbeats)
@@ -656,6 +657,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
             "trade_mode": ctx.config.runtime.trade_mode,
             "configured_symbols": symbols,
             "enabled_symbols": sorted(state.enabled_symbols),
+            "primary_symbol": primary_symbol,
             "profile_count": len(profiles),
             "enabled_profile_count": len(enabled_profiles),
             "authorized_profile_count": len(authorized_profiles),
@@ -2926,6 +2928,19 @@ def _maintenance_status(row: dict[str, Any] | None) -> tuple[Literal["ok", "warn
     if warnings:
         return "warn", "Runtime maintenance warnings: " + ",".join(str(item) for item in warnings)
     return "ok", "Runtime maintenance completed without warnings."
+
+
+def _primary_readiness_symbol(
+    live_ready_profiles: list[dict[str, Any]],
+    enabled_profiles: list[dict[str, Any]],
+    profiles: list[dict[str, Any]],
+) -> str | None:
+    for candidates in (live_ready_profiles, enabled_profiles, profiles):
+        for profile in candidates:
+            symbol = str(profile.get("symbol") or "").strip()
+            if symbol:
+                return symbol
+    return None
 
 
 def _latest_trade_ai_decision(ctx: ConsoleContext, symbol: str | None = None) -> dict[str, Any] | None:

@@ -315,6 +315,47 @@ def test_readiness_exposes_runtime_alerts_for_unknown_order(tmp_path: Path, monk
     assert alerts["summary"]["total"] == body["runtime_alert_summary"]["total"]
 
 
+def test_readiness_uses_primary_enabled_symbol_not_latest_other_symbol(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("CONSOLE_AUTH_DISABLED", "1")
+    config_path = tmp_path / "config.yaml"
+    db_path = tmp_path / "trader.sqlite3"
+    audit_path = tmp_path / "audit.jsonl"
+    write_config(config_path, db_path, audit_path, symbols=["ETH/USDT:USDT", "SOL/USDT:USDT"])
+    store = SQLiteStore(str(db_path), str(audit_path))
+    try:
+        store.insert(
+            "data_health",
+            {"symbol": "ETH/USDT:USDT", "status": "ok", "checked_at": "2026-07-08T00:00:00Z"},
+            "ETH/USDT:USDT",
+        )
+        store.insert(
+            "data_health",
+            {"symbol": "SOL/USDT:USDT", "status": "block", "checked_at": "2026-07-08T00:01:00Z"},
+            "SOL/USDT:USDT",
+        )
+        store.insert(
+            "ai_decisions",
+            {"symbol": "ETH/USDT:USDT", "direction": "long", "confidence": 0.7},
+            "ETH/USDT:USDT",
+        )
+        store.insert(
+            "ai_decisions",
+            {"symbol": "SOL/USDT:USDT", "direction": "flat", "confidence": 0.35},
+            "SOL/USDT:USDT",
+        )
+    finally:
+        store.close()
+
+    client = TestClient(create_app(str(config_path)))
+    body = client.get("/api/system/readiness").json()
+
+    assert body["primary_symbol"] == "ETH/USDT:USDT"
+    assert body["latest_data_health"]["symbol"] == "ETH/USDT:USDT"
+    assert body["latest_data_health"]["payload"]["status"] == "ok"
+    assert body["latest_ai_decision"]["symbol"] == "ETH/USDT:USDT"
+    assert body["latest_ai_decision"]["payload"]["direction"] == "long"
+
+
 def test_console_context_reload_does_not_close_inflight_store(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
     db_path = tmp_path / "trader.sqlite3"
