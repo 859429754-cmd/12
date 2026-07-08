@@ -147,6 +147,7 @@ def remote_release_script(
     install_deps: bool,
     health_timeout: int,
     mark_success_after_remote: bool = True,
+    allow_readiness_block: bool = False,
 ) -> str:
     install_block = ""
     if install_deps:
@@ -157,6 +158,9 @@ def remote_release_script(
         )
     restart_block = ""
     if restart:
+        readiness_flags = "--allow-warn"
+        if allow_readiness_block:
+            readiness_flags += " --allow-block"
         restart_block = (
             "systemctl daemon-reload\n"
             "systemctl restart ai-quant-console.service ai-quant-trader.service\n"
@@ -173,7 +177,7 @@ def remote_release_script(
             "  exit 50\n"
             "fi\n"
             "echo \"$health_json\"\n"
-            "if ! readiness_json=\"$(.venv/bin/python current/scripts/http_readiness_check.py --base-url http://127.0.0.1:8090 --mode readiness --allow-warn --timeout 5)\"; then\n"
+            f"if ! readiness_json=\"$(.venv/bin/python current/scripts/http_readiness_check.py --base-url http://127.0.0.1:8090 --mode readiness {readiness_flags} --timeout 5)\"; then\n"
             "  if [ -n \"$previous_target\" ] && [ -e \"$previous_target\" ]; then\n"
             "    ln -sfn \"$previous_target\" \"$current_link\"\n"
             "    systemctl restart ai-quant-console.service ai-quant-trader.service || true\n"
@@ -250,6 +254,11 @@ def main() -> int:
         default=None,
         help="After a successful restart, run read-only Playwright smoke tests against this public console URL.",
     )
+    parser.add_argument(
+        "--allow-readiness-block",
+        action="store_true",
+        help="Allow deployment to complete when /api/system/readiness is block. Use only for explicit fail-closed safety releases.",
+    )
     args = parser.parse_args()
 
     key = Path(args.key)
@@ -286,6 +295,7 @@ def main() -> int:
                     install_deps=args.install_deps,
                     health_timeout=args.health_timeout,
                     mark_success_after_remote=not bool(args.cloud_console_readonly_e2e_url),
+                    allow_readiness_block=args.allow_readiness_block,
                 ),
             ]
         )

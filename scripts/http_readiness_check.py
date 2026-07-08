@@ -81,6 +81,11 @@ def main() -> int:
     parser.add_argument("--mode", choices=["health", "readiness"], default="readiness")
     parser.add_argument("--timeout", type=float, default=5.0)
     parser.add_argument("--allow-warn", action="store_true", help="Return success when readiness is warn instead of ok.")
+    parser.add_argument(
+        "--allow-block",
+        action="store_true",
+        help="Return success even when readiness is block. Use only for explicit fail-closed safety releases.",
+    )
     args = parser.parse_args()
 
     username = os.getenv("CONSOLE_BASIC_USER") or None
@@ -110,7 +115,7 @@ def main() -> int:
         return 0 if ok else 1
 
     overall = str(payload.get("overall") or "block")
-    ok = overall == "ok" or (args.allow_warn and overall == "warn")
+    ok = overall == "ok" or (args.allow_warn and overall == "warn") or args.allow_block
     blocking = [item.get("id") for item in payload.get("checks", []) if item.get("status") == "block"]
     print(json.dumps({"ok": ok, "mode": "readiness", "overall": overall, "blocking": blocking}, ensure_ascii=False))
     return 0 if ok else 1

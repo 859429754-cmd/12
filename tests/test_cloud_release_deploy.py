@@ -415,6 +415,23 @@ def test_release_v2_records_health_and_readiness_in_release_runs() -> None:
     assert "AIQUANT_HEALTH_JSON=\"$health_json\"" in script
     assert "AIQUANT_READINESS_JSON=\"$readiness_json\"" in script
     assert "release_audit_record_failed_rolled_back" in script
+    assert "--allow-block" not in script
+
+
+def test_release_v2_can_explicitly_allow_readiness_block_for_fail_closed_release() -> None:
+    import scripts.cloud_release_deploy_v2 as deploy_v2
+
+    script = deploy_v2.remote_release_script(
+        "/srv/ai-quant",
+        "abc123",
+        restart=True,
+        install_deps=False,
+        health_timeout=1,
+        allow_readiness_block=True,
+    )
+
+    assert "--allow-warn --allow-block" in script
+    assert "release_readiness_check_failed_rolled_back" in script
 
 
 def test_release_v2_bootstraps_empty_remote_runtime_root_without_overwriting_config() -> None:
