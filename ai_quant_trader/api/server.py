@@ -1077,8 +1077,8 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         request: Request,
         account_slot: Literal["default", "trend", "follower", "range"] | None = Query(default=None),
         prefer_live: bool = True,
-        timeout_seconds: float = Query(default=4.0, ge=0.1, le=20.0),
-        max_cache_age_seconds: float = Query(default=120.0, ge=0.0, le=900.0),
+        timeout_seconds: float = Query(default=12.0, ge=0.1, le=30.0),
+        max_cache_age_seconds: float = Query(default=600.0, ge=0.0, le=3600.0),
     ) -> dict[str, Any]:
         ctx = _ctx(app)
         ctx.reload()
@@ -1124,7 +1124,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
                 "cached": False,
                 **summary,
             }
-            if ctx.store is not None and gateway_mode == "live":
+            if ctx.store is not None and gateway_mode == "live" and response.get("ok") is True:
                 ctx.store.insert("account_balance_snapshots", response, symbol=account_slot)
             return response
         except Exception as exc:
@@ -2978,16 +2978,21 @@ def _ai_budget_readiness_status(
     status = str(payload.get("status") or "unknown")
     reason = str(payload.get("reason") or "")
     if status == "failure":
-        level: Literal["ok", "warn", "block"] = "block" if execution_mode == "live" else "warn"
+        call_type = str(payload.get("call_type") or "")
+        noncritical_call = call_type in {"major_news_risk_review", "price_wakeup", "optimization_proposal"}
+        level: Literal["ok", "warn", "block"] = "warn" if noncritical_call else ("block" if execution_mode == "live" else "warn")
         return level, f"Latest DeepSeek call failed; cooldown may block new AI calls: {reason}"
     if status == "blocked":
         if reason == "duplicate_event_key":
             return "ok", "Latest DeepSeek call was skipped because the news event was already reviewed."
-        if payload.get("call_type") == "major_news_risk_review" and reason in {
+        call_type = str(payload.get("call_type") or "")
+        if call_type in {"major_news_risk_review", "price_wakeup", "optimization_proposal"} and reason in {
             "major_news_hourly_limit_exceeded",
             "major_news_daily_limit_exceeded",
+            "failure_cooldown_active",
+            "peak_pricing_window_active",
         }:
-            return "warn", f"Major news DeepSeek review budget is capped; strategy-signal AI calls remain separately guarded: {reason}"
+            return "warn", f"Noncritical DeepSeek review is budget-gated; strategy-signal AI calls remain separately guarded: {reason}"
         level = "block" if execution_mode == "live" else "warn"
         return level, f"DeepSeek budget guard blocked the latest call: {reason}"
     if status == "skipped":

@@ -228,8 +228,8 @@ export function App() {
       const activeCapabilities = activeSession?.user?.capabilities;
       const activeIsAdmin = Boolean(activeCapabilities?.manage_strategy_parameters || activeCapabilities?.manage_position_review);
       void api<Record<string, unknown>>(
-        `/api/account/balance?account_slot=${encodeURIComponent(primaryAccountSlot)}&max_cache_age_seconds=120`,
-        { retries: 0, timeoutMs: 9000 },
+        `/api/account/balance?account_slot=${encodeURIComponent(primaryAccountSlot)}&max_cache_age_seconds=600&timeout_seconds=12`,
+        { retries: 0, timeoutMs: 15000 },
       )
         .then((payload) => {
           setBalance(payload);
@@ -239,8 +239,8 @@ export function App() {
         });
       if (primaryAccountSlot !== "follower" && (activeSession?.user?.visible_account_slots || visibleSlots).includes("follower")) {
         void api<Record<string, unknown>>(
-          "/api/account/balance?account_slot=follower&max_cache_age_seconds=120",
-          { retries: 0, timeoutMs: 9000 },
+          "/api/account/balance?account_slot=follower&max_cache_age_seconds=600&timeout_seconds=12",
+          { retries: 0, timeoutMs: 15000 },
         )
           .then(setFollowerBalance)
           .catch(() => {

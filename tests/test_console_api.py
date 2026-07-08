@@ -60,7 +60,37 @@ def test_major_news_budget_cap_is_readiness_warning_not_live_block() -> None:
     status, detail = server._ai_budget_readiness_status(latest, "live")
 
     assert status == "warn"
-    assert "Major news" in detail
+    assert "Noncritical DeepSeek review" in detail
+
+
+def test_noncritical_deepseek_failure_is_readiness_warning_not_live_block() -> None:
+    latest = {
+        "payload": {
+            "call_type": "price_wakeup",
+            "status": "failure",
+            "reason": "missing_deepseek_api_key",
+        }
+    }
+
+    status, detail = server._ai_budget_readiness_status(latest, "live")
+
+    assert status == "warn"
+    assert "missing_deepseek_api_key" in detail
+
+
+def test_noncritical_deepseek_cooldown_is_readiness_warning_not_live_block() -> None:
+    latest = {
+        "payload": {
+            "call_type": "price_wakeup",
+            "status": "blocked",
+            "reason": "failure_cooldown_active",
+        }
+    }
+
+    status, detail = server._ai_budget_readiness_status(latest, "live")
+
+    assert status == "warn"
+    assert "strategy-signal AI calls remain separately guarded" in detail
 
 
 def test_auth_login_failure_lockout_and_security_headers(tmp_path: Path, monkeypatch) -> None:
@@ -868,6 +898,41 @@ def test_account_balance_does_not_fallback_to_mock_when_gate_readonly_fails(tmp_
     assert body["balance_source"] == "gate_live_readonly"
     assert body["usdt_total"] is None
     assert "10000" not in body["message"]
+
+
+def test_account_balance_failure_is_not_persisted_as_successful_snapshot(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("GATEIO_TREND_API_KEY", "trend-key")
+    monkeypatch.setenv("GATEIO_TREND_API_SECRET", "trend-secret")
+    config_path = tmp_path / "config.yaml"
+    db_path = tmp_path / "trader.sqlite3"
+    audit_path = tmp_path / "audit.jsonl"
+    write_config(config_path, db_path, audit_path, ["ETH/USDT:USDT"])
+
+    class UnconfiguredGateway:
+        async def fetch_balance_summary(self) -> dict[str, object]:
+            return {
+                "ok": False,
+                "account_slot": "trend",
+                "balance_source": "live",
+                "message": "Gate API is not configured for this account slot.",
+                "usdt_total": None,
+                "usdt_free": None,
+                "usdt_used": None,
+            }
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(server, "create_exchange_gateway", lambda mode_or_config, account_slot="default": UnconfiguredGateway())
+    client = TestClient(create_app(str(config_path)))
+
+    response = client.get("/api/account/balance?account_slot=trend")
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is False
+    store = server._ctx(client.app).store
+    assert store is not None
+    assert store.fetch_latest("account_balance_snapshots", "trend") is None
 
 
 def test_account_balance_returns_cached_snapshot_when_gate_is_slow(tmp_path: Path, monkeypatch) -> None:
