@@ -1270,6 +1270,8 @@ def test_live_readiness_blocks_recent_deepseek_invalid_auth_usage(tmp_path: Path
     assert "invalid_auth" in deepseek_check["detail"]
     assert body["latest_ai_usage"]["payload"]["http_status"] == 401
     assert body["overall"] == "block"
+    assert "deepseek" in body["blocking"]
+    assert "runtime_alerts" in body["blocking"]
 
 
 def test_live_readiness_blocks_recent_deepseek_budget_failure(tmp_path: Path, monkeypatch) -> None:

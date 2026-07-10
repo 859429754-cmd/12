@@ -653,8 +653,12 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
             )
         status_rank = {"ok": 0, "warn": 1, "block": 2}
         overall = max(checks, key=lambda item: status_rank.get(item["status"], 0))["status"] if checks else "block"
+        blocking = [item["id"] for item in checks if item.get("status") == "block"]
+        warnings = [item["id"] for item in checks if item.get("status") == "warn"]
         return {
             "overall": overall,
+            "blocking": blocking,
+            "warnings": warnings,
             "execution_mode": execution_mode,
             "trade_mode": ctx.config.runtime.trade_mode,
             "configured_symbols": symbols,
