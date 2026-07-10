@@ -185,6 +185,62 @@ def test_deepseek_request_messages_keep_stable_contract_before_dynamic_context()
     assert payload["dynamic_context"]["technical_signal"]["action"] == "long"
 
 
+def test_deepseek_chat_json_sync_disables_thinking_by_default(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {"choices": [{"message": {"content": json.dumps({"ok": True})}}]}
+
+    def fake_post(*_args, **kwargs):  # noqa: ANN001, ANN003
+        captured.update(kwargs["json"])
+        return FakeResponse()
+
+    monkeypatch.delenv("DEEPSEEK_ENABLE_THINKING", raising=False)
+    monkeypatch.setattr(requests, "post", fake_post)
+    brain = DeepSeekBrain(api_key="test-key", model="deepseek-chat")
+
+    data = brain._chat_json_sync({"technical_signal": {"action": "long"}}, timeout_seconds=1)
+
+    assert json.loads(data["choices"][0]["message"]["content"]) == {"ok": True}
+    assert captured["model"] == "deepseek-chat"
+    assert captured["response_format"] == {"type": "json_object"}
+    assert "thinking" not in captured
+    assert "reasoning_effort" not in captured
+
+
+def test_deepseek_chat_json_sync_can_enable_thinking_explicitly(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {"choices": [{"message": {"content": json.dumps({"ok": True})}}]}
+
+    def fake_post(*_args, **kwargs):  # noqa: ANN001, ANN003
+        captured.update(kwargs["json"])
+        return FakeResponse()
+
+    monkeypatch.setenv("DEEPSEEK_ENABLE_THINKING", "true")
+    monkeypatch.setenv("DEEPSEEK_REASONING_EFFORT", "medium")
+    monkeypatch.setattr(requests, "post", fake_post)
+    brain = DeepSeekBrain(api_key="test-key", model="deepseek-chat")
+
+    brain._chat_json_sync({"technical_signal": {"action": "short"}}, timeout_seconds=1)
+
+    assert captured["thinking"] == {"type": "enabled"}
+    assert captured["reasoning_effort"] == "medium"
+
+
 @pytest.mark.asyncio
 async def test_deepseek_decision_requires_structured_trade_prices(monkeypatch) -> None:
     brain = DeepSeekBrain(api_key="test-key", model="deepseek-v4-pro")

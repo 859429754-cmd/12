@@ -197,16 +197,18 @@ class DeepSeekBrain:
         return self.credential_router.candidates(candidates)
 
     def _chat_json_sync(self, payload: dict[str, Any], timeout_seconds: int, api_key: str | None = None) -> dict[str, Any]:
+        request_json: dict[str, Any] = {
+            "model": self.model,
+            "messages": self._request_messages(payload),
+            "response_format": {"type": "json_object"},
+        }
+        if str(os.getenv("DEEPSEEK_ENABLE_THINKING") or "").strip().lower() in {"1", "true", "yes", "on"}:
+            request_json["thinking"] = {"type": "enabled"}
+            request_json["reasoning_effort"] = os.getenv("DEEPSEEK_REASONING_EFFORT") or "high"
         response = requests.post(
             f"{self.base_url}/chat/completions",
             headers={"Authorization": f"Bearer {api_key or self.api_key}", "Content-Type": "application/json"},
-            json={
-                "model": self.model,
-                "messages": self._request_messages(payload),
-                "response_format": {"type": "json_object"},
-                "thinking": {"type": "enabled"},
-                "reasoning_effort": "high",
-            },
+            json=request_json,
             timeout=timeout_seconds,
         )
         response.raise_for_status()
