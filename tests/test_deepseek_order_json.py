@@ -6,6 +6,7 @@ import pytest
 import requests
 
 from ai_quant_trader.brain.deepseek import DeepSeekBrain
+from ai_quant_trader.brain.credentials import DeepSeekCredentialRouter
 from ai_quant_trader.core.models import (
     AggregatedOrderflow,
     AiDecision,
@@ -239,6 +240,38 @@ def test_deepseek_chat_json_sync_can_enable_thinking_explicitly(monkeypatch) -> 
 
     assert captured["thinking"] == {"type": "enabled"}
     assert captured["reasoning_effort"] == "medium"
+
+
+def test_deepseek_router_reenables_primary_after_key_rotation(tmp_path) -> None:
+    store = SQLiteStore(str(tmp_path / "trader.sqlite3"), str(tmp_path / "audit.jsonl"))
+    router = DeepSeekCredentialRouter(store)
+    response = requests.Response()
+    response.status_code = 401
+
+    def auth_error() -> requests.HTTPError:
+        error = requests.HTTPError("401 Client Error")
+        error.response = response
+        return error
+
+    try:
+        old_primary = "sk-old-primary"
+        new_primary = "sk-new-primary"
+        router.record_failure("primary", router.classify_exception(auth_error()))
+
+        assert router.candidates([("primary", old_primary), ("backup", "sk-backup")])[0][0] == "primary"
+        router.record_failure("primary", router.classify_exception(auth_error()))
+        assert [label for label, _ in router.candidates([("primary", old_primary), ("backup", "sk-backup")])] == ["backup"]
+
+        candidates = router.candidates([("primary", new_primary), ("backup", "sk-backup")])
+        state = store.fetch_latest("runtime_state", "deepseek_credentials")
+
+        assert candidates[0] == ("primary", new_primary)
+        assert state is not None
+        assert state["payload"]["credentials"]["primary"]["status"] == "available"
+        assert "key_fingerprint" in state["payload"]["credentials"]["primary"]
+        assert "sk-new-primary" not in json.dumps(state["payload"])
+    finally:
+        store.close()
 
 
 @pytest.mark.asyncio

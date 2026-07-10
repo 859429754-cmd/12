@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -45,6 +46,7 @@ class DeepSeekCredentialRouter:
             return []
         available = {label: key for label, key in keys if key}
         state = self._load_state()
+        state = self._refresh_rotated_credentials(state, available)
         active = str(state.get("active_label") or "primary")
         ordered: list[str] = []
         if active in available and not self._is_disabled(state, active):
@@ -139,6 +141,40 @@ class DeepSeekCredentialRouter:
         if until.tzinfo is None:
             until = until.replace(tzinfo=UTC)
         return until > datetime.now(UTC)
+
+    def _refresh_rotated_credentials(self, state: dict[str, Any], available: dict[str, str]) -> dict[str, Any]:
+        changed = False
+        credentials = dict(state.get("credentials") or {})
+        for label, key in available.items():
+            fingerprint = self._fingerprint(key)
+            credential = dict(credentials.get(label, {}))
+            if credential.get("key_fingerprint") == fingerprint:
+                continue
+            credential.update(
+                {
+                    "status": "available",
+                    "key_fingerprint": fingerprint,
+                    "last_error": None,
+                    "last_http_status": None,
+                    "disabled_until": None,
+                    "rotated_at": self._now(),
+                }
+            )
+            credentials[label] = credential
+            if label == "primary":
+                state["active_label"] = "primary"
+                state["last_switch_reason"] = "primary_key_rotated"
+                state["last_switch_at"] = self._now()
+            changed = True
+        if not changed:
+            return state
+        state = dict(state)
+        state["credentials"] = credentials
+        self._save_state(state, reason="credential_key_rotation_detected")
+        return state
+
+    def _fingerprint(self, value: str) -> str:
+        return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
 
     def _load_state(self) -> dict[str, Any]:
         if self.store is None:
