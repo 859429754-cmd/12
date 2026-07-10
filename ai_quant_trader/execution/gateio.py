@@ -38,11 +38,13 @@ class GateExecutionClient:
         exchange_cls = getattr(ccxt, "gateio", None) or getattr(ccxt, "gate", None)
         if exchange_cls is None:
             raise RuntimeError("ccxt_gate_exchange_not_available")
+        timeout_ms = int(os.getenv("GATEIO_TIMEOUT_MS", "30000"))
         return exchange_cls(
             {
                 "apiKey": os.getenv(self.api_key_env),
                 "secret": os.getenv(self.api_secret_env),
                 "enableRateLimit": True,
+                "timeout": timeout_ms,
                 "options": {"defaultType": "swap", "defaultSettle": "USDT"},
             }
         )

@@ -31,6 +31,7 @@ def test_gate_execution_client_supports_ccxt_gate_alias(monkeypatch: pytest.Monk
     client = GateExecutionClient(dry_run=False)
 
     assert isinstance(client.exchange, FakeGate)
+    assert created[0]["timeout"] == 30000
     assert created[0]["options"] == {"defaultType": "swap", "defaultSettle": "USDT"}
 
 

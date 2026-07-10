@@ -1287,7 +1287,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         limit: int = Query(default=20, ge=1, le=100),
         account_slot: Literal["default", "trend", "follower", "range"] | None = Query(default=None),
         prefer_live: bool = True,
-        timeout_seconds: float = Query(default=4.0, ge=0.1, le=20.0),
+        timeout_seconds: float = Query(default=12.0, ge=0.1, le=30.0),
     ) -> dict[str, Any]:
         ctx = _ctx(app)
         ctx.reload()
