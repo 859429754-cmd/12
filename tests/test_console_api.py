@@ -1451,7 +1451,7 @@ def test_runtime_mode_is_global_and_readonly_accounts_cannot_change_it(tmp_path:
     assert client.get("/api/status").json()["execution_mode"] == "live"
 
 
-def test_deepseek_control_is_admin_only_and_blocks_live_readiness(tmp_path: Path, monkeypatch) -> None:
+def test_deepseek_control_is_admin_only_and_switches_live_to_pure_strategy(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("CONSOLE_AUTH_DISABLED", "0")
     monkeypatch.setenv("CONSOLE_ADMIN_PASSWORD", "admin-secret")
     monkeypatch.setenv("CONSOLE_ACCOUNT1_PASSWORD", "account-secret")
@@ -1486,11 +1486,95 @@ def test_deepseek_control_is_admin_only_and_blocks_live_readiness(tmp_path: Path
     status = client.get("/api/status").json()
     assert status["ai"]["operator_enabled"] is False
     assert status["ai"]["api_key_configured"] is True
+    assert status["ai"]["execution_policy"] == "pure_strategy"
     readiness = client.get("/api/system/readiness").json()
     assert readiness["deepseek_operator_enabled"] is False
     assert readiness["deepseek_key_configured"] is True
-    assert "deepseek" in readiness["blocking"]
-    assert "live_ai_guard" in readiness["blocking"]
+    assert readiness["decision_policy"] == "pure_strategy"
+    assert "deepseek" not in readiness["blocking"]
+    assert "live_ai_guard" not in readiness["blocking"]
+    deepseek_check = next(item for item in readiness["checks"] if item["id"] == "deepseek")
+    budget_check = next(item for item in readiness["checks"] if item["id"] == "deepseek_budget")
+    position_review_check = next(item for item in readiness["checks"] if item["id"] == "position_review")
+    assert deepseek_check["status"] == "ok"
+    assert budget_check["status"] == "ok"
+    assert position_review_check["status"] == "ok"
+    assert "bypassed" in position_review_check["detail"]
+
+
+def test_positions_uses_fresh_cached_snapshot_without_gate_call(tmp_path: Path, monkeypatch) -> None:
+    config_path = tmp_path / "config.yaml"
+    write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl", ["ETH/USDT:USDT"])
+
+    def fail_factory(mode_or_config: object, account_slot: str = "default"):
+        raise AssertionError("fresh cached positions should not construct a gateway")
+
+    monkeypatch.setattr(server, "_account_slot_configured", lambda slot: slot == "trend")
+    monkeypatch.setattr(server, "create_exchange_gateway", fail_factory)
+    client = TestClient(create_app(str(config_path)))
+    store = server._ctx(client.app).store
+    assert store is not None
+    store.insert(
+        "positions_snapshot",
+        {
+            "symbol": "ETH/USDT:USDT",
+            "side": "long",
+            "qty": 0.25,
+            "account_slot": "trend",
+            "position_source": "gate_live_readonly",
+            "ok": True,
+        },
+        symbol="ETH/USDT:USDT",
+    )
+
+    response = client.get("/api/positions?account_slot=trend&max_cache_age_seconds=60")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["cached"] is True
+    assert body["stale"] is False
+    assert body["items"][0]["payload"]["qty"] == 0.25
+    assert body["cache_age_seconds"] >= 0
+
+
+def test_follower_position_cache_is_not_displaced_by_frequent_trend_snapshots(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl", ["ETH/USDT:USDT"])
+    client = TestClient(create_app(str(config_path)))
+    store = server._ctx(client.app).store
+    assert store is not None
+    store.insert(
+        "positions_snapshot",
+        {
+            "symbol": "ETH/USDT:USDT",
+            "side": "short",
+            "qty": 0.4,
+            "account_slot": "follower",
+            "position_source": "gate_live_readonly",
+            "ok": True,
+        },
+        symbol="ETH/USDT:USDT",
+    )
+    for index in range(120):
+        store.insert(
+            "positions_snapshot",
+            {
+                "symbol": "ETH/USDT:USDT",
+                "side": "flat",
+                "qty": 0.0,
+                "account_slot": "trend",
+                "sequence": index,
+                "ok": True,
+            },
+            symbol="ETH/USDT:USDT",
+        )
+
+    rows = server._latest_position_snapshot_rows(server._ctx(client.app), "follower", 20)
+
+    assert len(rows) == 1
+    assert rows[0]["payload"]["account_slot"] == "follower"
+    assert rows[0]["payload"]["qty"] == 0.4
 
 
 def test_console_readonly_accounts_cannot_query_other_account_slots(tmp_path: Path, monkeypatch) -> None:

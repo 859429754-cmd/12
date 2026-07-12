@@ -80,6 +80,22 @@ class SQLiteStore:
                     )
                     """
                 )
+            try:
+                self.conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_positions_snapshot_account "
+                    "ON positions_snapshot(symbol, json_extract(payload, '$.account_slot'), id DESC)"
+                )
+                self.conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_order_lifecycle_client_order "
+                    "ON order_lifecycle(symbol, json_extract(payload, '$.client_order_id'), id DESC)"
+                )
+                self.conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_follower_execution_primary_stop "
+                    "ON follower_executions(symbol, json_extract(payload, '$.primary_stop_client_order_id'), id DESC)"
+                )
+            except sqlite3.OperationalError:
+                # JSON1 is present in production CPython; minimal builds retain bounded scan compatibility.
+                pass
             self.conn.commit()
 
     def next_secret_version(self, service: str) -> int:
@@ -179,10 +195,35 @@ class SQLiteStore:
         symbol: str | None = None,
         limit: int = 1000,
     ) -> dict[str, Any] | None:
-        for row in self.fetch_payloads(table, limit=limit, symbol=symbol):
-            payload = row.get("payload") or {}
+        if not key.replace("_", "").isalnum():
+            raise ValueError("payload_lookup_key_invalid")
+        path = f"$.{key}"
+        row = None
+        try:
+            with self._lock:
+                if symbol is None:
+                    row = self.conn.execute(
+                        f"SELECT id, created_at, symbol, payload FROM {table} "
+                        "WHERE json_extract(payload, ?) = ? ORDER BY id DESC LIMIT 1",
+                        (path, value),
+                    ).fetchone()
+                else:
+                    row = self.conn.execute(
+                        f"SELECT id, created_at, symbol, payload FROM {table} "
+                        "WHERE symbol = ? AND json_extract(payload, ?) = ? ORDER BY id DESC LIMIT 1",
+                        (symbol, path, value),
+                    ).fetchone()
+        except sqlite3.OperationalError:
+            # Some minimal SQLite builds omit JSON1; bounded scanning remains the compatibility fallback.
+            row = None
+        if row:
+            row_id, created_at, row_symbol, payload = row
+            return {"id": row_id, "created_at": created_at, "symbol": row_symbol, "payload": json.loads(payload)}
+        # Keep compatibility with old rows and SQLite builds without JSON1.
+        for candidate in self.fetch_payloads(table, limit=limit, symbol=symbol):
+            payload = candidate.get("payload") or {}
             if payload.get(key) == value:
-                return row
+                return candidate
         return None
 
     def audit(self, event_type: str, payload: dict[str, Any]) -> None:

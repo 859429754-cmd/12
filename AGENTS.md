@@ -30,6 +30,8 @@
 - `CONTEXT.md`
 - `docs/adr/0004-follower-account-ai-fanout.md`
 - `docs/adr/0005-console-account-rbac-replaces-trade-pin.md`
+- `docs/adr/0006-deepseek-operator-switch-selects-pure-strategy.md`
+- `docs/adr/0007-optimize-console-data-flow-before-framework-rewrite.md`
 - 代码和测试结果
 
 以后以“账号登录/RBAC + trend/follower/range 三槽位分离”版本为准，忽略旧对话和旧 issue 中关于 Trade PIN、操作验证码、EMA 前置过滤、`range` 兼容 `follower` 的方案。

@@ -132,6 +132,7 @@ export type SystemReadiness = {
   overall: "ok" | "warn" | "block";
   execution_mode: "mock" | "live";
   trade_mode: string;
+  decision_policy?: "ai_assisted" | "pure_strategy";
   configured_symbols: string[];
   enabled_symbols: string[];
   profile_count: number;

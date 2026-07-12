@@ -17,6 +17,7 @@ import {
   ShieldCheck,
   Wallet,
 } from "lucide-react";
+import { useRef } from "react";
 import type { ReactNode } from "react";
 import { api } from "./lib/api";
 import type {
@@ -137,6 +138,22 @@ export function App() {
   const capabilities = session?.user?.capabilities;
   const visibleSlots = session?.user?.visible_account_slots || ["trend", "follower", "range"];
   const isAdmin = Boolean(capabilities?.manage_strategy_parameters || capabilities?.manage_position_review);
+  const heavyRefreshAt = useRef(0);
+  const activeLoadCount = useRef(0);
+  const viewGeneration = useRef(0);
+  const marketGeneration = useRef(0);
+
+  const clearSessionScopedData = () => {
+    setBalance(null);
+    setFollowerBalance(null);
+    setPositions([]);
+    setPositionsMeta(null);
+    setOrders([]);
+    setOrderLifecycle([]);
+    setDecisions([]);
+    setAiTierAudit(null);
+    heavyRefreshAt.current = 0;
+  };
 
   const symbols = useMemo(() => {
     const fromMarkets = markets.items.map((item) => item.symbol);
@@ -149,21 +166,76 @@ export function App() {
   const displayCandles = useMemo(() => overlayRealtimePriceOnCandles(candles, ticker, timeframe), [candles, ticker, timeframe]);
 
   const refreshTicker = useCallback(async () => {
+    const requestGeneration = marketGeneration.current;
     try {
       const nextTicker = await api<MarketTickerResponse>(
         `/api/market/ticker?symbol=${encodeURIComponent(symbol)}&source=${source === "cryptocompare" ? "auto" : source}`,
         { retries: 0, timeoutMs: 5000 },
       );
+      if (requestGeneration !== marketGeneration.current) return;
       setTicker(nextTicker);
     } catch {
+      if (requestGeneration !== marketGeneration.current) return;
       setTicker({ symbol, source: "unavailable", last: null, warning: "实时价格接口暂时未返回。" });
     }
   }, [source, symbol]);
 
+  const refreshNews = useCallback(async () => {
+    try {
+      const payload = await api<NewsResponse>("/api/news/latest?limit=8&compact=true&max_age_minutes=2", {
+        retries: 0,
+        timeoutMs: 10000,
+      });
+      const hasVisibleItems = visibleNewsItems(payload).length > 0;
+      setNews((current) => {
+        if (hasVisibleItems || !visibleNewsItems(current).length) return payload;
+        return {
+          ...current,
+          ok: false,
+          source_status: "refresh_failed",
+          stale: true,
+          warnings: ["新闻接口本轮刷新失败，已保留上一轮可用快讯。"],
+        };
+      });
+    } catch {
+      setNews((current) => ({
+        ...current,
+        ok: current.ok ?? false,
+        source_status: "refresh_failed",
+        stale: true,
+        warnings: ["新闻接口暂时未返回，已保留上一轮可用快讯。"],
+      }));
+    }
+  }, []);
+
+  const refreshCandles = useCallback(async (includeFullHistory: boolean, requestGeneration = marketGeneration.current) => {
+    const candleBase = `/api/market/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${timeframe}&source=${source}`;
+    const limits = chartCandleLimits(timeframe);
+    const applyCandles = (next: CandleResponse) => {
+      if (requestGeneration !== marketGeneration.current) return;
+      if (next.items?.length) setCandles((current) => fresherCandles(current, next.items || []));
+      setWarning(next.warning || "");
+    };
+    try {
+      applyCandles(await api<CandleResponse>(`${candleBase}&limit=${limits.fast}&closed_only=false`, { retries: 0, timeoutMs: 9000 }));
+    } catch {
+      if (requestGeneration !== marketGeneration.current) return;
+      setWarning("K线接口暂时未返回，已保留上一轮界面状态。");
+    }
+    if (!includeFullHistory) return;
+    try {
+      applyCandles(await api<CandleResponse>(`${candleBase}&limit=${limits.full}&closed_only=false`, { retries: 0, timeoutMs: 25000 }));
+    } catch {
+      // Fast candles are already usable; full-history failure must not blank the chart.
+    }
+  }, [source, symbol, timeframe]);
+
   const load = useCallback(async (sessionOverride?: ConsoleSession) => {
     const activeSession = sessionOverride || session;
     if (activeSession?.auth_required && !activeSession.authenticated) return;
-    setWarning("");
+    if (!sessionOverride && activeLoadCount.current > 0) return;
+    const requestGeneration = viewGeneration.current;
+    activeLoadCount.current += 1;
     try {
       const safe = async <T,>(promise: Promise<T>, fallback: T): Promise<T> => {
         try {
@@ -173,149 +245,128 @@ export function App() {
         }
       };
       const nextSessionState = await safe(api<ConsoleSession>("/api/auth/session", { retries: 0, timeoutMs: 5000 }), activeSession);
+      if (requestGeneration !== viewGeneration.current) return;
       if (nextSessionState?.auth_required && !nextSessionState.authenticated) {
         setSession(nextSessionState);
         return;
       }
       setSession(nextSessionState);
-      void api<NewsResponse>("/api/news/latest?limit=8&compact=true&max_age_minutes=2", { retries: 0, timeoutMs: 10000 })
-        .then((payload) => {
-          const hasVisibleItems = visibleNewsItems(payload).length > 0;
-          setNews((current) => {
-            if (hasVisibleItems || !visibleNewsItems(current).length) return payload;
-            return {
-              ...current,
-              ok: false,
-              source_status: "refresh_failed",
-              stale: true,
-              warnings: ["新闻接口本轮刷新失败，已保留上一轮可用快讯。"],
-            };
-          });
-        })
-        .catch(() => {
-          setNews((current) => ({
-            ...current,
-            ok: current.ok ?? false,
-            source_status: "refresh_failed",
-            stale: true,
-            warnings: ["新闻接口暂时未返回，已保留上一轮可用快讯。"],
-          }));
-        });
-      void refreshTicker();
-      const candleBase = `/api/market/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${timeframe}&source=${source}`;
-      const candleLimits = chartCandleLimits(timeframe);
-      void safe(api<CandleResponse>(`${candleBase}&limit=${candleLimits.fast}&closed_only=false`, { retries: 0, timeoutMs: 9000 }), {
-        items: [],
-        warning: "K线接口暂时未返回，已保留上一轮界面状态。",
-      }).then((nextCandles) => {
-        if (nextCandles.items?.length) {
-          setCandles((current) => fresherCandles(current, nextCandles.items || []));
-          setWarning(nextCandles.warning || "");
-        } else {
-          setWarning(nextCandles.warning || "");
-        }
-      });
-      void safe(api<CandleResponse>(`${candleBase}&limit=${candleLimits.full}&closed_only=false`, { retries: 0, timeoutMs: 25000 }), {
-        items: [],
-        warning: "",
-      }).then((nextCandles) => {
-        if (nextCandles.items?.length) {
-          setCandles((current) => fresherCandles(current, nextCandles.items || []));
-          setWarning(nextCandles.warning || "");
-        }
-      });
       const primaryAccountSlot = activeSession?.user?.account_slot || "trend";
       const activeCapabilities = activeSession?.user?.capabilities;
       const activeIsAdmin = Boolean(activeCapabilities?.manage_strategy_parameters || activeCapabilities?.manage_position_review);
       void api<Record<string, unknown>>(
-        `/api/account/balance?account_slot=${encodeURIComponent(primaryAccountSlot)}&max_cache_age_seconds=600&timeout_seconds=12`,
+        `/api/account/balance?account_slot=${encodeURIComponent(primaryAccountSlot)}&max_cache_age_seconds=60&timeout_seconds=12`,
         { retries: 0, timeoutMs: 15000 },
       )
         .then((payload) => {
+          if (requestGeneration !== viewGeneration.current) return;
           setBalance(payload);
         })
         .catch(() => {
+          if (requestGeneration !== viewGeneration.current) return;
           setBalance((current) => balanceFallbackPayload(current, primaryAccountSlot, "余额刷新超时，控制台保留上一轮可信快照。"));
         });
-      if (primaryAccountSlot !== "follower" && (activeSession?.user?.visible_account_slots || visibleSlots).includes("follower")) {
+      if (primaryAccountSlot !== "follower" && (activeSession?.user?.visible_account_slots || ["trend", "follower", "range"]).includes("follower")) {
         void api<Record<string, unknown>>(
-          "/api/account/balance?account_slot=follower&max_cache_age_seconds=600&timeout_seconds=12",
+          "/api/account/balance?account_slot=follower&max_cache_age_seconds=60&timeout_seconds=12",
           { retries: 0, timeoutMs: 15000 },
         )
-          .then(setFollowerBalance)
+          .then((payload) => {
+            if (requestGeneration !== viewGeneration.current) return;
+            setFollowerBalance(payload);
+          })
           .catch(() => {
+            if (requestGeneration !== viewGeneration.current) return;
             setFollowerBalance((current) => balanceFallbackPayload(current, "follower", "账号2余额刷新超时，控制台保留上一轮可信快照。"));
           });
       }
+      void api<ApiList>(
+        `/api/positions?limit=50&account_slot=${encodeURIComponent(primaryAccountSlot)}&max_cache_age_seconds=30&timeout_seconds=12`,
+        { retries: 0, timeoutMs: 15000 },
+      )
+        .then((nextPositions) => {
+          if (requestGeneration !== viewGeneration.current) return;
+          setPositionsMeta({
+            ok: nextPositions.ok,
+            account_slot: nextPositions.account_slot,
+            source: nextPositions.source,
+            cached: nextPositions.cached,
+            stale: nextPositions.stale,
+            error_type: nextPositions.error_type,
+            message: nextPositions.message,
+          });
+          setPositions((current) => (nextPositions.ok === false && !(nextPositions.items || []).length ? current : nextPositions.items || []));
+        })
+        .catch(() => {
+          if (requestGeneration !== viewGeneration.current) return;
+          setPositionsMeta((current) => ({
+            ...(current || {}),
+            ok: false,
+            cached: true,
+            stale: true,
+            message: "持仓刷新超时，控制台保留上一轮可信快照。",
+          }));
+        });
       const [
         nextStatus,
         nextPlatform,
         nextReadiness,
         nextMarkets,
-        nextPositions,
         nextRiskSummary,
         nextAccountSlots,
         nextOrders,
         nextOrderLifecycle,
         nextDecisions,
-        nextAiTierAudit,
         nextDenseZone,
-        nextSecurityEvents,
       ] =
         await Promise.all([
           api<StatusResponse>("/api/status", { retries: 1 }),
           api<PlatformOverview>("/api/platform/overview", { retries: 1 }),
           api<SystemReadiness>("/api/system/readiness", { retries: 1 }),
           api<MarketSymbolsResponse>("/api/markets/symbols", { retries: 1 }),
-          api<ApiList>(`/api/positions?limit=50&account_slot=${encodeURIComponent(primaryAccountSlot)}`, { retries: 1 }),
           api<Record<string, unknown>>("/api/risk/summary", { retries: 1 }),
           safe(api<{ items: ExecutionAccountSlot[] }>("/api/execution/accounts", { retries: 1 }), { items: [] }),
           api<ApiList>(`/api/orders?limit=80&symbol=${encodeURIComponent(symbol)}`, { retries: 1 }),
           api<ApiList>(`/api/order-lifecycle?limit=120&symbol=${encodeURIComponent(symbol)}&account_slot=${encodeURIComponent(primaryAccountSlot)}`, { retries: 1 }),
           api<ApiList>(`/api/decisions?limit=80&symbol=${encodeURIComponent(symbol)}`, { retries: 1 }),
-          safe(api<AiPositionTierAudit>(`/api/audits/ai-position-tiers?symbol=${encodeURIComponent(symbol)}&account_slot=${encodeURIComponent(primaryAccountSlot)}&min_sample_warning=30`, { retries: 1 }), {
-            ok: false,
-            symbol,
-            account_slot: primaryAccountSlot,
-            overall: {},
-            by_tier: {},
-            shadow_by_tier: {},
-            trades: [],
-          }),
           safe(api<{ item: DbRow<DenseZonePayload> | null }>(`/api/dense-zones/latest?symbol=${encodeURIComponent(symbol)}`, { retries: 1 }), { item: null }),
-          activeIsAdmin
-            ? safe(api<SecurityEventsResponse>("/api/system/security-events?limit=30", { retries: 1 }), {
-                items: [],
-                summary: { total: 0, by_event: {}, latest_created_at: null },
-              })
-            : Promise.resolve({ items: [], summary: { total: 0, by_event: {}, latest_created_at: null } }),
         ]);
+      if (requestGeneration !== viewGeneration.current) return;
       setStatus(nextStatus);
       setPlatform(nextPlatform);
       setReadiness(nextReadiness);
       setMarkets(nextMarkets);
-      setPositionsMeta({
-        ok: nextPositions.ok,
-        account_slot: nextPositions.account_slot,
-        source: nextPositions.source,
-        cached: nextPositions.cached,
-        stale: nextPositions.stale,
-        error_type: nextPositions.error_type,
-        message: nextPositions.message,
-      });
-      setPositions((current) => (nextPositions.ok === false && !(nextPositions.items || []).length ? current : nextPositions.items || []));
       setRiskSummary(nextRiskSummary);
       setAccountSlots(nextAccountSlots.items || []);
       setOrders(nextOrders.items || []);
       setOrderLifecycle(nextOrderLifecycle.items || []);
       setDecisions(nextDecisions.items || []);
-      setAiTierAudit(nextAiTierAudit);
       setDenseZone(nextDenseZone.item || null);
-      setSecurityEvents(nextSecurityEvents);
+      const now = Date.now();
+      if (now - heavyRefreshAt.current >= 120_000) {
+        heavyRefreshAt.current = now;
+        void safe(api<AiPositionTierAudit>(`/api/audits/ai-position-tiers?symbol=${encodeURIComponent(symbol)}&account_slot=${encodeURIComponent(primaryAccountSlot)}&min_sample_warning=30`, { retries: 0 }), {
+          ok: false,
+          symbol,
+          account_slot: primaryAccountSlot,
+          overall: {},
+          by_tier: {},
+          shadow_by_tier: {},
+          trades: [],
+        }).then(setAiTierAudit);
+        if (activeIsAdmin) {
+          void safe(api<SecurityEventsResponse>("/api/system/security-events?limit=30", { retries: 0 }), {
+            items: [],
+            summary: { total: 0, by_event: {}, latest_created_at: null },
+          }).then(setSecurityEvents);
+        }
+      }
     } catch (error) {
-      setWarning(errText(error));
+      if (requestGeneration === viewGeneration.current) setWarning(errText(error));
+    } finally {
+      activeLoadCount.current = Math.max(0, activeLoadCount.current - 1);
     }
-  }, [refreshTicker, session?.auth_required, session?.authenticated, source, symbol, timeframe]);
+  }, [session?.auth_required, session?.authenticated, session?.user?.account_slot, symbol]);
 
   useEffect(() => {
     void api<ConsoleSession>("/api/auth/session", { retries: 0, timeoutMs: 5000 })
@@ -324,11 +375,38 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    viewGeneration.current += 1;
+    heavyRefreshAt.current = 0;
+    setAiTierAudit(null);
+    setOrders([]);
+    setOrderLifecycle([]);
+    setDecisions([]);
+    setDenseZone(null);
+  }, [symbol, session?.user?.account_slot]);
+
+  useEffect(() => {
     if (!session) return;
     void load();
-    const id = window.setInterval(() => void load(), 60_000);
+    const id = window.setInterval(() => void load(), 30_000);
     return () => window.clearInterval(id);
-  }, [load, session]);
+  }, [load, session?.auth_required, session?.authenticated]);
+
+  useEffect(() => {
+    if (!session || (session.auth_required && !session.authenticated)) return;
+    void refreshNews();
+    const id = window.setInterval(() => void refreshNews(), 30_000);
+    return () => window.clearInterval(id);
+  }, [refreshNews, session?.auth_required, session?.authenticated]);
+
+  useEffect(() => {
+    if (!session || (session.auth_required && !session.authenticated)) return;
+    marketGeneration.current += 1;
+    const requestGeneration = marketGeneration.current;
+    setCandles([]);
+    void refreshCandles(true, requestGeneration);
+    const id = window.setInterval(() => void refreshCandles(false, requestGeneration), 60_000);
+    return () => window.clearInterval(id);
+  }, [refreshCandles, session?.auth_required, session?.authenticated]);
 
   useEffect(() => {
     if (!session) return;
@@ -362,7 +440,7 @@ export function App() {
     try {
       const result = await api<Record<string, unknown>>(path, { method: "POST", body: JSON.stringify(body), timeoutMs: 15000 });
       setMessage(String(result.message || "ok"));
-      await load();
+      await load(session || undefined);
     } catch (error) {
       setMessage(errText(error));
     } finally {
@@ -382,9 +460,10 @@ export function App() {
         retries: 0,
         timeoutMs: 8000,
       });
+      viewGeneration.current += 1;
+      clearSessionScopedData();
       setSession(nextSession);
       setMessage("登录成功。");
-      await load(nextSession);
     } catch (error) {
       const status = (error as { status?: number } | null)?.status;
       setMessage(status === 429 ? "登录请求过快，请稍后再试。" : errText(error));
@@ -395,6 +474,8 @@ export function App() {
 
   const logout = async () => {
     await api<Record<string, unknown>>("/api/auth/logout", { method: "POST", body: JSON.stringify({}), retries: 0 });
+    viewGeneration.current += 1;
+    clearSessionScopedData();
     setSession({ ok: true, auth_required: true, authenticated: false, user: null });
   };
 
@@ -960,6 +1041,7 @@ function LeftRail({
   const directUsdt = objectPayload(balance?.USDT);
   const usdt = Object.keys(directUsdt).length ? directUsdt : objectPayload(rawBalance.USDT);
   const isDashboard = workspace === "dashboard";
+  const aiOperatorEnabled = status?.ai?.operator_enabled !== false;
   return (
     <aside className="flex min-h-0 flex-col gap-2 overflow-auto">
       <Surface title={<><ShieldCheck size={13} /> {isDashboard ? "快速控制" : "策略档案"}</>}>
@@ -975,6 +1057,7 @@ function LeftRail({
             <BoundaryLine label="策略" value={profile?.enabled ? "运行中" : "研究中"} />
             <BoundaryLine label="授权" value={profile?.opening_authorized ? "已授权" : "未授权"} />
             <BoundaryLine label="模式" value={executionModeLabel(status?.execution_mode)} />
+            <BoundaryLine label="决策" value={aiOperatorEnabled ? "AI 增强" : "纯策略"} />
           </div>
         ) : (
           <div className="grid grid-cols-2 gap-2">
@@ -986,7 +1069,7 @@ function LeftRail({
         )}
         {canControl ? <div className="mt-2 grid grid-cols-2 gap-1">
           <button className={button} disabled={busy} onClick={() => {
-            if (!window.confirm(`确认授权 ${shortSymbol(symbol)} 自动开仓？实盘仍会经过 readiness、AI 和风控，但授权后满足条件时可以下真实订单。`)) return;
+            if (!window.confirm(`确认授权 ${shortSymbol(symbol)} 自动开仓？实盘仍会经过 readiness 和硬风控；当前决策模式为${aiOperatorEnabled ? "AI 增强" : "纯策略"}。`)) return;
             void postAction("/api/control/authorize", { operator_id: "console", symbols: [symbol], confirm_admin_action: true });
           }}>
             授权开仓
@@ -999,6 +1082,20 @@ function LeftRail({
           </button>
           <button className={button} disabled={busy} onClick={() => postAction("/api/control/disable-report", { operator_id: "console", symbols: [symbol] })}>
             关闭报告
+          </button>
+          <button className={`${aiOperatorEnabled ? danger : button} col-span-2 justify-center`} disabled={busy} onClick={() => {
+            const nextEnabled = !aiOperatorEnabled;
+            const prompt = nextEnabled
+              ? "确认启用 AI 增强模式？后续策略信号将调用 DeepSeek 并经过五档仓位裁剪。"
+              : "确认切换为纯策略模式？后续不调用 DeepSeek，不使用 AI 五档和持仓复评加仓，但仍保留授权、对账、杠杆、OHLCV 与原生止损硬风控。";
+            if (!window.confirm(prompt)) return;
+            void postAction("/api/control/deepseek", {
+              operator_id: "console",
+              enabled: nextEnabled,
+              confirm_admin_action: true,
+            });
+          }}>
+            {aiOperatorEnabled ? "切换纯策略" : "启用 AI 增强"}
           </button>
         </div> : null}
         {message ? <div className="mt-2 rounded-xl border border-[#263246] bg-[#101a2d] p-2 text-[11px] text-[#cbd5e1]">{message}</div> : null}
@@ -1797,7 +1894,9 @@ function DashboardWorkspace({
 }) {
   const profile = platform?.strategy_profiles.find((item) => item.symbol === symbol);
   const position = positionSnapshot(positions, symbol);
-  const latestDecision = (runtimeStatus?.latest_decisions?.[symbol]?.payload || decisions[0]?.payload || { state: "等待下一次AI判断" }) as Record<string, unknown>;
+  const aiOperatorEnabled = runtimeStatus?.ai?.operator_enabled !== false && readiness?.deepseek_operator_enabled !== false;
+  const persistedDecision = (runtimeStatus?.latest_decisions?.[symbol]?.payload || decisions[0]?.payload || { state: "等待下一次AI判断" }) as Record<string, unknown>;
+  const latestDecision = decisionForActivePolicy(persistedDecision, aiOperatorEnabled, position);
   const latestDecisionParts = decisionParts(latestDecision);
   const latestCandle = candles.at(-1);
   const account = accountSnapshot(balance);
@@ -1819,7 +1918,6 @@ function DashboardWorkspace({
   const mode = runtimeStatus?.execution_mode || platform?.platform.execution_mode || readiness?.execution_mode || "mock";
   const openingAuthorized = runtimeStatus?.enabled_symbols?.includes(symbol) || Boolean(profile?.opening_authorized);
   const liveReady = profile?.live_ready || readiness?.overall === "ok";
-  const aiOperatorEnabled = runtimeStatus?.ai?.operator_enabled !== false && readiness?.deepseek_operator_enabled !== false;
   const deepseekKeyConfigured = Boolean(runtimeStatus?.ai?.api_key_configured ?? readiness?.deepseek_key_configured ?? readiness?.deepseek_ready);
   const aiReady = aiOperatorEnabled && Boolean(readiness?.deepseek_ready || deepseekKeyConfigured);
   const newsAge = newsFreshnessLabel(news);
@@ -1855,22 +1953,22 @@ function DashboardWorkspace({
             <DashboardStatusPill label="交易所" value={exchangePayload.can_open_new_entries ? "可开仓" : "禁止开仓"} tone={exchangePayload.can_open_new_entries ? "good" : "bad"} />
             <DashboardStatusPill
               label="DeepSeek"
-              value={!aiOperatorEnabled ? "已关闭" : aiReady ? "已启用" : "降级"}
-              tone={!aiOperatorEnabled ? "bad" : aiReady ? "good" : "warn"}
+              value={!aiOperatorEnabled ? "纯策略" : aiReady ? "AI 增强" : "降级"}
+              tone={!aiOperatorEnabled ? "good" : aiReady ? "good" : "warn"}
             />
             <DashboardStatusPill label="新闻缓存" value={newsAge} tone={newsStatusTone(news, newsWarnings.length)} />
           </div>
         </div>
         {isAdmin ? (
-          <div className="mt-3 flex flex-wrap items-center gap-2">
+          <div className="mt-3 flex flex-wrap items-center gap-2 xl:hidden">
             <button
               className={!aiOperatorEnabled ? button : danger}
               disabled={busy}
               onClick={() => {
                 const nextEnabled = !aiOperatorEnabled;
                 const prompt = nextEnabled
-                  ? "确认重新启用 DeepSeek？启用后实盘新开仓仍需通过 readiness、AI 和风控。"
-                  : "确认关闭 DeepSeek？关闭后会停止 DeepSeek 调用，并阻断实盘新开仓；已有仓位不会被强制平仓。";
+                  ? "确认启用 AI 增强模式？后续策略信号将调用 DeepSeek 并经过五档仓位裁剪。"
+                  : "确认切换为纯策略模式？后续不调用 DeepSeek，不使用 AI 五档和持仓复评加仓，但仍保留硬风控。";
                 if (!window.confirm(prompt)) return;
                 void postAction("/api/control/deepseek", {
                   operator_id: "console",
@@ -1879,10 +1977,10 @@ function DashboardWorkspace({
                 });
               }}
             >
-              {!aiOperatorEnabled ? "启用 DeepSeek" : "关闭 DeepSeek"}
+              {!aiOperatorEnabled ? "启用 AI 增强" : "切换纯策略"}
             </button>
             <span className="text-[11px] text-[#94a3b8]">
-              关闭 DeepSeek = 停止模型调用 + 实盘新开仓 fail-closed，不等于强制平仓。
+              纯策略仍保留开仓授权、交易所对账、杠杆上限、OHLCV 新鲜度和原生止损。
             </span>
           </div>
         ) : null}
@@ -1890,8 +1988,8 @@ function DashboardWorkspace({
         <div className="mt-4 grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-3 2xl:grid-cols-6">
           <HeroMetric label="持仓状态" value={position ? positionSideLabel(position.side) : positionsReadFailed ? "读取失败" : "空仓"} tone={position ? "warn" : positionsReadFailed ? "bad" : "good"} />
           <HeroMetric label="浮动盈亏" value={position ? `${num(position.pnl)} USDT` : "--"} tone={pnlTone(position?.pnl)} />
-          <HeroMetric label="AI动作" value={dashboardActionLabel(latestDecision)} />
-          <HeroMetric label="仓位档" value={`${currentSizing.label} / ${currentSizing.scale}`} tone={position ? "good" : "default"} />
+          <HeroMetric label={aiOperatorEnabled ? "AI动作" : "决策模式"} value={aiOperatorEnabled ? dashboardActionLabel(latestDecision) : "纯策略待命"} />
+          <HeroMetric label="仓位档" value={!aiOperatorEnabled && !position ? "策略基准 / 待信号" : `${currentSizing.label} / ${currentSizing.scale}`} tone={position ? "good" : "default"} />
           <HeroMetric label="对账状态" value={reconciliationStatusLabel(reconciliationPayload.status)} tone={reconciliationPayload.status === "ok" ? "good" : "warn"} />
           <HeroMetric label="K线数据" value={warning || `${num(candles.length, 0)} 根`} tone={warning ? "warn" : "good"} />
         </div>
@@ -1948,7 +2046,7 @@ function DashboardWorkspace({
         </div>
 
         <div className="grid min-w-0 gap-4">
-          <DashboardPanel title={<><BrainCircuit size={14} /> AI 决策与仓位</>} action={<span className="rounded-full border border-[#1d4ed8] bg-[#102a5c] px-3 py-1 text-[11px] text-[#bfdbfe]">只缩放 / 否决</span>}>
+          <DashboardPanel title={<><BrainCircuit size={14} /> AI 决策与仓位</>} action={<span className="rounded-full border border-[#1d4ed8] bg-[#102a5c] px-3 py-1 text-[11px] text-[#bfdbfe]">{aiOperatorEnabled ? "受控升降档" : "纯策略基准"}</span>}>
             <DecisionSummary data={latestDecision} position={position} sizingContext={sizingContext} />
             <DecisionNarrative data={latestDecision} position={position} sizingContext={sizingContext} />
             <AiTierAuditPanel audit={aiTierAudit} />
@@ -2464,6 +2562,31 @@ function decisionValue(parts: DecisionParts, keys: string[], extraSources: Array
   return undefined;
 }
 
+function decisionForActivePolicy(
+  persisted: Record<string, unknown>,
+  aiOperatorEnabled: boolean,
+  position: PositionSnapshot | null,
+): Record<string, unknown> {
+  if (aiOperatorEnabled || hasOpenPosition(position)) return persisted;
+  return {
+    decision_source: "pure_strategy",
+    direction: "flat",
+    confidence: 0,
+    action_suggestion: "hold",
+    veto_action: "allow",
+    reason_codes: ["pure_strategy_mode", "waiting_for_local_strategy_signal"],
+    brief_reason: "DeepSeek 已关闭，当前等待本地 KC+VOL+KDJ 策略信号。",
+  };
+}
+
+function decisionIsPureStrategy(parts: DecisionParts): boolean {
+  return (
+    String(decisionValue(parts, ["decision_source"]) || "") === "pure_strategy" ||
+    String(decisionValue(parts, ["decision_mode"]) || "") === "pure_strategy" ||
+    String(decisionValue(parts, ["sizing_basis"]) || "") === "pure_strategy_signal"
+  );
+}
+
 function decisionAction(parts: DecisionParts): unknown {
   return decisionValue(parts, ["action_suggestion", "veto_action", "action", "state"]);
 }
@@ -2582,6 +2705,15 @@ function decisionSizing(parts: DecisionParts): DecisionSizing {
 
   const riskTier = parts.risk.position_tier;
   const riskScale = parts.risk.position_scale;
+  if (parts.risk.sizing_basis === "pure_strategy_signal") {
+    return {
+      label: "策略基准",
+      scale: positionScaleLabel(riskScale),
+      activeTier: "pure_strategy",
+      note: "DeepSeek 已关闭，本次仓位直接采用 KC+VOL+KDJ 策略基准并经过硬风控裁剪。",
+      mode: "entry",
+    };
+  }
   if (!unknownish(riskTier) || riskScale !== undefined && riskScale !== null) {
     const activeTier = String(riskTier || "block");
     return {
@@ -2681,6 +2813,15 @@ function orderLifecycleSizingForPosition(rows: Array<DbRow>, position: PositionS
     const metadata = objectPayload(payload.metadata);
     const tier = metadata.risk_position_tier;
     const scale = metadata.risk_position_scale;
+    if (metadata.sizing_basis === "pure_strategy_signal") {
+      return {
+        label: "策略基准",
+        scale: positionScaleLabel(scale),
+        activeTier: "pure_strategy",
+        note: "当前 Gate 持仓来自纯策略入场；显示为策略基准仓位，不属于 AI 五档。",
+        mode: "position",
+      };
+    }
     if (!isDisplayableSizingTier(tier) && !(Number(scale) > 0)) continue;
     const activeTier = isDisplayableSizingTier(tier) ? String(tier) : tierKeyFromScale(scale);
     return {
@@ -2912,8 +3053,8 @@ function ReadinessPanel({ readiness }: { readiness: SystemReadiness | null }) {
         <Metric label="授权档案" value={`${num(readiness?.authorized_profile_count, 0)}/${num(readiness?.profile_count, 0)}`} />
         <Metric
           label="DeepSeek"
-          value={readiness?.deepseek_operator_enabled === false ? "已关闭" : readiness?.deepseek_ready ? "已启用" : "缺失"}
-          tone={readiness?.deepseek_operator_enabled === false ? "bad" : readiness?.deepseek_ready ? "good" : "warn"}
+          value={readiness?.decision_policy === "pure_strategy" ? "纯策略" : readiness?.deepseek_ready ? "AI 增强" : "缺失"}
+          tone={readiness?.decision_policy === "pure_strategy" ? "good" : readiness?.deepseek_ready ? "good" : "warn"}
         />
       </div>
       <div className="mt-3 grid grid-cols-5 gap-3">
@@ -3263,8 +3404,8 @@ function readinessDetail(detail: string) {
     .replace("Opening is enabled.", "开仓当前允许。")
     .replace("DeepSeek API key is configured.", "DeepSeek API Key 已配置。")
     .replace("DeepSeek API key is missing; AI decisions will degrade.", "DeepSeek API Key 缺失，AI 决策会降级。")
-    .replace("DeepSeek is disabled by operator; provider calls are stopped and live entries fail closed.", "DeepSeek 已被管理员关闭；模型调用已停止，实盘新开仓 fail-closed。")
-    .replace("DeepSeek is disabled by operator; live new entries fail closed.", "DeepSeek 已被管理员关闭；实盘新开仓 fail-closed。")
+    .replace("DeepSeek is disabled; entries use the local strategy plus hard risk gates.", "DeepSeek 已关闭；新入场按本地策略与硬风控执行。")
+    .replace("Pure KC+VOL+KDJ strategy sizing is active; AI sizing and position-review add-ons are bypassed.", "纯 KC+VOL+KDJ 策略仓位已启用；AI 五档和持仓复评加仓不参与。")
     .replace("Max total leverage:", "总杠杆上限：")
     .replace("Latest news cache is missing.", "新闻缓存缺失。")
     .replace("Latest backtest run is missing.", "回测记录缺失。")
@@ -4281,7 +4422,7 @@ function ExecutionWorkspace({
         <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
           <ExecutionStep title="控制台/智能体" body="只能提交动作请求，不能直接碰交易所密钥。" done />
           <ExecutionStep title="策略信号" body="必须来自本地策略引擎，AI 不能凭空开仓。" done />
-          <ExecutionStep title="AI 五档" body="只允许确认、降仓、阻断，不允许突破硬风控。" done />
+          <ExecutionStep title="AI 五档" body="AI 增强模式允许受控升降档或阻断，但不能突破硬风控。" done />
           <ExecutionStep title="本地风控" body="授权、同向持仓、杠杆上限、置信度统一裁剪。" done />
           <ExecutionStep
             title="交易网关"
@@ -4299,7 +4440,7 @@ function ExecutionWorkspace({
               title="趋势策略运行"
               account={trendChannel?.account_label || "账号1：趋势策略 API"}
               status={trendChannel?.live_ready ? "实盘就绪" : trendChannel?.executable ? "可运行" : "阻断"}
-              body="当前 ETH 趋势引擎入口。策略信号触发后，DeepSeek 五档仓位确认，再进入本地风控和趋势账号交易网关。"
+              body="当前 ETH 趋势引擎入口。AI 增强模式进入 DeepSeek 五档，纯策略模式直接进入本地硬风控和趋势账号交易网关。"
               enabled={Boolean(trendChannel?.executable)}
               liveReady={Boolean(trendChannel?.live_ready)}
               details={[
@@ -4336,7 +4477,7 @@ function ExecutionWorkspace({
             /> : null}
           </div>
           <div className="mt-3 rounded-xl border border-[#854d0e] bg-[#241806] p-3 text-xs leading-5 text-[#facc15]">
-            当前按你的要求采用“一次策略信号 + 一次 DeepSeek 决策 + 多账户独立裁剪”：账号1先执行，账号2跟随复制同一订单意图。每个 Gate 账户按自己的余额、杠杆上限和跟随比例单独计算仓位。
+            AI 增强模式采用“一次策略信号 + 一次 DeepSeek 决策 + 多账户独立裁剪”；纯策略模式不调用 DeepSeek。账号2跟随复制同一订单意图，每个 Gate 账户仍按自己的余额、杠杆上限和跟随比例独立裁剪。
           </div>
         </Surface>
         <div className="grid gap-5">
@@ -5058,10 +5199,11 @@ function RightRail({
   busy: boolean;
   postAction: (path: string, body: Record<string, unknown>) => Promise<void>;
 }) {
-  const latestDecision = status?.latest_decisions?.[symbol]?.payload || decisions[0]?.payload || { state: "等待下一次AI判断" };
+  const position = positionSnapshot(positions, symbol);
+  const persistedDecision = status?.latest_decisions?.[symbol]?.payload || decisions[0]?.payload || { state: "等待下一次AI判断" };
+  const latestDecision = decisionForActivePolicy(persistedDecision, status?.ai?.operator_enabled !== false, position);
   const newsWarnings = (news.warnings || []).filter((item) => !isInternalNewsText(item));
   const railNewsItems = visibleNewsItems(news).slice(0, 3);
-  const position = positionSnapshot(positions, symbol);
   const account = accountSnapshot(balance);
   const orderRiskSizing = orderLifecycleSizingForPosition(orderLifecycle, position);
   const sizingContext = { equity: account.total, maxLeverage: status?.risk?.max_total_leverage || 4, orderRiskSizing };
@@ -5124,14 +5266,17 @@ function DecisionSummary({
   const action = String(decisionAction(parts) || "--");
   const confidence = decisionValue(parts, ["confidence"]);
   const sizing = decisionSizingForPosition(parts, position, sizingContext);
-  const scoreRows: Array<[string, unknown]> = [
-    ["趋势确认", decisionValue(parts, ["trend_confirmation_score", "regime_trend_score"])],
-    ["震荡风险", decisionValue(parts, ["range_risk_score", "regime_range_score"])],
-    ["新闻方向", decisionValue(parts, ["news_direction_alignment_score"])],
-    ["新闻风险", decisionValue(parts, ["news_risk_score"])],
-    ["订单流确认", decisionValue(parts, ["orderflow_confirmation_score"])],
-    ["密集区突破", decisionValue(parts, ["dense_zone_breakout_score"])],
-  ];
+  const pureStrategy = decisionIsPureStrategy(parts);
+  const scoreRows: Array<[string, unknown]> = pureStrategy
+    ? []
+    : [
+        ["趋势确认", decisionValue(parts, ["trend_confirmation_score", "regime_trend_score"])],
+        ["震荡风险", decisionValue(parts, ["range_risk_score", "regime_range_score"])],
+        ["新闻方向", decisionValue(parts, ["news_direction_alignment_score"])],
+        ["新闻风险", decisionValue(parts, ["news_risk_score"])],
+        ["订单流确认", decisionValue(parts, ["orderflow_confirmation_score"])],
+        ["密集区突破", decisionValue(parts, ["dense_zone_breakout_score"])],
+      ];
   return (
     <div className="mb-3 grid grid-cols-2 gap-2 md:grid-cols-5">
       <Metric label="行情状态" value={regimeLabel(regime)} />
@@ -5170,6 +5315,7 @@ function DecisionRailSummary({
   const action = String(decisionAction(parts) || "--");
   const confidence = decisionValue(parts, ["confidence"]);
   const reason = decisionReasonForPosition(parts, position, sizingContext);
+  const pureStrategy = decisionIsPureStrategy(parts);
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-2 gap-2">
@@ -5179,9 +5325,15 @@ function DecisionRailSummary({
         <Metric label="置信度" value={confidencePct(confidence)} />
       </div>
       <div className="grid gap-2 text-xs">
-        <BoundaryLine label="消息面" value={alignmentLabel(decisionValue(parts, ["news_alignment"]))} />
-        <BoundaryLine label="订单流" value={alignmentLabel(decisionValue(parts, ["orderflow_alignment"]))} />
-        <BoundaryLine label="密集区" value={denseZoneLabel(decisionValue(parts, ["dense_zone_position", "current_position"]))} />
+        {pureStrategy ? (
+          <BoundaryLine label="决策模式" value="纯策略 / 不调用 DeepSeek" />
+        ) : (
+          <>
+            <BoundaryLine label="消息面" value={alignmentLabel(decisionValue(parts, ["news_alignment"]))} />
+            <BoundaryLine label="订单流" value={alignmentLabel(decisionValue(parts, ["orderflow_alignment"]))} />
+            <BoundaryLine label="密集区" value={denseZoneLabel(decisionValue(parts, ["dense_zone_position", "current_position"]))} />
+          </>
+        )}
       </div>
       <div className="rounded-lg border border-[#263246] bg-[#0b1220] p-2 text-[11px] leading-relaxed text-[#94a3b8]">{reason}</div>
     </div>

@@ -840,6 +840,7 @@ class DeepSeekBrain:
         sl = price - atr_value * atr_stop_multiple if direction == Side.LONG else price + atr_value * atr_stop_multiple if direction == Side.SHORT else None
         return AiDecision(
             symbol=signal.symbol,
+            decision_source="local_fallback",
             regime=regime,
             direction=direction,
             confidence=confidence,

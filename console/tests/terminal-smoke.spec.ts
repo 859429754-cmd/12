@@ -410,6 +410,25 @@ test("管理员开仓授权走账号权限而不是 Trade PIN", async ({ page })
   await expect.poll(() => requests.some((url) => url.includes("/api/control/authorize"))).toBeTruthy();
 });
 
+test("管理员可在快速控制切换为纯策略模式", async ({ page }) => {
+  const { actionPosts } = await mockConsoleApi(page);
+  page.on("dialog", (dialog) => dialog.accept());
+
+  await page.goto("/");
+  await page.getByPlaceholder("用户名").fill("admin");
+  await page.getByPlaceholder("密码").fill("1234567");
+  await page.getByRole("button", { name: "登录" }).click();
+
+  await expect(page.getByText("快速控制").first()).toBeVisible();
+  await page.getByRole("button", { name: "切换纯策略" }).first().click();
+  await expect.poll(() => actionPosts.some((item) => item.path === "/api/control/deepseek")).toBeTruthy();
+  expect(actionPosts.find((item) => item.path === "/api/control/deepseek")?.body).toMatchObject({
+    operator_id: "console",
+    enabled: false,
+    confirm_admin_action: true,
+  });
+});
+
 test("普通账号不能切换实盘或提交管理控制", async ({ page }) => {
   const { actionPosts } = await mockConsoleApi(page, { executionMode: "mock" });
   await page.goto("/");

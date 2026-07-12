@@ -172,6 +172,7 @@ class TradingApp:
             pattern = self.patterns.detect(symbol_cfg.symbol, candles)
             regime_pattern = self.regime_patterns.analyze(symbol_cfg.symbol, candles, zone, pattern)
             signal = self.regime_patterns.enrich_signal(signal, regime_pattern)
+            decision_mode = self._decision_mode(symbol_cfg.symbol)
             should_call_deepseek = self._ai_enabled_for_symbol(symbol_cfg.symbol) and self._should_call_deepseek_for_signal(signal, position)
             market_leader_context = (
                 await self._market_leader_context(symbol_cfg.symbol, symbol_cfg.timeframe, signal, candles)
@@ -206,17 +207,26 @@ class TradingApp:
                     market_leader_context,
                 )
             else:
-                ai = self.brain.local_fallback_decision(
+                ai = self._pure_strategy_decision(
                     signal,
                     aggregated,
                     zone,
                     pattern,
                     news_digest,
-                    "deepseek_disabled_by_operator",
                     regime_pattern,
                     market_leader_context,
                 )
-            drift = self._evaluate_ai_drift_for_signal(symbol_cfg.symbol, signal, position, ai)
+            drift = (
+                self._evaluate_ai_drift_for_signal(symbol_cfg.symbol, signal, position, ai)
+                if decision_mode == "ai_assisted"
+                else AiDriftReport(
+                    symbol=symbol_cfg.symbol,
+                    status=HealthStatus.OK,
+                    reason="pure_strategy_mode_ai_drift_not_applicable",
+                    latest_confidence=signal.signal_strength,
+                    latest_direction=ai.direction,
+                )
+            )
             data_health = self.data_health.evaluate_symbol(
                 symbol=symbol_cfg.symbol,
                 timeframe=symbol_cfg.timeframe,
@@ -224,15 +234,19 @@ class TradingApp:
                 news=news_digest,
                 orderflow=aggregated,
             )
-            risk = self.risk.evaluate(signal, ai, equity, positions)
-            position_review = self._review_open_trend_position(
-                signal,
-                position,
-                ai,
-                aggregated,
-                zone,
-                pattern,
-                data_health.status,
+            risk = self.risk.evaluate(signal, ai, equity, positions, decision_mode=decision_mode)
+            position_review = (
+                self._review_open_trend_position(
+                    signal,
+                    position,
+                    ai,
+                    aggregated,
+                    zone,
+                    pattern,
+                    data_health.status,
+                )
+                if decision_mode == "ai_assisted"
+                else None
             )
 
             self.store.insert("orderflow_summaries", aggregated, symbol_cfg.symbol)
@@ -288,13 +302,13 @@ class TradingApp:
                     positions = await self._fetch_positions(risk_symbols)
 
             if risk.allowed and signal.action in {SignalAction.LONG, SignalAction.SHORT}:
-                if not data_health.can_open_new_entries:
+                if not self.data_health.can_open_for(data_health, decision_mode=decision_mode):
                     risk.allowed = False
                     risk.reason = f"data_health_blocks_new_entry:{data_health.status.value}:{data_health.reason}"
                     risk.warnings.append("market/news/orderflow freshness gate blocked this entry")
                     rows.append((signal, ai, aggregated, zone, risk))
                     continue
-                if drift.status == HealthStatus.BLOCK:
+                if decision_mode == "ai_assisted" and drift.status == HealthStatus.BLOCK:
                     risk.allowed = False
                     risk.reason = f"ai_drift_blocks_new_entry:{drift.reason}"
                     risk.warnings.append("AI output drift gate blocked this entry; wait for the next actionable signal or review manually.")
@@ -571,6 +585,13 @@ class TradingApp:
         symbol_cfg = next((item for item in self.config.symbols if item.symbol == event.symbol), None)
         if symbol_cfg is None:
             return
+        if not self._ai_enabled_for_symbol(event.symbol):
+            self.deepseek_budget.record_skipped(
+                symbol=event.symbol,
+                call_type="price_wakeup",
+                reason="deepseek_disabled_pure_strategy",
+            )
+            return
         news_digest = await self._news_for_trading_cycle(live_news=False)
         positions = await self._fetch_positions([event.symbol])
         candles = await self.market.fetch_ohlcv(event.symbol, symbol_cfg.timeframe)
@@ -726,6 +747,28 @@ class TradingApp:
         return symbols
 
     async def _review_major_news_for_symbol(self, event, symbol: str, timeframe: str) -> None:
+        if not self._ai_enabled_for_symbol(symbol):
+            review_signal = StrategySignal(
+                symbol=symbol,
+                timeframe=timeframe,
+                action=SignalAction.HOLD,
+                current_price=0.0,
+                suggested_qty=0.0,
+                signal_strength=0.0,
+                technical_evidence={
+                    "major_news_context": True,
+                    "news_risk_review": True,
+                    "review_only_no_order": True,
+                    "deepseek_disabled_pure_strategy": True,
+                },
+            )
+            self._record_skipped_major_news_review(
+                event,
+                review_signal,
+                symbol,
+                reason="deepseek_disabled_pure_strategy",
+            )
+            return
         candles = await self.market.fetch_ohlcv(symbol, timeframe)
         position = await self._current_position_for_symbol(symbol)
         position.mark_price = float(candles["close"].iloc[-1])
@@ -864,8 +907,12 @@ class TradingApp:
             "ai": None,
             "risk": {
                 "allowed": False,
-                "reason": "major_news_without_strategy_signal",
-                "warnings": ["deepseek_prefilter_skipped_no_signal_no_position"],
+                "reason": (
+                    "major_news_review_skipped_pure_strategy_mode"
+                    if reason == "deepseek_disabled_pure_strategy"
+                    else "major_news_without_strategy_signal"
+                ),
+                "warnings": [reason],
             },
         }
         self.store.insert("news_risk_reviews", payload, symbol)
@@ -1842,6 +1889,7 @@ class TradingApp:
             "risk_position_tier": risk.position_tier,
             "risk_position_scale": float(risk.position_scale),
             "risk_sizing_policy": risk.sizing_policy,
+            "decision_mode": risk.decision_mode,
             "legacy_position_tier": risk.legacy_position_tier,
             "legacy_position_scale": risk.legacy_position_scale,
             "calibrated_position_tier": risk.calibrated_position_tier,
@@ -1855,6 +1903,7 @@ class TradingApp:
             "sizing_basis": risk.sizing_basis,
             "risk_reason": risk.reason,
             "ai_confidence": float(ai.confidence),
+            "ai_decision_source": ai.decision_source,
             "ai_action_suggestion": ai.action_suggestion,
             "ai_direction": ai.direction,
             "sizing_reason": sizing_reason,
@@ -2291,6 +2340,54 @@ class TradingApp:
         expected_side = Side.LONG if signal.action == SignalAction.LONG else Side.SHORT
         return state.side == expected_side.value
 
+    def _decision_mode(self, symbol: str | None = None) -> str:
+        ai_enabled = self._ai_enabled_for_symbol(symbol) if symbol else self.config.ai.enabled
+        return "ai_assisted" if ai_enabled else "pure_strategy"
+
+    def _pure_strategy_decision(
+        self,
+        signal: StrategySignal,
+        orderflow: AggregatedOrderflow,
+        dense_zone: DenseZone,
+        pattern: PatternCandidate,
+        news: NewsDigest,
+        regime_pattern: RegimePattern | None,
+        market_leader_context: MarketLeaderContext | None,
+    ) -> AiDecision:
+        fallback = self.brain.local_fallback_decision(
+            signal,
+            orderflow,
+            dense_zone,
+            pattern,
+            news,
+            "deepseek_disabled_by_operator",
+            regime_pattern,
+            market_leader_context,
+        )
+        direction = Side.LONG if signal.action == SignalAction.LONG else Side.SHORT if signal.action == SignalAction.SHORT else Side.FLAT
+        action = {
+            SignalAction.LONG: "open_long",
+            SignalAction.SHORT: "open_short",
+            SignalAction.EXIT_LONG: "close",
+            SignalAction.EXIT_SHORT: "close",
+        }.get(signal.action, "hold")
+        is_entry = signal.action in {SignalAction.LONG, SignalAction.SHORT}
+        return fallback.model_copy(
+            update={
+                "decision_source": "pure_strategy",
+                "regime": "trend" if is_entry else fallback.regime,
+                "direction": direction,
+                "confidence": signal.signal_strength if is_entry else 0.0,
+                "multiplier": 1.0,
+                "action_suggestion": action,
+                "veto_action": "allow",
+                "subjective_position_tier": None,
+                "subjective_position_confidence": None,
+                "brief_reason": "DeepSeek 已关闭，本轮仅执行本地 KC+VOL+KDJ 策略与硬风控。",
+                "reason_codes": ["pure_strategy_mode", "deepseek_provider_call_skipped"],
+            }
+        )
+
     def _ai_enabled_for_symbol(self, symbol: str) -> bool:
         if not self.config.ai.enabled:
             return False
@@ -2310,6 +2407,22 @@ class TradingApp:
         market_leader_context: MarketLeaderContext | None = None,
         event_key: str | None = None,
     ) -> AiDecision:
+        if not self._ai_enabled_for_symbol(signal.symbol):
+            self.deepseek_budget.record_skipped(
+                symbol=signal.symbol,
+                call_type=call_type,
+                reason="deepseek_disabled_pure_strategy",
+                event_key=event_key,
+            )
+            return self._pure_strategy_decision(
+                signal,
+                orderflow,
+                dense_zone,
+                pattern,
+                news,
+                regime_pattern,
+                market_leader_context,
+            )
         reservation = self.deepseek_budget.reserve(symbol=signal.symbol, call_type=call_type, event_key=event_key)
         if not reservation.allowed:
             reason = f"deepseek_budget_blocked:{reservation.reason}"

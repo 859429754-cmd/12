@@ -130,6 +130,31 @@ def test_data_health_blocks_empty_orderflow() -> None:
 
     assert report.status == HealthStatus.BLOCK
     assert "orderflow_source_empty" in report.reason
+    assert monitor.can_open_for(report, decision_mode="ai_assisted") is False
+    assert monitor.can_open_for(report, decision_mode="pure_strategy") is True
+
+
+def test_pure_strategy_data_health_still_blocks_stale_ohlcv() -> None:
+    candles = pd.DataFrame(
+        [{
+            "timestamp": datetime.now(UTC) - timedelta(hours=5),
+            "open": 1.0,
+            "high": 1.0,
+            "low": 1.0,
+            "close": 1.0,
+            "volume": 1.0,
+        }]
+    )
+    monitor = DataHealthMonitor(stale_data_seconds=300, news_max_age_hours=6)
+    report = monitor.evaluate_symbol(
+        symbol="ETH/USDT:USDT",
+        timeframe="1h",
+        candles=candles,
+        news=NewsDigest(),
+        orderflow=AggregatedOrderflow(symbol="ETH/USDT:USDT", data_quality=0.0, source_count=0),
+    )
+
+    assert monitor.can_open_for(report, decision_mode="pure_strategy") is False
 
 
 def make_ai(symbol: str, direction: Side, confidence: float, score: float) -> AiDecision:

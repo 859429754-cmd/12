@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 from ai_quant_trader.core.models import AggregatedOrderflow, DataHealthCheck, DataHealthReport, HealthStatus, NewsDigest
 
@@ -37,6 +37,20 @@ class DataHealthMonitor:
             can_open_new_entries=status != HealthStatus.BLOCK,
             reason=";".join(blocking or warning or ["data_health_ok"]),
             checks=checks,
+        )
+
+    def can_open_for(
+        self,
+        report: DataHealthReport,
+        *,
+        decision_mode: Literal["ai_assisted", "pure_strategy"],
+    ) -> bool:
+        if decision_mode == "ai_assisted":
+            return report.can_open_new_entries
+        hard_inputs = {"ohlcv", "clock"}
+        return not any(
+            check.name in hard_inputs and check.status == HealthStatus.BLOCK
+            for check in report.checks
         )
 
     def _ohlcv_check(self, timeframe: str, candles: Any) -> DataHealthCheck:

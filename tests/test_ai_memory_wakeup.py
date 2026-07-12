@@ -202,6 +202,40 @@ async def test_major_news_review_skips_deepseek_without_signal_or_position(
 
 
 @pytest.mark.asyncio
+async def test_major_news_review_skips_all_market_and_provider_reads_when_ai_disabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    _write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl")
+    app = TradingApp(str(config_path))
+    app.config.ai.enabled = False
+
+    async def fail_market(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise AssertionError("AI-off major-news reviews must not fetch market or call DeepSeek.")
+
+    monkeypatch.setattr(app.market, "fetch_ohlcv", fail_market)
+    monkeypatch.setattr(app.brain, "analyze_symbol", fail_market)
+    event = WakeupEvent(
+        event_type="news",
+        severity=WakeupSeverity.CRITICAL,
+        title="重大市场事件",
+        summary="仅验证关闭开关后的审计路径。",
+        source="test",
+    )
+    try:
+        await app._review_major_news_for_symbol(event, "ETH/USDT:USDT", "1h")
+
+        review = app.store.fetch_payloads("news_risk_reviews", symbol="ETH/USDT:USDT", limit=1)[0]["payload"]
+        assert review["status"] == "skipped"
+        assert review["deepseek_called"] is False
+        assert review["skip_reason"] == "deepseek_disabled_pure_strategy"
+        assert review["risk"]["reason"] == "major_news_review_skipped_pure_strategy_mode"
+    finally:
+        await app.close()
+
+
+@pytest.mark.asyncio
 async def test_reload_runtime_config_refreshes_deepseek_credentials_from_env(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

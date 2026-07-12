@@ -350,6 +350,10 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
     def health() -> dict[str, Any]:
         return {"ok": True, "service": "ai-quant-console"}
 
+    @app.get("/favicon.ico", include_in_schema=False)
+    def favicon() -> Response:
+        return Response(status_code=204)
+
     @app.get("/api/auth/session")
     def auth_session(request: Request) -> dict[str, Any]:
         user = _console_user_from_request(request)
@@ -404,6 +408,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         deepseek_operator_enabled = bool(ctx.config.ai.enabled)
         deepseek_key_configured = bool(os.getenv("DEEPSEEK_API_KEY"))
         deepseek_ready = deepseek_operator_enabled and deepseek_key_configured
+        decision_policy = "ai_assisted" if deepseek_operator_enabled else "pure_strategy"
         execution_mode = execution_mode_from_config(ctx.config)
         is_mock = execution_mode == "mock"
         ai_status = ctx.config.ai.model_dump(mode="json")
@@ -422,11 +427,12 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
                 **ai_status,
                 "api_key_configured": deepseek_key_configured,
                 "operator_enabled": deepseek_operator_enabled,
+                "execution_policy": decision_policy,
                 "status_message": (
                     "DeepSeek 已接入并启用。"
                     if deepseek_ready
                     else (
-                        "DeepSeek 已被管理员关闭；实盘新开仓 fail-closed。"
+                        "DeepSeek 已被管理员关闭；新入场按纯策略与硬风控执行。"
                         if not deepseek_operator_enabled
                         else "本地未配置 DeepSeek API，AI 将使用保守降级决策。"
                     )
@@ -463,6 +469,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         deepseek_operator_enabled = bool(ctx.config.ai.enabled)
         deepseek_key_configured = bool(os.getenv("DEEPSEEK_API_KEY"))
         deepseek_ready = deepseek_operator_enabled and deepseek_key_configured
+        decision_policy = "ai_assisted" if deepseek_operator_enabled else "pure_strategy"
         latest_news = ctx.store.fetch_latest("news_summaries")
         latest_backtest = ctx.store.fetch_latest("backtest_runs")
         latest_exchange = ctx.store.fetch_latest("exchange_health")
@@ -501,10 +508,28 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
             refresh_interval_minutes=ctx.config.news.refresh_interval_minutes,
             max_age_hours=ctx.config.news.max_age_hours,
         )
+        if decision_policy == "pure_strategy":
+            deepseek_status = "ok"
+            deepseek_detail = "DeepSeek is disabled; entries use the local strategy plus hard risk gates."
+            ai_budget_status = "ok"
+            ai_budget_detail = "DeepSeek budget is not applicable while pure strategy mode is active."
+            if news_status == "block":
+                news_status = "warn"
+                news_detail = f"Pure strategy mode does not use news for entry sizing. {news_detail}"
+            data_health_status = _pure_strategy_data_health_status(latest_data_health)
+            ai_drift_status = "ok"
         worker_status, worker_detail = _worker_heartbeat_status(ctx, latest_worker_heartbeats)
         maintenance_status, maintenance_detail = _maintenance_status(latest_maintenance)
         console_auth_status, console_auth_detail = _console_auth_readiness_status(execution_mode)
         checks = [
+            _readiness_check(
+                "decision_policy",
+                "Decision policy",
+                "ok",
+                "AI-assisted sizing is active."
+                if decision_policy == "ai_assisted"
+                else "Pure KC+VOL+KDJ strategy sizing is active; AI sizing and position-review add-ons are bypassed.",
+            ),
             _readiness_check("database", "Database", "ok", "SQLite store is reachable."),
             _readiness_check(
                 "console_auth",
@@ -558,11 +583,15 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
             _readiness_check(
                 "position_review",
                 "Position review",
-                "ok" if ctx.config.risk.position_review.enabled else "warn",
+                "ok" if decision_policy == "pure_strategy" or ctx.config.risk.position_review.enabled else "warn",
                 (
-                    "Position review is enabled in shadow mode; no add-on orders are submitted."
-                    if ctx.config.risk.position_review.mode == "shadow"
-                    else f"Position review mode: {ctx.config.risk.position_review.mode}."
+                    "Position-review add-ons are bypassed while pure strategy mode is active."
+                    if decision_policy == "pure_strategy"
+                    else (
+                        "Position review is enabled in shadow mode; no add-on orders are submitted."
+                        if ctx.config.risk.position_review.mode == "shadow"
+                        else f"Position review mode: {ctx.config.risk.position_review.mode}."
+                    )
                 ),
                 age_minutes=_row_age_minutes(latest_position_review),
             ),
@@ -605,14 +634,22 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
                 "ai_drift",
                 "AI drift",
                 ai_drift_status if ai_drift_status in {"ok", "warn", "block"} else "warn",
-                _freshness_message(latest_ai_drift, "Latest AI drift check"),
+                (
+                    "AI drift is not applicable while pure strategy mode is active."
+                    if decision_policy == "pure_strategy"
+                    else _freshness_message(latest_ai_drift, "Latest AI drift check")
+                ),
                 age_minutes=_row_age_minutes(latest_ai_drift),
             ),
             _readiness_check(
                 "major_news_review",
                 "Major news risk review",
-                "ok" if latest_news_risk else "warn",
-                _freshness_message(latest_news_risk, "Latest major news risk review"),
+                "ok" if decision_policy == "pure_strategy" or latest_news_risk else "warn",
+                (
+                    "Major-news DeepSeek reviews are bypassed while pure strategy mode is active."
+                    if decision_policy == "pure_strategy"
+                    else _freshness_message(latest_news_risk, "Latest major news risk review")
+                ),
                 age_minutes=_row_age_minutes(latest_news_risk),
             ),
             _readiness_check(
@@ -644,7 +681,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
                 age_minutes=_row_age_minutes(latest_maintenance),
             ),
         ]
-        if execution_mode == "live" and not deepseek_ready:
+        if execution_mode == "live" and decision_policy == "ai_assisted" and not deepseek_ready:
             checks.append(
                 _readiness_check(
                     "live_ai_guard",
@@ -695,6 +732,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
             "warnings": warnings,
             "execution_mode": execution_mode,
             "trade_mode": ctx.config.runtime.trade_mode,
+            "decision_policy": decision_policy,
             "configured_symbols": symbols,
             "enabled_symbols": sorted(state.enabled_symbols),
             "primary_symbol": primary_symbol,
@@ -1324,6 +1362,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         account_slot: Literal["default", "trend", "follower", "range"] | None = Query(default=None),
         prefer_live: bool = True,
         timeout_seconds: float = Query(default=12.0, ge=0.1, le=30.0),
+        max_cache_age_seconds: float = Query(default=30.0, ge=0.0, le=3600.0),
     ) -> dict[str, Any]:
         ctx = _ctx(app)
         ctx.reload()
@@ -1332,6 +1371,26 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         runtime_mode = execution_mode_from_config(ctx.config)
         live_readonly = prefer_live and runtime_mode == "mock" and configured_slot
         gateway_mode = "live" if live_readonly else runtime_mode
+        cached = _latest_position_snapshot_rows(ctx, account_slot, limit)
+        cached_age_seconds = _row_age_seconds(cached[0]) if cached else None
+        if (
+            prefer_live
+            and gateway_mode == "live"
+            and cached
+            and cached_age_seconds is not None
+            and max_cache_age_seconds > 0
+            and cached_age_seconds <= max_cache_age_seconds
+        ):
+            return {
+                "ok": True,
+                "items": cached,
+                "account_slot": account_slot,
+                "source": "positions_snapshot",
+                "read_only_live_positions": live_readonly,
+                "cached": True,
+                "stale": False,
+                "cache_age_seconds": cached_age_seconds,
+            }
         if prefer_live and gateway_mode == "live":
             execution = create_exchange_gateway(gateway_mode, account_slot=account_slot)
             try:
@@ -1362,7 +1421,6 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
                     "cached": False,
                 }
             except Exception as exc:
-                cached = _latest_position_snapshot_rows(ctx, account_slot, limit)
                 return {
                     "ok": False,
                     "items": cached,
@@ -1370,6 +1428,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
                     "source": "positions_snapshot",
                     "cached": True,
                     "stale": True,
+                    "cache_age_seconds": cached_age_seconds,
                     "error_type": type(exc).__name__,
                     "message": "Gate.io 持仓读取超时或失败，控制台显示最近一次持仓快照。",
                 }
@@ -1817,8 +1876,8 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
                     "new_enabled": body.enabled,
                     "source": "console",
                     "risk_note": (
-                        "Disabling DeepSeek stops provider calls and blocks live new entries. "
-                        "Existing positions are not force-closed."
+                        "Disabling DeepSeek stops provider calls and switches future entries to pure strategy sizing. "
+                        "Existing positions keep native stops and strategy exits; AI position-review add-ons are bypassed."
                     ),
                 },
                 symbol="deepseek_control",
@@ -1827,10 +1886,11 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         return {
             "ok": True,
             "enabled": body.enabled,
+            "execution_policy": "ai_assisted" if body.enabled else "pure_strategy",
             "message": (
                 "DeepSeek 已启用，实盘新开仓仍需通过 readiness、AI 和风控。"
                 if body.enabled
-                else "DeepSeek 已关闭；系统停止 DeepSeek 调用，实盘新开仓 fail-closed，已有仓位不强制平仓。"
+                else "DeepSeek 已关闭；系统停止模型调用，后续信号按纯策略与硬风控执行，已有仓位继续使用原生止损和策略退出。"
             ),
         }
 
@@ -2112,20 +2172,32 @@ def _latest_account_balance_snapshot(ctx: ConsoleContext, account_slot: str) -> 
 
 
 def _latest_position_snapshot_rows(ctx: ConsoleContext, account_slot: str, limit: int) -> list[dict[str, Any]]:
-    rows = ctx.table("positions_snapshot", limit=limit)
-    latest: dict[str, dict[str, Any]] = {}
-    for row in rows:
-        payload = row.get("payload") or {}
-        payload_slot = payload.get("account_slot")
-        if payload_slot is not None:
-            if _canonical_account_slot(str(payload_slot)) != account_slot:
-                continue
-        elif account_slot != "trend":
+    if ctx.store is None:
+        return []
+    account_slot = _canonical_account_slot(account_slot)
+    latest: list[dict[str, Any]] = []
+    for symbol in ctx.configured_symbols():
+        exact = ctx.store.fetch_latest_payload_by_value(
+            "positions_snapshot",
+            "account_slot",
+            account_slot,
+            symbol=symbol,
+        )
+        if exact is not None:
+            latest.append(exact)
             continue
-        symbol = row.get("symbol") or payload.get("symbol")
-        if symbol and symbol not in latest:
-            latest[str(symbol)] = row
-    return list(latest.values())
+        for row in ctx.store.fetch_payloads("positions_snapshot", limit=max(limit, 100), symbol=symbol):
+            payload = row.get("payload") or {}
+            payload_slot = payload.get("account_slot")
+            if payload_slot is not None:
+                if _canonical_account_slot(str(payload_slot)) != account_slot:
+                    continue
+            elif account_slot != "trend":
+                continue
+            latest.append(row)
+            break
+    latest.sort(key=lambda row: int(row.get("id") or 0), reverse=True)
+    return latest[:limit]
 
 
 def _ai_sizing_tiers() -> list[dict[str, Any]]:
@@ -3051,6 +3123,24 @@ def _is_audit_only_ai_payload(payload: dict[str, Any]) -> bool:
     return False
 
 
+def _pure_strategy_data_health_status(
+    latest_data_health: dict[str, Any] | None,
+) -> Literal["ok", "warn", "block"]:
+    payload = (latest_data_health or {}).get("payload") or {}
+    checks = payload.get("checks") or []
+    hard_names = {"ohlcv", "clock"}
+    if any(
+        isinstance(check, dict)
+        and str(check.get("name")) in hard_names
+        and str(check.get("status")) == "block"
+        for check in checks
+    ):
+        return "block"
+    if str(payload.get("status") or "warn") != "ok":
+        return "warn"
+    return "ok"
+
+
 def _deepseek_readiness_status(
     api_key_configured: bool,
     latest_ai_decision: dict[str, Any] | None,
@@ -3060,8 +3150,7 @@ def _deepseek_readiness_status(
     operator_enabled: bool = True,
 ) -> tuple[Literal["ok", "warn", "block"], str]:
     if not operator_enabled:
-        status: Literal["ok", "warn", "block"] = "block" if execution_mode == "live" else "warn"
-        return status, "DeepSeek is disabled by operator; provider calls are stopped and live entries fail closed."
+        return "ok", "DeepSeek is disabled; entries use the local strategy plus hard risk gates."
     if not api_key_configured:
         return "warn", "DeepSeek API key is missing; AI decisions will degrade."
     usage_payload = (latest_ai_usage or {}).get("payload") or {}

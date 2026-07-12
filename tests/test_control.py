@@ -250,3 +250,25 @@ def test_ai_optimization_budget_block_avoids_deepseek_call(tmp_path) -> None:
         assert proposal["risk_note"] == "deepseek_budget_blocked:hourly_limit_exceeded"
     finally:
         store.close()
+
+
+def test_ai_optimization_is_local_only_when_deepseek_disabled(tmp_path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump({"ai": {"enabled": False}}, allow_unicode=True),
+        encoding="utf-8",
+    )
+    store = SQLiteStore(str(tmp_path / "test.sqlite3"), str(tmp_path / "audit.jsonl"))
+    try:
+        brain = FakeOptimizationBrain()
+        optimizer = StrategyOptimizer(store, brain, RuntimeControlManager(store, str(config_path)))  # type: ignore[arg-type]
+        _, proposal = asyncio.run(optimizer.create_ai_proposal(30, "admin"))
+
+        assert brain.calls == []
+        assert proposal["source"] == "local_fallback"
+        assert proposal["changes"] == {}
+        assert proposal["risk_note"] == "deepseek_disabled_pure_strategy"
+        budget = store.fetch_payloads("ai_call_budget_events", symbol="ai_optimization", limit=1)[0]["payload"]
+        assert budget["status"] == "skipped"
+    finally:
+        store.close()

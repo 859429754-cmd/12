@@ -204,7 +204,7 @@ async def test_price_wakeup_deepseek_guard_keeps_critical_events_and_positions(t
 
 
 @pytest.mark.asyncio
-async def test_hourly_cycle_disables_deepseek_calls_and_blocks_entry_when_ai_disabled(
+async def test_hourly_cycle_disables_deepseek_calls_and_uses_pure_strategy_when_ai_disabled(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -213,7 +213,8 @@ async def test_hourly_cycle_disables_deepseek_calls_and_blocks_entry_when_ai_dis
     text = config_path.read_text(encoding="utf-8")
     config_path.write_text(text.replace("ai:\n", "ai:\n  enabled: false\n"), encoding="utf-8")
     app = TradingApp(str(config_path))
-    app.state.enable_report("ETH/USDT:USDT")
+    app.state.opening_paused = False
+    app.state.authorize_symbol("ETH/USDT:USDT")
 
     candles = pd.DataFrame(
         {
@@ -231,6 +232,9 @@ async def test_hourly_cycle_disables_deepseek_calls_and_blocks_entry_when_ai_dis
     async def fake_refresh_exchange_safety(symbols: list[str]):  # noqa: ANN001
         return None
 
+    async def fake_reload_runtime_config() -> None:
+        return None
+
     async def fake_fetch_positions(symbols: list[str]):  # noqa: ANN001
         return [PositionSnapshot(symbol=symbols[0], side=Side.FLAT, qty=0.0, mark_price=100.0)]
 
@@ -244,6 +248,7 @@ async def test_hourly_cycle_disables_deepseek_calls_and_blocks_entry_when_ai_dis
         raise AssertionError("DeepSeek must not be called when ai.enabled=false.")
 
     monkeypatch.setattr(app, "_news_for_trading_cycle", fake_news)
+    monkeypatch.setattr(app, "reload_runtime_config", fake_reload_runtime_config)
     monkeypatch.setattr(app, "_refresh_exchange_safety", fake_refresh_exchange_safety)
     monkeypatch.setattr(app, "_fetch_positions", fake_fetch_positions)
     monkeypatch.setattr(app.market, "fetch_ohlcv", fake_fetch_ohlcv)
@@ -257,9 +262,83 @@ async def test_hourly_cycle_disables_deepseek_calls_and_blocks_entry_when_ai_dis
         decisions = app.store.fetch_payloads("ai_decisions", symbol="ETH/USDT:USDT", limit=5)
         assert decisions
         payload = decisions[0]["payload"]
-        assert "deepseek_disabled_by_operator" in payload["reason_codes"]
-        assert payload["veto_action"] == "block"
-        assert payload["action_suggestion"] == "block"
+        assert "pure_strategy_mode" in payload["reason_codes"]
+        assert payload["decision_source"] == "pure_strategy"
+        assert payload["veto_action"] == "allow"
+        assert payload["action_suggestion"] == "open_long"
+
+        lifecycle = app.store.fetch_payloads("order_lifecycle", symbol="ETH/USDT:USDT", limit=20)
+        assert any((row["payload"].get("metadata") or {}).get("sizing_basis") == "pure_strategy_signal" for row in lifecycle), lifecycle
+    finally:
+        await app.close()
+
+
+@pytest.mark.asyncio
+async def test_deepseek_budget_wrapper_has_global_operator_kill_switch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl")
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace("ai:\n", "ai:\n  enabled: false\n"),
+        encoding="utf-8",
+    )
+    app = TradingApp(str(config_path))
+    signal, orderflow, zone, pattern, news, regime = make_inputs()
+
+    async def fail_provider(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise AssertionError("The centralized DeepSeek wrapper must honor ai.enabled=false.")
+
+    monkeypatch.setattr(app.brain, "analyze_symbol", fail_provider)
+    try:
+        decision = await app._analyze_with_deepseek_budget(
+            "price_wakeup",
+            signal,
+            orderflow,
+            zone,
+            pattern,
+            news,
+            regime,
+        )
+
+        assert decision.decision_source == "pure_strategy"
+        assert decision.veto_action == "allow"
+        budget = app.store.fetch_payloads("ai_call_budget_events", symbol=signal.symbol, limit=1)[0]["payload"]
+        assert budget["status"] == "skipped"
+        assert budget["reason"] == "deepseek_disabled_pure_strategy"
+    finally:
+        await app.close()
+
+
+@pytest.mark.asyncio
+async def test_price_wakeup_returns_before_market_reads_when_ai_disabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl")
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace("ai:\n", "ai:\n  enabled: false\n"),
+        encoding="utf-8",
+    )
+    app = TradingApp(str(config_path))
+
+    async def fail_news(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise AssertionError("AI-off price wakeups must not start the review data pipeline.")
+
+    monkeypatch.setattr(app, "_news_for_trading_cycle", fail_news)
+    event = WakeupEvent(
+        event_type="price_move",
+        severity=WakeupSeverity.CRITICAL,
+        symbol="ETH/USDT:USDT",
+        title="critical move",
+    )
+    try:
+        await app._handle_price_wakeup(event, equity=1000.0)
+        budget = app.store.fetch_payloads("ai_call_budget_events", symbol=event.symbol, limit=1)[0]["payload"]
+        assert budget["status"] == "skipped"
+        assert budget["reason"] == "deepseek_disabled_pure_strategy"
     finally:
         await app.close()
 

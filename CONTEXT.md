@@ -88,6 +88,14 @@ Hard rule: do not silently change this current ETH trend strategy definition. Fu
 
 Fixed strategy remains the primary opening tool.
 
+Current operator modes (ADR-0006):
+
+- `ai.enabled=true`: `ai_assisted`. DeepSeek and the guarded five-tier model may promote, maintain, reduce or block a local strategy entry inside hard risk limits.
+- `ai.enabled=false`: `pure_strategy`. No DeepSeek provider call is allowed; KC+VOL+KDJ `suggested_qty` goes directly to local hard risk clipping.
+- Pure strategy bypasses AI five-tier sizing, news/orderflow sizing, AI drift gating and position-review add-ons. It still requires opening authorization, exchange reconciliation, leverage limits, OHLCV/clock freshness, order lifecycle safety and native/software stops.
+- DeepSeek failures while `ai.enabled=true` must not silently switch live entries to pure strategy. They remain fail-closed or conservatively degraded under the AI-assisted contract.
+- To stop new entries, use opening pause or revoke symbol authorization. `ai.enabled` selects the decision policy; it is not the master trading pause.
+
 AI may:
 
 - Confirm trades
@@ -317,6 +325,8 @@ DeepSeek must:
 - Be constrained by local hard rules
 
 ## 10. Web Console State
+
+Console loading contract (ADR-0007): retain React/FastAPI and optimize data flow before any framework rewrite. Slow Gate balance/position reads run independently from the core view, last-known-good account snapshots are preserved on transient failures, refresh cadences are split by data type, and full candle history is not downloaded on every poll. SSE/WebSocket incremental updates remain the next architecture stage.
 
 Implemented:
 

@@ -161,7 +161,10 @@ class RuntimeControlManager:
         self.save_state(state, operator_id, "authorize_opening")
         target = "、".join(self.short_symbol(s) for s in symbols)
         mode = "模拟" if dry_run else "实盘"
-        return f"已允许 {target} 在{mode}模式下开仓。真实开仓仍必须通过技术信号、AI判断、消息面、订单流和硬风控。"
+        return (
+            f"已允许 {target} 在{mode}模式下开仓。真实开仓必须通过本地策略信号与硬风控；"
+            "AI 增强模式额外经过 DeepSeek 五档裁剪，纯策略模式不会调用 DeepSeek。"
+        )
 
     def disable_symbol_report(self, state: RuntimeState, symbols: list[str], operator_id: str) -> str:
         for symbol in symbols:
@@ -196,7 +199,7 @@ class RuntimeControlManager:
                 f"- 已授权标的：{enabled}",
                 f"- 报告标的：{reports}",
                 f"- 消息模式：{news_mode}",
-                "- 安全规则：配置的总杠杆硬上限、AI可否决、本地技术信号必须确认、同方向已有持仓不重复加仓。",
+                "- 安全规则：配置的总杠杆硬上限、本地技术信号必须确认、同方向已有持仓不重复加仓；AI 增强模式可受控升降档或否决。",
             ]
         )
 
@@ -241,8 +244,8 @@ class RuntimeControlManager:
                 "1. 每小时读取已开启报告标的的 1 小时K线。",
                 "2. 采集 Binance、OKX、Bybit 公开订单流并聚合。",
                 "3. 采集公开消息面，筛选宏观、政治、地缘和加密重点新闻。",
-                "4. 本地趋势策略先给候选信号，AI再判断趋势/震荡、消息面和订单流是否印证。",
-                "5. 风控最终裁剪仓位：冷启动锁、逐标的授权、AI否决、同方向不加仓和配置的杠杆上限都不能绕过。",
+                "4. 本地趋势策略先给候选信号；AI 增强模式再判断趋势/震荡、消息面和订单流，纯策略模式跳过模型调用。",
+                "5. 风控最终裁剪仓位：冷启动锁、逐标的授权、同方向不加仓和配置的杠杆上限都不能绕过。",
             ]
         )
 

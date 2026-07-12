@@ -19,13 +19,25 @@ class StrategyOptimizer:
         days = 15 if days <= 20 else 30
         snapshot = self._build_snapshot(days)
         config = self.control.read_config()
-        budget = DeepSeekBudgetGuard.from_config(self.store, AppConfig.model_validate(config).ai)
-        reservation = budget.reserve(symbol="ai_optimization", call_type="optimization_proposal")
-        if reservation.allowed:
-            suggestion = await self.brain.propose_optimization(snapshot, days)
-            budget.record_success(reservation.row_id, detail="optimization_proposal_created")
+        ai_config = AppConfig.model_validate(config).ai
+        budget = DeepSeekBudgetGuard.from_config(self.store, ai_config)
+        source = "deepseek"
+        if not ai_config.enabled:
+            budget.record_skipped(
+                symbol="ai_optimization",
+                call_type="optimization_proposal",
+                reason="deepseek_disabled_pure_strategy",
+            )
+            suggestion = self._fallback_suggestion(days, "deepseek_disabled_pure_strategy")
+            source = "local_fallback"
         else:
-            suggestion = self._fallback_suggestion(days, f"deepseek_budget_blocked:{reservation.reason}")
+            reservation = budget.reserve(symbol="ai_optimization", call_type="optimization_proposal")
+            if reservation.allowed:
+                suggestion = await self.brain.propose_optimization(snapshot, days)
+                budget.record_success(reservation.row_id, detail="optimization_proposal_created")
+            else:
+                suggestion = self._fallback_suggestion(days, f"deepseek_budget_blocked:{reservation.reason}")
+                source = "local_fallback"
         changes: dict[str, dict[str, Any]] = {}
         for item in suggestion.get("parameter_changes", []) or []:
             path = item.get("path")
@@ -52,7 +64,7 @@ class StrategyOptimizer:
             "changes": changes,
             "expected_effect": suggestion.get("expected_effect", ""),
             "risk_note": suggestion.get("risk_note", ""),
-            "source": "deepseek",
+            "source": source,
         }
         proposal_id = self.store.insert("optimization_proposals", proposal, symbol="ai_optimization")
         return proposal_id, proposal

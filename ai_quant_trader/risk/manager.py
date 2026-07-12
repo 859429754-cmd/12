@@ -1,5 +1,7 @@
 ﻿from __future__ import annotations
 
+from typing import Literal
+
 from ai_quant_trader.core.models import (
     AiDecision,
     Alignment,
@@ -44,6 +46,8 @@ class RiskManager:
         ai: AiDecision,
         equity: float,
         positions: list[PositionSnapshot],
+        *,
+        decision_mode: Literal["ai_assisted", "pure_strategy"] = "ai_assisted",
     ) -> RiskDecision:
         max_total_notional = equity * self.config.max_total_leverage
         used_notional = sum(pos.notional for pos in positions)
@@ -59,6 +63,7 @@ class RiskManager:
                 target_notional=0.0,
                 max_total_notional=max_total_notional,
                 remaining_notional=remaining,
+                decision_mode=decision_mode,
                 reason="exit_signal_allowed_even_when_opening_paused",
             )
 
@@ -70,6 +75,7 @@ class RiskManager:
                 symbol=signal.symbol,
                 max_total_notional=max_total_notional,
                 remaining_notional=remaining,
+                decision_mode=decision_mode,
                 reason="major_news_without_strategy_signal" if major_news_context else "no_entry_signal",
             )
 
@@ -80,11 +86,18 @@ class RiskManager:
                 symbol=signal.symbol,
                 max_total_notional=max_total_notional,
                 remaining_notional=remaining,
+                decision_mode=decision_mode,
                 reason="cold_start_or_symbol_not_authorized",
             )
 
         if self._same_direction_position(signal, positions) is not None:
-            return self._blocked(signal, max_total_notional, remaining, "same_direction_position_exists")
+            return self._blocked(signal, max_total_notional, remaining, "same_direction_position_exists", decision_mode)
+
+        if remaining <= 0:
+            return self._blocked(signal, max_total_notional, remaining, "max_total_leverage_reached", decision_mode)
+
+        if decision_mode == "pure_strategy":
+            return self._evaluate_pure_strategy(signal, max_total_notional, remaining)
 
         strategy_allowed = str(signal.technical_evidence.get("strategy_allowed") or "trend")
         if strategy_allowed != "trend":
@@ -104,9 +117,6 @@ class RiskManager:
             return self._blocked(signal, max_total_notional, remaining, reason)
         if ai.orderflow_alignment == Alignment.CONFLICT:
             return self._blocked(signal, max_total_notional, remaining, "orderflow_conflict")
-        if remaining <= 0:
-            return self._blocked(signal, max_total_notional, remaining, "max_total_leverage_reached")
-
         strategy_baseline_notional = max(signal.current_price * signal.suggested_qty, 0.0)
         score, tier, breakdown, score_warnings = self._decision_score(signal, ai)
         if score < self.config.min_confidence_to_trade:
@@ -197,12 +207,53 @@ class RiskManager:
         self._attach_sizing_audit(decision, breakdown)
         return decision
 
+    def _evaluate_pure_strategy(
+        self,
+        signal: StrategySignal,
+        max_total_notional: float,
+        remaining: float,
+    ) -> RiskDecision:
+        strategy_baseline_notional = max(signal.current_price * signal.suggested_qty, 0.0)
+        clipped_notional = min(strategy_baseline_notional, remaining)
+        if self.config.small_position_mode:
+            clipped_notional = min(clipped_notional, self.config.small_position_notional_usdt)
+        clipped_qty = clipped_notional / signal.current_price if signal.current_price > 0 else 0.0
+        scale = min(max(clipped_notional / max(max_total_notional, 1e-12), 0.0), 1.0)
+        tier: PositionTier = "weak" if scale > 0 else "block"
+        for candidate in POSITION_TIER_ORDER[2:]:
+            if scale >= POSITION_TIER_SCALE[candidate]:
+                tier = candidate
+        return RiskDecision(
+            allowed=clipped_qty > 0,
+            action=signal.action,
+            symbol=signal.symbol,
+            target_qty=signal.suggested_qty,
+            clipped_qty=clipped_qty,
+            target_notional=clipped_notional,
+            strategy_baseline_notional=strategy_baseline_notional,
+            ai_desired_notional=0.0,
+            decision_mode="pure_strategy",
+            sizing_basis="pure_strategy_signal",
+            max_total_notional=max_total_notional,
+            remaining_notional=remaining,
+            decision_score=signal.signal_strength,
+            position_scale=scale,
+            position_tier=tier,
+            sizing_policy="pure_strategy",
+            reason="pure_strategy_signal_allowed" if clipped_qty > 0 else "qty_clipped_to_zero",
+            warnings=[
+                "deepseek_disabled_pure_strategy_mode",
+                "ai_news_orderflow_sizing_bypassed",
+            ],
+        )
+
     def _blocked(
         self,
         signal: StrategySignal,
         max_total_notional: float,
         remaining: float,
         reason: str,
+        decision_mode: Literal["ai_assisted", "pure_strategy"] = "ai_assisted",
     ) -> RiskDecision:
         return RiskDecision(
             allowed=False,
@@ -210,6 +261,7 @@ class RiskManager:
             symbol=signal.symbol,
             max_total_notional=max_total_notional,
             remaining_notional=remaining,
+            decision_mode=decision_mode,
             reason=reason,
         )
 

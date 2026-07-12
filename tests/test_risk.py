@@ -69,6 +69,63 @@ def test_ai_veto_blocks_entry() -> None:
     assert decision.reason == "ai_veto_block"
 
 
+def test_pure_strategy_mode_uses_strategy_qty_and_ignores_ai_overlay() -> None:
+    state = RuntimeState(opening_paused=False, enabled_symbols={"ETH/USDT:USDT"})
+    manager = RiskManager(RiskConfig(max_total_leverage=4), state)
+    signal = _signal().model_copy(
+        update={
+            "suggested_qty": 20.0,
+            "technical_evidence": {"strategy_allowed": "range"},
+        }
+    )
+
+    decision = manager.evaluate(
+        signal,
+        _ai(
+            direction=Side.SHORT,
+            regime=MarketRegime.RANGE,
+            confidence=0.0,
+            veto_action=VetoAction.BLOCK,
+            orderflow_alignment=Alignment.CONFLICT,
+            news_alignment=Alignment.CONFLICT,
+        ),
+        1000,
+        [],
+        decision_mode="pure_strategy",
+    )
+
+    assert decision.allowed is True
+    assert decision.decision_mode == "pure_strategy"
+    assert decision.sizing_basis == "pure_strategy_signal"
+    assert decision.sizing_policy == "pure_strategy"
+    assert decision.strategy_baseline_notional == 2000.0
+    assert decision.target_notional == 2000.0
+    assert decision.clipped_qty == 20.0
+    assert decision.position_scale == 0.5
+    assert decision.position_tier == "normal"
+    assert decision.reason == "pure_strategy_signal_allowed"
+
+
+def test_pure_strategy_mode_keeps_authorization_and_leverage_hard_gates() -> None:
+    blocked = RiskManager(RiskConfig(max_total_leverage=4), RuntimeState(opening_paused=True)).evaluate(
+        _signal(),
+        _ai(veto_action=VetoAction.ALLOW),
+        1000,
+        [],
+        decision_mode="pure_strategy",
+    )
+    assert blocked.allowed is False
+    assert blocked.reason == "cold_start_or_symbol_not_authorized"
+
+    state = RuntimeState(opening_paused=False, enabled_symbols={"ETH/USDT:USDT"})
+    manager = RiskManager(RiskConfig(max_total_leverage=4), state)
+    existing = [PositionSnapshot(symbol="BTC/USDT:USDT", side=Side.LONG, qty=30, mark_price=100)]
+    clipped = manager.evaluate(_signal(), _ai(), 1000, existing, decision_mode="pure_strategy")
+    assert clipped.allowed is True
+    assert clipped.target_notional == 1000.0
+    assert clipped.clipped_qty == 10.0
+
+
 def test_four_x_hard_cap_clips_position() -> None:
     state = RuntimeState(opening_paused=False, enabled_symbols={"ETH/USDT:USDT"})
     manager = RiskManager(RiskConfig(max_total_leverage=4), state)

@@ -111,13 +111,37 @@ async def run_drill(args: argparse.Namespace) -> dict[str, Any]:
         signal = RegimePatternAnalyzer().enrich_signal(signal, regime_pattern)
         signal = _apply_regime_drill_override(signal, args.allow_regime_block_override, regime_pattern.strategy_allowed)
         brain = DeepSeekBrain(base_url=config.ai.base_url, model=args.model or config.ai.emergency_screening_model)
-        ai = await brain.analyze_symbol(signal, orderflow, dense_zone, pattern, news_digest, regime_pattern)
+        decision_mode = "ai_assisted" if config.ai.enabled else "pure_strategy"
+        if config.ai.enabled:
+            ai = await brain.analyze_symbol(signal, orderflow, dense_zone, pattern, news_digest, regime_pattern)
+        else:
+            ai = brain.local_fallback_decision(
+                signal,
+                orderflow,
+                dense_zone,
+                pattern,
+                news_digest,
+                "deepseek_disabled_by_operator",
+                regime_pattern,
+            ).model_copy(
+                update={
+                    "decision_source": "pure_strategy",
+                    "regime": "trend",
+                    "direction": Side.LONG if action == SignalAction.LONG else Side.SHORT,
+                    "confidence": signal.signal_strength,
+                    "multiplier": 1.0,
+                    "action_suggestion": "open_long" if action == SignalAction.LONG else "open_short",
+                    "veto_action": "allow",
+                    "brief_reason": "DeepSeek 已关闭，实盘演练按纯策略与硬风控执行。",
+                    "reason_codes": ["pure_strategy_mode", "deepseek_provider_call_skipped"],
+                }
+            )
         store.insert("ai_decisions", ai, symbol)
 
         if ai.veto_action == VetoAction.BLOCK and not args.allow_ai_block_override:
             raise RuntimeError("DeepSeek blocked the fake signal. Re-run with --allow-ai-block-override for execution-path drill.")
 
-        risk = risk_manager.evaluate(signal, ai, equity, positions)
+        risk = risk_manager.evaluate(signal, ai, equity, positions, decision_mode=decision_mode)
         if risk.allowed and 0 < risk.position_scale < 1 and risk.clipped_qty < base_amount:
             adjusted_target_qty = base_amount / risk.position_scale
             signal = signal.model_copy(
@@ -130,7 +154,7 @@ async def run_drill(args: argparse.Namespace) -> dict[str, Any]:
                     },
                 }
             )
-            risk = risk_manager.evaluate(signal, ai, equity, positions)
+            risk = risk_manager.evaluate(signal, ai, equity, positions, decision_mode=decision_mode)
         if not risk.allowed:
             raise RuntimeError(f"RiskManager blocked the live drill: {risk.reason}.")
         if risk.clipped_qty + 1e-12 < base_amount:
@@ -144,7 +168,7 @@ async def run_drill(args: argparse.Namespace) -> dict[str, Any]:
             amount=base_amount,
             reduce_only=False,
             client_order_id=f"aiq_drill_{uuid.uuid4().hex[:17]}",
-            reason=f"manual_live_drill_ai_{ai.veto_action}",
+            reason=f"manual_live_drill_{decision_mode}_{ai.veto_action}",
         )
         entry_order = await lifecycle.submit_market_order(gateway, entry_request)
         store.insert("orders", entry_order, symbol)

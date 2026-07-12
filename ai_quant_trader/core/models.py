@@ -534,6 +534,7 @@ class AiDecision(BaseModel):
     model_config = ConfigDict(use_enum_values=True)
 
     symbol: str
+    decision_source: Literal["deepseek", "local_fallback", "pure_strategy"] = "deepseek"
     regime: MarketRegime
     direction: Side = Side.FLAT
     confidence: float = Field(ge=0, le=1)
@@ -675,7 +676,8 @@ class RiskDecision(BaseModel):
     target_notional: float = 0.0
     strategy_baseline_notional: float = 0.0
     ai_desired_notional: float = 0.0
-    sizing_basis: Literal["strategy_signal", "account_risk_cap"] = "strategy_signal"
+    decision_mode: Literal["ai_assisted", "pure_strategy"] = "ai_assisted"
+    sizing_basis: Literal["strategy_signal", "account_risk_cap", "pure_strategy_signal"] = "strategy_signal"
     max_total_notional: float = 0.0
     remaining_notional: float = 0.0
     decision_score: float = Field(default=0.0, ge=0, le=1)
