@@ -202,6 +202,7 @@ class NewsConfig(BaseModel):
 
 
 class AiConfig(BaseModel):
+    enabled: bool = True
     decision_model: str = "deepseek-v4-pro"
     report_model: str = "deepseek-v4-pro"
     emergency_screening_model: str = "deepseek-v4-flash"

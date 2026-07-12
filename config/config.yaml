@@ -36,6 +36,7 @@ risk:
     max_add_fraction: 0.25
     require_native_stop_verified: true
 ai:
+  enabled: true
   decision_model: deepseek-v4-pro
   report_model: deepseek-v4-pro
   emergency_screening_model: deepseek-v4-flash

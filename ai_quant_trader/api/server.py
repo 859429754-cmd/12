@@ -103,6 +103,12 @@ class RuntimeModeRequest(BaseModel):
     confirm_admin_action: bool = False
 
 
+class DeepSeekControlRequest(BaseModel):
+    operator_id: str = Field(default="console")
+    enabled: bool
+    confirm_admin_action: bool = False
+
+
 class PositionReviewModeRequest(BaseModel):
     operator_id: str = Field(default="console")
     mode: Literal["disabled", "shadow", "live_addon"]
@@ -395,7 +401,9 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         ctx.reload()
         state = ctx.runtime_state()
         symbols = ctx.configured_symbols()
-        deepseek_ready = bool(os.getenv("DEEPSEEK_API_KEY"))
+        deepseek_operator_enabled = bool(ctx.config.ai.enabled)
+        deepseek_key_configured = bool(os.getenv("DEEPSEEK_API_KEY"))
+        deepseek_ready = deepseek_operator_enabled and deepseek_key_configured
         execution_mode = execution_mode_from_config(ctx.config)
         is_mock = execution_mode == "mock"
         ai_status = ctx.config.ai.model_dump(mode="json")
@@ -412,8 +420,17 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
             "risk": ctx.config.risk.model_dump(mode="json"),
             "ai": {
                 **ai_status,
-                "api_key_configured": deepseek_ready,
-                "status_message": "DeepSeek 已接入" if deepseek_ready else "本地未配置 DeepSeek API，AI 将使用保守降级决策。",
+                "api_key_configured": deepseek_key_configured,
+                "operator_enabled": deepseek_operator_enabled,
+                "status_message": (
+                    "DeepSeek 已接入并启用。"
+                    if deepseek_ready
+                    else (
+                        "DeepSeek 已被管理员关闭；实盘新开仓 fail-closed。"
+                        if not deepseek_operator_enabled
+                        else "本地未配置 DeepSeek API，AI 将使用保守降级决策。"
+                    )
+                ),
             },
             "symbols": [item.model_dump(mode="json") for item in ctx.config.symbols],
             "latest_decisions": {symbol: _latest_trade_ai_decision(ctx, symbol) for symbol in symbols},
@@ -443,7 +460,9 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         live_ready_profiles = [profile for profile in profiles if profile.get("live_ready")]
         primary_symbol = _primary_readiness_symbol(live_ready_profiles, enabled_profiles, profiles)
         execution_mode = execution_mode_from_config(ctx.config)
-        deepseek_ready = bool(os.getenv("DEEPSEEK_API_KEY"))
+        deepseek_operator_enabled = bool(ctx.config.ai.enabled)
+        deepseek_key_configured = bool(os.getenv("DEEPSEEK_API_KEY"))
+        deepseek_ready = deepseek_operator_enabled and deepseek_key_configured
         latest_news = ctx.store.fetch_latest("news_summaries")
         latest_backtest = ctx.store.fetch_latest("backtest_runs")
         latest_exchange = ctx.store.fetch_latest("exchange_health")
@@ -468,7 +487,13 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         reconciliation_ok = execution_mode == "mock" or _latest_payload_status_fresh(ctx, latest_reconciliation, "ok")
         data_health_status = str(((latest_data_health or {}).get("payload") or {}).get("status") or "warn")
         ai_drift_status = str(((latest_ai_drift or {}).get("payload") or {}).get("status") or "warn")
-        deepseek_status, deepseek_detail = _deepseek_readiness_status(deepseek_ready, latest_ai_decision, latest_ai_usage, execution_mode)
+        deepseek_status, deepseek_detail = _deepseek_readiness_status(
+            deepseek_key_configured,
+            latest_ai_decision,
+            latest_ai_usage,
+            execution_mode,
+            operator_enabled=deepseek_operator_enabled,
+        )
         ai_budget_status, ai_budget_detail = _ai_budget_readiness_status(latest_ai_budget, execution_mode)
         news_status, news_detail = _news_readiness_status(
             latest_news,
@@ -621,7 +646,16 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         ]
         if execution_mode == "live" and not deepseek_ready:
             checks.append(
-                _readiness_check("live_ai_guard", "Live AI guard", "block", "Live mode requires a configured AI key for the current policy.")
+                _readiness_check(
+                    "live_ai_guard",
+                    "Live AI guard",
+                    "block",
+                    (
+                        "Live mode requires DeepSeek to be enabled and configured for the current policy."
+                        if deepseek_operator_enabled
+                        else "DeepSeek is disabled by operator; live new entries fail closed."
+                    ),
+                )
             )
         alert_input = {
             "execution_mode": execution_mode,
@@ -669,6 +703,8 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
             "authorized_profile_count": len(authorized_profiles),
             "live_ready_profile_count": len(live_ready_profiles),
             "deepseek_ready": deepseek_ready,
+            "deepseek_operator_enabled": deepseek_operator_enabled,
+            "deepseek_key_configured": deepseek_key_configured,
             "exchange_safety": latest_exchange,
             "latest_reconciliation": latest_reconciliation,
             "latest_order_lifecycle": latest_order_lifecycle,
@@ -1028,7 +1064,7 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
     def market_symbols() -> dict[str, Any]:
         ctx = _ctx(app)
         configured = ctx.configured_symbols()
-        enabled_ai = set(ctx.config.ai.ai_enabled_symbols or configured)
+        enabled_ai = set(ctx.config.ai.ai_enabled_symbols or configured) if ctx.config.ai.enabled else set()
         items = []
         for item in ctx.config.symbols:
             base, _, rest = item.symbol.partition("/")
@@ -1759,6 +1795,44 @@ def create_app(config_path: str = "config/config.yaml") -> FastAPI:
         mode_text = "模拟运行" if target_mode == "mock" else "真实运行"
         warning = "" if target_mode == "mock" else "；真实订单仍必须满足账号登录权限、逐标的授权、允许开仓、AI否决和配置的杠杆硬风控"
         return {"ok": True, "message": f"已切换为{mode_text}{warning}"}
+
+    @app.post("/api/control/deepseek")
+    def set_deepseek_enabled(body: DeepSeekControlRequest, request: Request) -> dict[str, Any]:
+        ctx = _ctx(app)
+        ctx.reload()
+        user = _require_confirmed_admin_action(request, body.confirm_admin_action, "toggle_deepseek")
+        config = ctx.control.read_config()
+        ai_config = config.get("ai", {}) if isinstance(config.get("ai"), dict) else {}
+        old_enabled = bool(ai_config.get("enabled", True))
+        ctx.control.set_config_value(config, "ai.enabled", body.enabled)
+        ctx.control.write_config(config)
+        if ctx.store is not None:
+            ctx.store.insert(
+                "runtime_state",
+                {
+                    "type": "deepseek_control",
+                    "operator_id": body.operator_id,
+                    "console_user": user.get("username"),
+                    "old_enabled": old_enabled,
+                    "new_enabled": body.enabled,
+                    "source": "console",
+                    "risk_note": (
+                        "Disabling DeepSeek stops provider calls and blocks live new entries. "
+                        "Existing positions are not force-closed."
+                    ),
+                },
+                symbol="deepseek_control",
+            )
+        ctx.reload(force=True)
+        return {
+            "ok": True,
+            "enabled": body.enabled,
+            "message": (
+                "DeepSeek 已启用，实盘新开仓仍需通过 readiness、AI 和风控。"
+                if body.enabled
+                else "DeepSeek 已关闭；系统停止 DeepSeek 调用，实盘新开仓 fail-closed，已有仓位不强制平仓。"
+            ),
+        }
 
     @app.post("/api/control/position-review")
     def set_position_review_mode(body: PositionReviewModeRequest, request: Request) -> dict[str, Any]:
@@ -2982,7 +3056,12 @@ def _deepseek_readiness_status(
     latest_ai_decision: dict[str, Any] | None,
     latest_ai_usage: dict[str, Any] | None,
     execution_mode: str,
+    *,
+    operator_enabled: bool = True,
 ) -> tuple[Literal["ok", "warn", "block"], str]:
+    if not operator_enabled:
+        status: Literal["ok", "warn", "block"] = "block" if execution_mode == "live" else "warn"
+        return status, "DeepSeek is disabled by operator; provider calls are stopped and live entries fail closed."
     if not api_key_configured:
         return "warn", "DeepSeek API key is missing; AI decisions will degrade."
     usage_payload = (latest_ai_usage or {}).get("payload") or {}

@@ -778,6 +778,7 @@ class DeepSeekBrain:
         aligned_orderflow = orderflow.alignment_hint == Alignment.ALIGNED
         ai_unavailable = (
             reason == "missing_deepseek_api_key"
+            or reason == "deepseek_disabled_by_operator"
             or reason.startswith("deepseek_error:")
             or reason.startswith("deepseek_budget_blocked:")
         )

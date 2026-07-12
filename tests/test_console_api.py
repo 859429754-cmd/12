@@ -1451,6 +1451,48 @@ def test_runtime_mode_is_global_and_readonly_accounts_cannot_change_it(tmp_path:
     assert client.get("/api/status").json()["execution_mode"] == "live"
 
 
+def test_deepseek_control_is_admin_only_and_blocks_live_readiness(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("CONSOLE_AUTH_DISABLED", "0")
+    monkeypatch.setenv("CONSOLE_ADMIN_PASSWORD", "admin-secret")
+    monkeypatch.setenv("CONSOLE_ACCOUNT1_PASSWORD", "account-secret")
+    monkeypatch.setenv("GATEIO_TREND_API_KEY", "trend-key")
+    monkeypatch.setenv("GATEIO_TREND_API_SECRET", "trend-secret")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    config_path = tmp_path / "config.yaml"
+    write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl", ["ETH/USDT:USDT"])
+    client = TestClient(create_app(str(config_path)))
+
+    assert client.post("/api/auth/login", json={"username": "account1", "password": "account-secret"}).status_code == 200
+    readonly = client.post(
+        "/api/control/deepseek",
+        json={"operator_id": "account1", "enabled": False, "confirm_admin_action": True},
+    )
+    assert readonly.status_code == 403
+
+    client.post("/api/auth/logout", json={})
+    assert client.post("/api/auth/login", json={"username": "admin", "password": "admin-secret"}).status_code == 200
+    live = client.post(
+        "/api/control/runtime-mode",
+        json={"operator_id": "admin", "dry_run": False, "confirm_admin_action": True},
+    )
+    assert live.status_code == 200
+    disabled = client.post(
+        "/api/control/deepseek",
+        json={"operator_id": "admin", "enabled": False, "confirm_admin_action": True},
+    )
+    assert disabled.status_code == 200
+    assert disabled.json()["enabled"] is False
+
+    status = client.get("/api/status").json()
+    assert status["ai"]["operator_enabled"] is False
+    assert status["ai"]["api_key_configured"] is True
+    readiness = client.get("/api/system/readiness").json()
+    assert readiness["deepseek_operator_enabled"] is False
+    assert readiness["deepseek_key_configured"] is True
+    assert "deepseek" in readiness["blocking"]
+    assert "live_ai_guard" in readiness["blocking"]
+
+
 def test_console_readonly_accounts_cannot_query_other_account_slots(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("CONSOLE_AUTH_DISABLED", "0")
     monkeypatch.setenv("CONSOLE_ADMIN_PASSWORD", "admin-secret")

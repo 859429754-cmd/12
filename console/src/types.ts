@@ -139,6 +139,8 @@ export type SystemReadiness = {
   authorized_profile_count: number;
   live_ready_profile_count: number;
   deepseek_ready: boolean;
+  deepseek_operator_enabled?: boolean;
+  deepseek_key_configured?: boolean;
   exchange_safety?: DbRow | null;
   latest_reconciliation?: DbRow | null;
   latest_order_lifecycle?: DbRow | null;

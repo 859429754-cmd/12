@@ -203,6 +203,67 @@ async def test_price_wakeup_deepseek_guard_keeps_critical_events_and_positions(t
         await app.close()
 
 
+@pytest.mark.asyncio
+async def test_hourly_cycle_disables_deepseek_calls_and_blocks_entry_when_ai_disabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    write_config(config_path, tmp_path / "trader.sqlite3", tmp_path / "audit.jsonl")
+    text = config_path.read_text(encoding="utf-8")
+    config_path.write_text(text.replace("ai:\n", "ai:\n  enabled: false\n"), encoding="utf-8")
+    app = TradingApp(str(config_path))
+    app.state.enable_report("ETH/USDT:USDT")
+
+    candles = pd.DataFrame(
+        {
+            "open": [100.0] * 80,
+            "high": [101.0] * 80,
+            "low": [99.0] * 80,
+            "close": [100.0] * 80,
+            "volume": [1000.0] * 80,
+        }
+    )
+
+    async def fake_news(live_news: bool) -> NewsDigest:
+        return NewsDigest(summary="quiet")
+
+    async def fake_refresh_exchange_safety(symbols: list[str]):  # noqa: ANN001
+        return None
+
+    async def fake_fetch_positions(symbols: list[str]):  # noqa: ANN001
+        return [PositionSnapshot(symbol=symbols[0], side=Side.FLAT, qty=0.0, mark_price=100.0)]
+
+    async def fake_fetch_ohlcv(symbol: str, timeframe: str, *args, **kwargs):  # noqa: ANN001
+        return candles
+
+    async def fake_fetch_summaries(symbol: str):  # noqa: ANN001
+        return []
+
+    async def fake_analyze_symbol(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise AssertionError("DeepSeek must not be called when ai.enabled=false.")
+
+    monkeypatch.setattr(app, "_news_for_trading_cycle", fake_news)
+    monkeypatch.setattr(app, "_refresh_exchange_safety", fake_refresh_exchange_safety)
+    monkeypatch.setattr(app, "_fetch_positions", fake_fetch_positions)
+    monkeypatch.setattr(app.market, "fetch_ohlcv", fake_fetch_ohlcv)
+    monkeypatch.setattr(app.orderflow_client, "fetch_summaries", fake_fetch_summaries)
+    monkeypatch.setattr(app, "_generate_local_signal", lambda *args, **kwargs: make_signal(SignalAction.LONG))
+    monkeypatch.setattr(app.brain, "analyze_symbol", fake_analyze_symbol)
+
+    try:
+        await app.run_once(equity=1000.0, live_news=False)
+
+        decisions = app.store.fetch_payloads("ai_decisions", symbol="ETH/USDT:USDT", limit=5)
+        assert decisions
+        payload = decisions[0]["payload"]
+        assert "deepseek_disabled_by_operator" in payload["reason_codes"]
+        assert payload["veto_action"] == "block"
+        assert payload["action_suggestion"] == "block"
+    finally:
+        await app.close()
+
+
 def test_deepseek_budget_blocks_hourly_limit(tmp_path: Path) -> None:
     store = make_store(tmp_path)
     try:

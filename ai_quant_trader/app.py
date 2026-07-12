@@ -212,7 +212,7 @@ class TradingApp:
                     zone,
                     pattern,
                     news_digest,
-                    "ai_disabled_for_symbol",
+                    "deepseek_disabled_by_operator",
                     regime_pattern,
                     market_leader_context,
                 )
@@ -2292,6 +2292,8 @@ class TradingApp:
         return state.side == expected_side.value
 
     def _ai_enabled_for_symbol(self, symbol: str) -> bool:
+        if not self.config.ai.enabled:
+            return False
         configured = self.config.ai.ai_enabled_symbols
         return symbol in configured if configured else True
 

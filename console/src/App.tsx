@@ -1139,6 +1139,7 @@ function WorkspaceBody({
         warning={warning}
         readiness={readiness}
         securityEvents={securityEvents}
+        isAdmin={isAdmin}
         busy={busy}
         postAction={postAction}
       />
@@ -1769,6 +1770,7 @@ function DashboardWorkspace({
   warning,
   readiness,
   securityEvents,
+  isAdmin,
   busy,
   postAction,
 }: {
@@ -1789,6 +1791,7 @@ function DashboardWorkspace({
   warning: string;
   readiness: SystemReadiness | null;
   securityEvents: SecurityEventsResponse;
+  isAdmin: boolean;
   busy: boolean;
   postAction: (path: string, body: Record<string, unknown>) => Promise<void>;
 }) {
@@ -1816,7 +1819,9 @@ function DashboardWorkspace({
   const mode = runtimeStatus?.execution_mode || platform?.platform.execution_mode || readiness?.execution_mode || "mock";
   const openingAuthorized = runtimeStatus?.enabled_symbols?.includes(symbol) || Boolean(profile?.opening_authorized);
   const liveReady = profile?.live_ready || readiness?.overall === "ok";
-  const aiReady = readiness?.deepseek_ready || Boolean(runtimeStatus?.ai?.enabled);
+  const aiOperatorEnabled = runtimeStatus?.ai?.operator_enabled !== false && readiness?.deepseek_operator_enabled !== false;
+  const deepseekKeyConfigured = Boolean(runtimeStatus?.ai?.api_key_configured ?? readiness?.deepseek_key_configured ?? readiness?.deepseek_ready);
+  const aiReady = aiOperatorEnabled && Boolean(readiness?.deepseek_ready || deepseekKeyConfigured);
   const newsAge = newsFreshnessLabel(news);
   const realtimePrice = numberValue(ticker?.last, ticker?.mark);
   const latestPrice = realtimePrice != null ? num(realtimePrice) : latestCandle ? num(latestCandle.close) : "--";
@@ -1848,10 +1853,39 @@ function DashboardWorkspace({
           <div className="grid w-full grid-cols-2 gap-2 sm:grid-cols-4 xl:min-w-[520px] xl:w-auto">
             <DashboardStatusPill label="开仓授权" value={openingAuthorized ? "已授权" : "未授权"} tone={openingAuthorized ? "good" : "bad"} />
             <DashboardStatusPill label="交易所" value={exchangePayload.can_open_new_entries ? "可开仓" : "禁止开仓"} tone={exchangePayload.can_open_new_entries ? "good" : "bad"} />
-            <DashboardStatusPill label="DeepSeek" value={aiReady ? "已配置" : "降级"} tone={aiReady ? "good" : "warn"} />
+            <DashboardStatusPill
+              label="DeepSeek"
+              value={!aiOperatorEnabled ? "已关闭" : aiReady ? "已启用" : "降级"}
+              tone={!aiOperatorEnabled ? "bad" : aiReady ? "good" : "warn"}
+            />
             <DashboardStatusPill label="新闻缓存" value={newsAge} tone={newsStatusTone(news, newsWarnings.length)} />
           </div>
         </div>
+        {isAdmin ? (
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <button
+              className={!aiOperatorEnabled ? button : danger}
+              disabled={busy}
+              onClick={() => {
+                const nextEnabled = !aiOperatorEnabled;
+                const prompt = nextEnabled
+                  ? "确认重新启用 DeepSeek？启用后实盘新开仓仍需通过 readiness、AI 和风控。"
+                  : "确认关闭 DeepSeek？关闭后会停止 DeepSeek 调用，并阻断实盘新开仓；已有仓位不会被强制平仓。";
+                if (!window.confirm(prompt)) return;
+                void postAction("/api/control/deepseek", {
+                  operator_id: "console",
+                  enabled: nextEnabled,
+                  confirm_admin_action: true,
+                });
+              }}
+            >
+              {!aiOperatorEnabled ? "启用 DeepSeek" : "关闭 DeepSeek"}
+            </button>
+            <span className="text-[11px] text-[#94a3b8]">
+              关闭 DeepSeek = 停止模型调用 + 实盘新开仓 fail-closed，不等于强制平仓。
+            </span>
+          </div>
+        ) : null}
 
         <div className="mt-4 grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-3 2xl:grid-cols-6">
           <HeroMetric label="持仓状态" value={position ? positionSideLabel(position.side) : positionsReadFailed ? "读取失败" : "空仓"} tone={position ? "warn" : positionsReadFailed ? "bad" : "good"} />
@@ -2876,7 +2910,11 @@ function ReadinessPanel({ readiness }: { readiness: SystemReadiness | null }) {
         <Metric label="执行模式" value={executionModeLabel(readiness?.execution_mode)} />
         <Metric label="交易模式" value={tradeModeLabel(readiness?.trade_mode)} />
         <Metric label="授权档案" value={`${num(readiness?.authorized_profile_count, 0)}/${num(readiness?.profile_count, 0)}`} />
-        <Metric label="DeepSeek" value={readiness?.deepseek_ready ? "已配置" : "缺失"} tone={readiness?.deepseek_ready ? "good" : "warn"} />
+        <Metric
+          label="DeepSeek"
+          value={readiness?.deepseek_operator_enabled === false ? "已关闭" : readiness?.deepseek_ready ? "已启用" : "缺失"}
+          tone={readiness?.deepseek_operator_enabled === false ? "bad" : readiness?.deepseek_ready ? "good" : "warn"}
+        />
       </div>
       <div className="mt-3 grid grid-cols-5 gap-3">
         <Metric label="交易所状态" value={exchangeStatusLabel(exchangePayload.status)} tone={exchangePayload.can_open_new_entries ? "good" : "bad"} />
@@ -3225,6 +3263,8 @@ function readinessDetail(detail: string) {
     .replace("Opening is enabled.", "开仓当前允许。")
     .replace("DeepSeek API key is configured.", "DeepSeek API Key 已配置。")
     .replace("DeepSeek API key is missing; AI decisions will degrade.", "DeepSeek API Key 缺失，AI 决策会降级。")
+    .replace("DeepSeek is disabled by operator; provider calls are stopped and live entries fail closed.", "DeepSeek 已被管理员关闭；模型调用已停止，实盘新开仓 fail-closed。")
+    .replace("DeepSeek is disabled by operator; live new entries fail closed.", "DeepSeek 已被管理员关闭；实盘新开仓 fail-closed。")
     .replace("Max total leverage:", "总杠杆上限：")
     .replace("Latest news cache is missing.", "新闻缓存缺失。")
     .replace("Latest backtest run is missing.", "回测记录缺失。")
@@ -3241,6 +3281,7 @@ function readinessDetail(detail: string) {
     .replace("Disk space is below the configured floor.", "磁盘空间低于配置下限。")
     .replace("Latest SQLite backup restore drill failed.", "最近一次 SQLite 备份恢复演练失败。")
     .replace("Live mode requires a configured AI key for the current policy.", "当前策略要求实盘模式必须配置 AI Key。")
+    .replace("Live mode requires DeepSeek to be enabled and configured for the current policy.", "当前策略要求 DeepSeek 已启用且 API Key 已配置，实盘才允许新开仓。")
     .replace("Latest news cache was updated", "新闻缓存更新于")
     .replace("Latest backtest run was updated", "最近回测更新于")
     .replace("Latest exchange reconciliation was updated", "交易所对账更新于")
